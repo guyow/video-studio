@@ -1,0 +1,38 @@
+diff --git a/backend/inpaint/sttn_auto_inpaint.py b/backend/inpaint/sttn_auto_inpaint.py
+index d26f49a..0e01be7 100644
+--- a/backend/inpaint/sttn_auto_inpaint.py
++++ b/backend/inpaint/sttn_auto_inpaint.py
+@@ -242,7 +242,7 @@ class STTNAutoInpaint:
+             for i in range(rec_time):
+                 start_f = i * effective_clip_gap  # 起始帧位置
+                 end_f = min((i + 1) * effective_clip_gap, frame_info['len'])  # 结束帧位置
+-                tqdm.write(f'Processing: {start_f + 1} - {end_f} / Total: {frame_info['len']}')
++                tqdm.write(f"Processing: {start_f + 1} - {end_f} / Total: {frame_info['len']}")
+                 
+                 frames_hr = []  # 高分辨率帧列表
+                 frames = {}  # 帧字典，用于存储裁剪后的图像
+diff --git a/backend/tools/video_io.py b/backend/tools/video_io.py
+index 7930181..604ee27 100644
+--- a/backend/tools/video_io.py
++++ b/backend/tools/video_io.py
+@@ -25,12 +25,19 @@ class FramePrefetcher:
+     def _read_loop(self):
+         while not self._stopped:
+             ret, frame = self.cap.read()
++            if not ret:
++                # mark EOF BEFORE queueing the sentinel so read() can never block
++                # after the single sentinel has been consumed (metadata frame counts
++                # often overreport, making callers read past the end -> deadlock)
++                self._eof = True
+             self._buffer.put((ret, frame))
+             if not ret:
+                 break
+ 
+     def read(self):
+-        """读取下一帧，接口与 cv2.VideoCapture.read() 一致。"""
++        """读取下一帧，接口与 cv2.VideoCapture.read() 一致。EOF 后永远返回 (False, None)。"""
++        if getattr(self, "_eof", False) and self._buffer.empty():
++            return (False, None)
+         return self._buffer.get()
+ 
+     def get(self, propId):

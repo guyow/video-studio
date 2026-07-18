@@ -1,0 +1,18 @@
+{
+  "id": "pain-mirror",
+  "label": "Pain mirror (Meta/IG square)",
+  "platform": "meta-1x1",
+  "default_preset": "pain-mirror",
+  "text_zone": "bottom",
+  "scrim_frac": 0.66,
+  "scrim_alpha": 225,
+  "eyebrow_px": 34,
+  "headline_px": 100,
+  "headline_max_h_frac": 0.34,
+  "subhead_px": 40,
+  "cta_px": 38,
+  "price_px": 34,
+  "wordmark_variant": "gold_on_dark",
+  "wordmark_w_frac": 0.20,
+  "copy_brief": "A 'pain-mirror' Meta/Instagram feed ad for a high-functioning woman 40-55 who did everything right and still doesn't feel like herself. Name the quiet burned-out feeling she already has, then offer the product as the calm way back to herself. Eyebrow = a short symptom callout. Headline = the emotional mirror (the 'before' feeling), 4-9 words. Subhead = one line that turns toward relief using 'supports' framing. CTA = short action. Warm, intimate, premium (A24), never clinical, never medical."
+}

@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Subtitles Studio — VSL Auto</title>
+<style>
+  :root {
+    --bg:#07080c; --panel:rgba(20,24,36,.72); --panel2:#141926; --line:#2a3350;
+    --text:#f2f4fb; --dim:#8d97ad; --gold:#d9b36a; --accent:#8b6cff; --accent2:#5fd4f5;
+    --ok:#3ddc84; --bad:#ff5c72; --warn:#ffb454; --radius:16px;
+  }
+  * { box-sizing:border-box; margin:0; }
+  body { background:
+      radial-gradient(900px 400px at 80% -10%, rgba(139,108,255,.14) 0%, transparent 60%),
+      radial-gradient(700px 400px at 10% 110%, rgba(217,179,106,.08) 0%, transparent 60%), var(--bg);
+    color:var(--text); font:14.5px/1.6 'Segoe UI',system-ui,sans-serif; min-height:100vh; }
+  a { color:var(--accent2); text-decoration:none; }
+  header { display:flex; align-items:center; gap:14px; padding:16px 28px; border-bottom:1px solid var(--line);
+    position:sticky; top:0; background:rgba(7,8,12,.85); backdrop-filter:blur(14px); z-index:20; }
+  .wordmark { font-weight:800; letter-spacing:2.5px; font-size:15px;
+    background:linear-gradient(90deg,var(--gold),var(--accent),var(--accent2));
+    -webkit-background-clip:text; background-clip:text; color:transparent; }
+  header .sub { color:var(--dim); font-size:12px; }
+  .nav { margin-left:auto; display:flex; gap:8px; }
+  .nav a { border:1px solid var(--line); padding:6px 14px; border-radius:20px; font-size:12.5px; font-weight:600;
+    background:rgba(20,25,38,.6); }
+  .nav a:hover { border-color:var(--gold); color:var(--gold); }
+  main { display:grid; grid-template-columns:320px 1fr; gap:20px; padding:22px 28px; max-width:1500px; margin:0 auto; align-items:start; }
+  @media (max-width:1000px){ main{grid-template-columns:1fr;} }
+  .card { background:var(--panel); backdrop-filter:blur(10px); border:1px solid var(--line);
+    border-radius:var(--radius); padding:18px; margin-bottom:18px; }
+  .card h2 { font-size:11.5px; text-transform:uppercase; letter-spacing:1.6px; color:var(--gold); margin-bottom:12px; }
+  .row { display:flex; gap:9px; align-items:center; flex-wrap:wrap; }
+  button { background:var(--panel2); color:var(--text); border:1px solid var(--line); border-radius:10px;
+    padding:9px 16px; font:inherit; font-size:13px; cursor:pointer; transition:.15s; }
+  button:hover { border-color:var(--accent); color:var(--accent2); }
+  button.gold { background:linear-gradient(120deg,#caa25a,#8b6cff); border:none; color:#0b0d13; font-weight:800; }
+  button.gold:hover { filter:brightness(1.12); color:#0b0d13; }
+  button:disabled { opacity:.4; cursor:not-allowed; }
+  .vrow { display:flex; align-items:center; gap:9px; padding:9px 11px; border:1px solid var(--line); border-radius:12px;
+    background:rgba(20,25,38,.55); margin-bottom:7px; cursor:pointer; font-size:12.8px; transition:.12s; }
+  .vrow:hover { border-color:var(--accent); }
+  .vrow.sel { border-color:var(--gold); box-shadow:0 0 0 1px var(--gold) inset; }
+  .vrow .nm { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:600; }
+  .pill { padding:1px 9px; border-radius:10px; font-size:10.5px; font-weight:700; }
+  .pill.ok { background:rgba(61,220,132,.14); color:var(--ok); }
+  .pill.dim { background:rgba(141,151,173,.14); color:var(--dim); }
+  video { width:100%; max-height:46vh; background:#000; border-radius:12px; display:block; }
+  .hint { font-size:12px; color:var(--dim); }
+  .step { border:1px solid var(--line); border-left:3px solid var(--line); border-radius:14px;
+    background:rgba(20,25,38,.5); padding:14px 16px; margin-top:14px; }
+  .step.done { border-left-color:var(--ok); } .step.busy { border-left-color:var(--warn); }
+  .step h3 { font-size:13.5px; margin-bottom:6px; display:flex; gap:8px; align-items:center; }
+  .step h3 .st { margin-left:auto; font-size:11.5px; font-weight:400; }
+  .bar { height:8px; background:var(--panel2); border:1px solid var(--line); border-radius:6px; overflow:hidden; flex:1; }
+  .bar i { display:block; height:100%; width:0%; background:linear-gradient(90deg,var(--gold),var(--accent)); transition:width .5s; }
+  .spin { width:11px; height:11px; border:2px solid var(--gold); border-top-color:transparent; border-radius:50%; animation:sp .8s linear infinite; }
+  @keyframes sp { to{transform:rotate(360deg);} }
+  .toast { position:fixed; bottom:22px; left:50%; transform:translateX(-50%); background:var(--panel2);
+    border:1px solid var(--gold); padding:11px 20px; border-radius:12px; z-index:60; display:none; }
+</style>
+<link rel="stylesheet" href="/static/vs.css"><script src="/static/vs-nav.js" defer></script></head>
+<body>
+<header>
+  <div><span class="wordmark">VSL AUTO</span> · <b>Subtitles Studio</b>
+    <div class="sub">Erase burned-in captions pixel-precisely (AI background recovery) · create & burn flicker-free new subtitles</div></div>
+  <div class="nav"><a href="/">🎬 Creator</a><a href="/qc">🔬 QC</a><a href="/mission">Mission Control</a></div>
+</header>
+
+<main>
+  <section>
+    <div class="card">
+      <h2>Videos</h2>
+      <div id="list" class="hint">loading…</div>
+    </div>
+  </section>
+
+  <section>
+    <div class="card">
+      <h2 id="title">Select a video</h2>
+      <div id="stage" style="display:none">
+        <video id="vid" controls playsinline preload="metadata"></video>
+
+        <div class="step" id="st1">
+          <h3>1 · 🧼 Erase burned-in subtitles <span class="st" id="st1s"></span></h3>
+          <div class="hint" style="margin-bottom:8px">AI video inpainting reconstructs the true background behind every letter, frame by frame —
+            motion-matched, so the fill is precise and undetectable. Your original is always backed up.</div>
+          <div class="row" id="st1r"></div>
+        </div>
+
+        <div class="step" id="st2">
+          <h3>2 · 💬 Create &amp; burn new subtitles <span class="st" id="st2s"></span></h3>
+          <div class="hint" style="margin-bottom:8px">Word-timed captions rendered once into the video (no per-frame flicker), placed exactly
+            over the erased band so it's fully covered — the swap is impossible to spot.</div>
+          <div class="row">
+            <button class="gold" id="cap1" onclick="burn('recaption')">💬 Subtitles from this video's audio (free)</button>
+            <button id="cap2" onclick="burn('caption')" title="Word-timed to the dubbed voice — needs a finished dub">From the dub script (needs dub)</button>
+          </div>
+          <div class="row" id="st2r" style="margin-top:8px"></div>
+        </div>
+      </div>
+      <div class="hint" id="empty">← Pick a video. Flow: erase the old subs, then burn fresh ones on top.</div>
+    </div>
+  </section>
+</main>
+<div class="toast" id="toast"></div>
+
+<script>
+const $=s=>document.querySelector(s);
+const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+function toast(m){const t=$('#toast');t.textContent=m;t.style.display='block';clearTimeout(t._t);t._t=setTimeout(()=>t.style.display='none',4500);}
+async function api(p,o){const r=await fetch(p,o);if(!r.ok)throw new Error((await r.text()).replace(/<[^>]+>/g,' ').trim().slice(0,180));return r.json();}
+const post=(p,b)=>api(p,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});
+
+let vids=[], cur=null, jobs=[];
+
+async function load(){
+  const d=await api('/api/creator/library');
+  vids=d.videos;
+  try{ jobs=await api('/api/jobs'); }catch(e){}
+  $('#list').innerHTML=vids.map(v=>`
+    <div class="vrow ${cur&&cur.name===v.name?'sel':''}" onclick="pick('${esc(v.name)}')">
+      <div class="nm" title="${esc(v.name)}">${esc(v.title||v.name)}</div>
+      <span class="pill ${v.cleaned?'ok':'dim'}">${v.cleaned?'erased':'subs?'}</span>
+    </div>`).join('')||'<span class="hint">No videos — add one in Creator.</span>';
+  if(cur){ cur=vids.find(x=>x.name===cur.name)||cur; sync(); }
+}
+function running(){ return jobs.find(j=>j.status==='running'&&cur&&(j.slug===cur.name||j.slug===cur.stem)); }
+
+function pick(name){ cur=vids.find(v=>v.name===name); if(!cur)return;
+  $('#stage').style.display=''; $('#empty').style.display='none';
+  $('#title').textContent=cur.title||cur.name;
+  $('#vid').src='/media/uploads/'+encodeURIComponent(cur.name);
+  sync(); load();
+}
+
+function prog(run){ const p=run.progress||{};
+  return `<span class="spin"></span><span class="hint" style="color:var(--warn)">${esc(p.label||'working')}${p.pct!=null?' · '+p.pct+'%':''}</span>
+    <div class="bar"><i style="width:${p.pct!=null?p.pct:5}%"></i></div>
+    <button onclick="stopJob('${run.id}')">⏹ Stop</button>`;
+}
+function sync(){
+  if(!cur)return;
+  const run=running();
+  const s1=$('#st1'); s1.className='step '+(run&&run.action==='clean-subs'?'busy':(cur.cleaned?'done':''));
+  if(run&&run.action==='clean-subs'){ $('#st1s').textContent='⏳ recovering background…'; $('#st1r').innerHTML=prog(run); }
+  else if(cur.cleaned){ $('#st1s').innerHTML='<span style="color:var(--ok)">✓ erased — background recovered</span>';
+    $('#st1r').innerHTML=`<button onclick="restore()">↩ Restore original</button>
+      <button onclick="erase()" title="Run the AI erase again">↻ Re-erase</button>`; }
+  else { $('#st1s').textContent='';
+    $('#st1r').innerHTML=`<button class="gold" onclick="erase()">🧼 Erase subtitles — AI precise (free)</button>`; }
+
+  const capRun=run&&(run.action==='caption'||run.action==='recaption');
+  $('#st2').className='step '+(capRun?'busy':'');
+  $('#st2s').textContent=capRun?'⏳ burning…':'';
+  $('#st2r').innerHTML=capRun?prog(run):'';
+  $('#cap2').disabled=!cur.dub;
+}
+
+function erase(){
+  post('/api/clean-subs',{file:cur.name,auto:true,mode:'erase'})
+    .then(()=>{toast('AI erase started — finds the captions and rebuilds the background');load();})
+    .catch(e=>toast('Error: '+e.message));
+}
+function restore(){
+  if(!confirm('Put back the ORIGINAL video (with its old captions)?'))return;
+  post('/api/clean-restore',{file:cur.name}).then(()=>{toast('Original restored');load();}).catch(e=>toast('Error: '+e.message));
+}
+function burn(action){
+  post('/api/run',{action,file:cur.name})
+    .then(()=>{toast(action==='caption'?'Burning word-timed captions from the dub…':'Transcribing + burning fresh subtitles…');load();})
+    .catch(e=>toast('Error: '+e.message));
+}
+async function stopJob(id){
+  if(!confirm('Stop this job? Files are not harmed.'))return;
+  try{ await post('/api/job/'+id+'/stop',{}); toast('⏹ Stopped'); load(); }catch(e){ toast('Error: '+e.message); }
+}
+setInterval(load,4000);
+(async()=>{ await load();
+  const w=new URLSearchParams(location.search).get('v'); if(w&&vids.some(v=>v.name===w))pick(w); })();
+</script>
+</body>
+</html>

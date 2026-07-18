@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Video Studio — Unlock</title>
+<link rel="stylesheet" href="/static/vs.css">
+<style>
+  * { box-sizing:border-box; margin:0; }
+  body { background:radial-gradient(900px 500px at 50% -10%, #1a2036 0%, var(--bg) 55%);
+         color:var(--text); min-height:100vh; display:grid; place-items:center;
+         font:15px/1.5 'Segoe UI',system-ui,sans-serif; padding:24px; }
+  .card { width:100%; max-width:340px; text-align:center; }
+  .logo { font-size:26px; font-weight:800; margin-bottom:6px; }
+  .logo b { color:var(--accent); }
+  .sub { color:var(--dim); font-size:13px; margin-bottom:26px; }
+  input { width:100%; background:var(--panel2); border:1px solid var(--line); border-radius:14px;
+          color:var(--text); padding:18px; font-size:30px; text-align:center; letter-spacing:10px;
+          font-family:var(--mono); }
+  input:focus { outline:none; border-color:var(--accent); }
+  button { width:100%; margin-top:16px; background:linear-gradient(135deg,var(--accent),#6247d9);
+           color:#fff; border:0; border-radius:14px; padding:16px; font-size:16px; font-weight:700; cursor:pointer; }
+  .err { color:var(--bad); font-size:13px; margin-top:12px; min-height:18px; }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="logo">Video <b>Studio</b></div>
+  <div class="sub">Enter your PIN to control the studio</div>
+  <input id="pin" type="tel" inputmode="numeric" maxlength="6" placeholder="••••••" autofocus>
+  <button id="go">Unlock</button>
+  <div class="err" id="err"></div>
+</div>
+<script>
+const params = new URLSearchParams(location.search);
+const next = params.get("next") || "/remote";
+async function submit() {
+  const pin = document.getElementById("pin").value.trim();
+  const r = await fetch("/api/login", {method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({pin})});
+  if (r.ok) { location.href = next; }
+  else { document.getElementById("err").textContent = "Wrong PIN — try again"; }
+}
+document.getElementById("go").onclick = submit;
+document.getElementById("pin").addEventListener("keydown", e => { if (e.key === "Enter") submit(); });
+</script>
+</body>
+</html>

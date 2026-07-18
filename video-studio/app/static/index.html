@@ -1,0 +1,1521 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>autoVSL — Mission Control</title>
+<style>
+  :root {
+    --bg: #0d1017; --panel: #151a24; --panel2: #1b2231; --line: #262f42;
+    --text: #e6ebf4; --dim: #8b96ab; --accent: #7c5cff; --accent2: #4cc9f0;
+    --ok: #3ddc84; --bad: #ff5c72; --warn: #ffb454;
+    --radius: 12px; --mono: ui-monospace, 'Cascadia Code', Consolas, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body { background: var(--bg); color: var(--text); font: 14px/1.5 'Segoe UI', system-ui, sans-serif; }
+  header {
+    display: flex; align-items: center; gap: 16px; padding: 14px 22px;
+    border-bottom: 1px solid var(--line); position: sticky; top: 0; background: rgba(13,16,23,.92);
+    backdrop-filter: blur(6px); z-index: 20;
+  }
+  header h1 { font-size: 17px; letter-spacing: .4px; }
+  header h1 span { color: var(--accent); }
+  .chain { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--dim); flex-wrap: wrap; }
+  .chain b { background: var(--panel2); border: 1px solid var(--line); padding: 3px 10px; border-radius: 20px; font-weight: 500; color: var(--text); }
+  .chain b.lit { border-color: var(--accent); color: var(--accent2); }
+  main { display: grid; grid-template-columns: 300px 1fr 380px; gap: 16px; padding: 16px 22px; align-items: start; }
+  @media (max-width: 1200px) { main { grid-template-columns: 1fr; } }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; margin-bottom: 16px; }
+  .panel h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 1.2px; color: var(--dim); margin-bottom: 12px; }
+  .panel h2 .right { float: right; font-weight: 400; text-transform: none; letter-spacing: 0; }
+
+  /* products */
+  .product { border: 1px solid var(--line); border-radius: 10px; padding: 12px; background: var(--panel2); margin-bottom: 10px; }
+  .product .name { font-weight: 600; margin-bottom: 8px; }
+  .stagebar { display: flex; gap: 4px; margin-bottom: 8px; }
+  .stagebar i { flex: 1; height: 6px; border-radius: 3px; background: var(--line); }
+  .stagebar i.done { background: var(--ok); }
+  .stagebar i.part { background: var(--warn); }
+  .stagelabel { font-size: 11px; color: var(--dim); margin-bottom: 8px; }
+  .scriptlist { display: flex; flex-direction: column; gap: 3px; max-height: 220px; overflow-y: auto; }
+  .scriptlist a { color: var(--text); font-size: 12px; text-decoration: none; padding: 3px 6px; border-radius: 6px; display: flex; gap: 6px; align-items: center; cursor: pointer; }
+  .scriptlist a:hover { background: rgba(124,92,255,.12); }
+  .dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+  .dot.ok { background: var(--ok); } .dot.bad { background: var(--bad); } .dot.warn { background: var(--warn); }
+
+  /* vsl */
+  .vsl-head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }
+  .vsl-head .title { font-size: 16px; font-weight: 600; }
+  .vsl-head .meta { color: var(--dim); font-size: 12px; }
+  .actions { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0 14px; }
+  button {
+    background: var(--panel2); color: var(--text); border: 1px solid var(--line); border-radius: 8px;
+    padding: 7px 14px; font: inherit; font-size: 13px; cursor: pointer; transition: .15s;
+  }
+  button:hover { border-color: var(--accent); color: var(--accent2); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  button.primary:hover { filter: brightness(1.15); color: #fff; }
+  button.danger { border-color: rgba(255,92,114,.4); }
+  button.danger:hover { border-color: var(--bad); color: var(--bad); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  table.segs { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  table.segs th { text-align: left; color: var(--dim); font-weight: 500; padding: 5px 8px; border-bottom: 1px solid var(--line); font-size: 11px; text-transform: uppercase; letter-spacing: .6px; }
+  table.segs td { padding: 6px 8px; border-bottom: 1px solid rgba(38,47,66,.5); vertical-align: top; }
+  table.segs tr:hover td { background: rgba(124,92,255,.05); }
+  .pill { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }
+  .pill.ok { background: rgba(61,220,132,.14); color: var(--ok); }
+  .pill.bad { background: rgba(255,92,114,.14); color: var(--bad); }
+  .outputrow { display: flex; align-items: center; gap: 12px; margin-top: 12px; padding: 10px 12px; background: var(--panel2); border-radius: 10px; border: 1px solid var(--line); }
+  video.player { width: 100%; max-width: 320px; border-radius: 10px; background: #000; display: block; margin: 12px auto 0; }
+
+  /* pipeline stage tracker */
+  .stagetrack { display: flex; align-items: center; gap: 0; margin: 8px 0 4px; }
+  .stage { display: flex; flex-direction: column; align-items: center; gap: 3px; min-width: 74px; }
+  .stage .chip {
+    width: 100%; text-align: center; font-size: 10.5px; text-transform: uppercase; letter-spacing: .6px;
+    padding: 4px 6px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel); color: var(--dim);
+  }
+  .stage .when { font-size: 10px; color: var(--dim); font-family: var(--mono); min-height: 12px; }
+  .stagelink { width: 18px; height: 2px; background: var(--line); margin: 0 2px 15px; flex: none; }
+  .stage.st-done .chip { background: rgba(61,220,132,.12); border-color: rgba(61,220,132,.5); color: var(--ok); }
+  .stage.st-running .chip { background: rgba(255,180,84,.12); border-color: var(--warn); color: var(--warn); animation: pulse 1.4s ease-in-out infinite; }
+  .stage.st-failed .chip { background: rgba(255,92,114,.14); border-color: var(--bad); color: var(--bad); }
+  .stage.st-review .chip { background: rgba(124,92,255,.18); border-color: var(--accent); color: var(--accent2); animation: glow 1.6s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: .55; } }
+  @keyframes glow { 50% { box-shadow: 0 0 10px 1px rgba(124,92,255,.55); } }
+
+  .upload .fname { font-family: var(--mono); font-size: 12px; font-weight: 600; }
+  .nextaction { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 6px; }
+  .nextaction .lead { animation: glow 1.6s ease-in-out infinite; }
+  .minirow { display: flex; gap: 4px; margin-top: 6px; flex-wrap: wrap; }
+  .minirow button { opacity: .6; }
+  .upload:hover .minirow button { opacity: 1; }
+
+  /* header badges */
+  #reviewbadge {
+    background: rgba(124,92,255,.18); border: 1px solid var(--accent); color: var(--accent2);
+    padding: 3px 12px; border-radius: 20px; font-size: 12.5px; font-weight: 600; cursor: pointer;
+    animation: glow 1.6s ease-in-out infinite; display: none;
+  }
+  #conndot { display: none; align-items: center; gap: 6px; color: var(--bad); font-size: 12px; font-weight: 600;
+    background: rgba(255,92,114,.12); border: 1px solid var(--bad); padding: 3px 10px; border-radius: 20px; }
+
+  /* uploads / transcribe */
+  .dropzone {
+    display: block; border: 2px dashed var(--line); border-radius: 10px; padding: 18px;
+    text-align: center; color: var(--dim); cursor: pointer; transition: .15s; font-size: 13px;
+    margin-bottom: 12px;
+  }
+  .dropzone:hover, .dropzone.drag { border-color: var(--accent); color: var(--accent2); background: rgba(124,92,255,.06); }
+  .upload {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    padding: 9px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel2); margin-bottom: 8px; font-size: 13px;
+  }
+  .upload .fname { font-weight: 600; }
+  .upload .size { color: var(--dim); font-size: 11.5px; }
+  .upload .grow { flex: 1; }
+  .upload select {
+    background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 8px;
+    padding: 6px 8px; font: inherit; font-size: 12.5px;
+  }
+  video.srcplayer { width: 100%; max-width: 280px; border-radius: 10px; background: #000; display: block; margin: 8px auto; }
+
+  /* banks */
+  .bankgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .bank { background: var(--panel2); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; cursor: pointer; transition: .15s; }
+  .bank:hover { border-color: var(--accent); }
+  .bank .n { font-size: 22px; font-weight: 700; color: var(--accent2); }
+  .bank .t { font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: .8px; }
+
+  /* console */
+  #joblist { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; max-height: 160px; overflow-y: auto; }
+  .job { display: flex; align-items: center; gap: 8px; font-size: 12px; padding: 6px 8px; border-radius: 8px; background: var(--panel2); border: 1px solid var(--line); cursor: pointer; }
+  .job.active { border-color: var(--accent); }
+  .job .status { margin-left: auto; font-size: 11px; }
+  .spin { width: 10px; height: 10px; border: 2px solid var(--accent); border-top-color: transparent; border-radius: 50%; animation: spin .8s linear infinite; flex: none; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  #log {
+    background: #0a0d13; border: 1px solid var(--line); border-radius: 10px; padding: 12px;
+    font-family: var(--mono); font-size: 11.5px; line-height: 1.55; height: 320px; overflow-y: auto;
+    white-space: pre-wrap; word-break: break-word; color: #b9c4d8;
+  }
+  #log .err { color: var(--bad); }
+
+  /* vsl builder */
+  .buildgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .buildgrid label { font-size: 12px; color: var(--dim); display: flex; flex-direction: column; gap: 4px; }
+  .buildgrid select, .buildgrid input {
+    background: var(--panel2); color: var(--text); border: 1px solid var(--line); border-radius: 8px;
+    padding: 7px 10px; font: 12.5px 'Segoe UI', sans-serif; width: 100%;
+  }
+  .bdocs { display: flex; flex-direction: column; gap: 3px; max-height: 140px; overflow-y: auto; }
+  .bdocs label { display: flex; gap: 7px; align-items: center; font-size: 12px; color: var(--text); cursor: pointer; padding: 2px 4px; border-radius: 6px; }
+  .bdocs label:hover { background: rgba(124,92,255,.08); }
+  .bdocs input { accent-color: var(--accent); }
+
+  /* mini buttons, doc rows, outputs */
+  button.mini { padding: 2px 8px; font-size: 11px; border-radius: 6px; }
+  button.mini.danger:hover { border-color: var(--bad); color: var(--bad); }
+  .docrow { display: flex; align-items: center; gap: 4px; }
+  .docrow a { flex: 1; }
+  .docrow button { opacity: .35; }
+  .docrow:hover button { opacity: 1; }
+  .outrow { display: flex; align-items: center; gap: 8px; font-size: 12px; padding: 7px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel2); margin-bottom: 6px; flex-wrap: wrap; }
+  .outrow .meta { color: var(--dim); font-size: 11px; }
+  .outrow.archived { opacity: .65; }
+  .outsection { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: var(--dim); margin: 10px 0 6px; }
+  .outsection:first-child { margin-top: 0; }
+  .prodhead { display: flex; align-items: center; gap: 6px; }
+  .prodhead .name { flex: 1; margin-bottom: 0 !important; }
+  select.modelsel { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; font: 12.5px 'Segoe UI', sans-serif; }
+
+  /* dev chat */
+  #chatlog {
+    height: 300px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px;
+    background: #0a0d13; border: 1px solid var(--line); border-radius: 10px; padding: 10px; margin-bottom: 8px;
+  }
+  .chat-hint { color: var(--dim); font-size: 12px; text-align: center; margin: auto; }
+  .bubble { max-width: 92%; padding: 8px 11px; border-radius: 12px; font-size: 12.5px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
+  .bubble.user { align-self: flex-end; background: var(--accent); color: #fff; border-bottom-right-radius: 4px; }
+  .bubble.ai { align-self: flex-start; background: var(--panel2); border: 1px solid var(--line); border-bottom-left-radius: 4px; }
+  .bubble.err { align-self: flex-start; background: rgba(255,92,114,.12); border: 1px solid rgba(255,92,114,.4); color: var(--bad); }
+  .chat-tool { align-self: flex-start; color: var(--dim); font-family: var(--mono); font-size: 10.5px; padding: 0 4px; }
+  .chat-typing { align-self: flex-start; color: var(--dim); font-size: 12px; padding: 0 4px; display: flex; gap: 6px; align-items: center; }
+  .chatrow { display: flex; gap: 6px; align-items: flex-end; }
+  .chatrow textarea {
+    flex: 1; background: var(--panel2); color: var(--text); border: 1px solid var(--line); border-radius: 10px;
+    padding: 8px 10px; font: 12.5px/1.4 'Segoe UI', sans-serif; resize: none;
+  }
+  .chatrow button { padding: 8px 14px; }
+
+  /* modal */
+  .modal { position: fixed; inset: 0; background: rgba(5,7,11,.7); display: none; align-items: center; justify-content: center; z-index: 50; padding: 30px; }
+  .modal.open { display: flex; }
+  .modal .box { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); max-width: 900px; width: 100%; max-height: 85vh; display: flex; flex-direction: column; }
+  .modal .box header { position: static; background: none; border-bottom: 1px solid var(--line); padding: 12px 18px; display: flex; }
+  .modal .box header h3 { font-size: 14px; }
+  .modal .box header button { margin-left: auto; padding: 3px 10px; }
+  .modal .body { padding: 18px; overflow-y: auto; font-size: 13px; }
+  .modal .body pre { font-family: var(--mono); font-size: 12px; white-space: pre-wrap; }
+  .entry { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; background: var(--panel2); }
+  .entry .id { color: var(--accent2); font-family: var(--mono); font-size: 11px; }
+  .entry .txt { margin: 4px 0; }
+  .entry .meta { color: var(--dim); font-size: 11.5px; }
+  .toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--panel2); border: 1px solid var(--accent); color: var(--text); padding: 10px 18px; border-radius: 10px; z-index: 60; display: none; }
+
+  /* running-job banner */
+  #runbanner { display: none; align-items: center; gap: 12px; padding: 9px 22px; background: rgba(124,92,255,.1);
+    border-bottom: 1px solid var(--accent); position: sticky; top: 56px; z-index: 19; font-size: 13px; }
+  #runbanner.on { display: flex; }
+  #runbanner b { color: var(--accent2); font-weight: 600; }
+  #runbanner .rb-bar { flex: 1; max-width: 520px; height: 9px; background: var(--panel2); border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+  #runbanner .rb-bar i { display: block; height: 100%; width: 0%; border-radius: 6px; background: linear-gradient(90deg,var(--accent),var(--accent2)); transition: width .5s ease; }
+  #runbanner #rb-pct { font-family: var(--mono); color: var(--text); min-width: 44px; }
+  /* progress bar inside a job row */
+  .job .jbar { flex-basis: 100%; height: 5px; background: var(--panel); border-radius: 3px; overflow: hidden; margin-top: 4px; }
+  .job .jbar i { display: block; height: 100%; background: linear-gradient(90deg,var(--accent),var(--accent2)); border-radius: 3px; transition: width .5s ease; }
+  .job { flex-wrap: wrap; }
+</style>
+<link rel="stylesheet" href="/static/vs.css"><script src="/static/vs-nav.js" defer></script></head>
+<body>
+<header>
+  <h1>auto<span>VSL</span> — Mission Control</h1>
+  <span id="reviewbadge" onclick="document.querySelector('#uploads').scrollIntoView({behavior:'smooth'})"></span>
+  <a href="/creator" style="background:rgba(124,92,255,.16);border:1px solid var(--accent);color:var(--accent2);padding:3px 12px;border-radius:20px;font-size:12.5px;font-weight:700;text-decoration:none">🎬 Creator</a>
+  <a href="/qc" style="background:var(--panel2);border:1px solid var(--line);color:var(--accent2);padding:3px 12px;border-radius:20px;font-size:12.5px;font-weight:600;text-decoration:none">🔬 Quality Control</a>
+  <a href="/subtitles" style="background:var(--panel2);border:1px solid var(--line);color:var(--accent2);padding:3px 12px;border-radius:20px;font-size:12.5px;font-weight:600;text-decoration:none">💬 Subtitles</a>
+  <a href="/dubbing" style="background:var(--panel2);border:1px solid var(--line);color:var(--accent2);padding:3px 12px;border-radius:20px;font-size:12.5px;font-weight:600;text-decoration:none">🎙 Dubbing Studio</a>
+  <a href="/studio" style="background:var(--panel2);border:1px solid var(--line);color:var(--accent2);padding:3px 12px;border-radius:20px;font-size:12.5px;font-weight:600;text-decoration:none">🎨 ComfyUI Studio</a>
+  <span id="spendbadge" onclick="showSpend()" title="Total estimated spend on the fal.ai API — click for the run-by-run breakdown" style="cursor:pointer;background:rgba(255,180,84,.12);border:1px solid var(--warn);color:var(--warn);padding:3px 12px;border-radius:20px;font-size:12.5px;font-weight:600">💰 fal.ai: $0.00</span>
+  <span id="conndot">● disconnected — retrying…</span>
+  <div class="chain" style="margin-left:auto" title="This page builds NEW VSLs from scratch. To repurpose an existing video (clean subs → new script → dub), use 🎬 Creator.">
+    <b>1 research</b> → <b>2 build</b> → <b>3 generate</b> → <b class="lit">4 rendered ad</b>
+  </div>
+</header>
+
+<div id="runbanner">
+  <span class="spin"></span>
+  <b id="rb-label"></b>
+  <div class="rb-bar"><i id="rb-fill"></i></div>
+  <span id="rb-pct"></span>
+</div>
+
+<main>
+  <!-- LEFT: products + research -->
+  <section>
+    <div class="panel">
+      <h2>1 · Products &amp; scripts <span class="right"><span id="prodcount"></span> <button class="mini" onclick="newProduct()">＋ new</button></span></h2>
+      <div id="products"></div>
+    </div>
+    <div class="panel">
+      <h2>Brand & Research docs <span class="right"><button class="mini" onclick="newDoc()">＋ doc</button></span></h2>
+      <div class="scriptlist" id="research"></div>
+    </div>
+    <div class="panel">
+      <h2>4 · Rendered videos <span class="right" style="text-transform:none">play · QC · save to Desktop</span></h2>
+      <div id="outputs"></div>
+    </div>
+  </section>
+
+  <!-- CENTER: builder + transcribe + VSL production -->
+  <section>
+    <div class="panel">
+      <h2>2 · 🏗 Build a VSL <span class="right" style="text-transform:none;letter-spacing:0">pick product + script → Claude writes the shot list (free) → panels appear below for step 3</span></h2>
+      <div class="buildgrid">
+        <label>Product
+          <select id="bproduct" onchange="builderProductChanged()"></select></label>
+        <label>Script
+          <select id="bscript"></select></label>
+        <label>Video model (for the generate step)
+          <select id="bmodel" onchange="genModel=this.value;localStorage.setItem('genModel',genModel)"></select></label>
+        <label>VSL name
+          <input id="bname" placeholder="e.g. wine-angle-v1"></label>
+      </div>
+      <div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--dim);margin:10px 0 6px">Brand & research context to use</div>
+      <div id="bdocs" class="bdocs"></div>
+      <div style="display:flex;gap:10px;align-items:center;margin-top:12px">
+        <button class="primary" onclick="buildVsl()">🏗 Build VSL package <small>(free — writes prompts/VO/timeline)</small></button>
+        <span style="color:var(--dim);font-size:12px">then: 🎙 VO (free) → 🎬 video ($) → ⚡ assemble</span>
+      </div>
+    </div>
+    <div class="panel" style="border-color:var(--accent)">
+      <h2>Repurpose an existing video?</h2>
+      <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+        <span style="color:var(--dim);font-size:13px;flex:1;min-width:220px">
+          Clean subtitles → new script → dub → done, with your whole library organized by character &amp; tags.
+        </span>
+        <button class="primary" onclick="location.href='/creator'">🎬 Open Creator</button>
+      </div>
+    </div>
+    <div id="vsls"></div>
+  </section>
+
+  <!-- RIGHT: chat + banks + console -->
+  <section>
+    <div class="panel">
+      <h2>Research banks <span class="right" style="text-transform:none">proven hooks &amp; angles — click to browse</span></h2>
+      <div class="bankgrid" id="banks"></div>
+    </div>
+    <div class="panel">
+      <h2>Activity <span class="right" id="jobhint">idle</span></h2>
+      <div id="joblist"></div>
+      <div id="log">Ready. Actions you run appear here live.</div>
+    </div>
+  </section>
+</main>
+
+<div class="modal" id="modal">
+  <div class="box">
+    <header><h3 id="modaltitle"></h3><button onclick="closeModal()">✕ close</button></header>
+    <div class="body" id="modalbody"></div>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = s => document.querySelector(s);
+let state = null, activeJob = null, logOffset = 0;
+
+const fmtBytes = b => b > 1e6 ? (b/1e6).toFixed(1)+' MB' : Math.round(b/1e3)+' KB';
+const fmtTime = t => new Date(t*1000).toLocaleString();
+
+function toast(msg) {
+  const t = $('#toast'); t.textContent = msg; t.style.display = 'block';
+  setTimeout(() => t.style.display = 'none', 3500);
+}
+
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+// ------------------------------------------------------------- render
+function render() {
+  const s = state;
+  // fal.ai running spend badge
+  const sb = $('#spendbadge');
+  if (sb && typeof s.fal_spend === 'number') sb.textContent = `💰 fal.ai: $${s.fal_spend.toFixed(2)}`;
+  // products
+  $('#prodcount').textContent = s.products.length + ' product' + (s.products.length === 1 ? '' : 's');
+  $('#products').innerHTML = s.products.map(p => {
+    const done = p.stages.filter(x => x.status === 'done').length;
+    const bars = p.stages.map(x => `<i class="${x.status === 'done' ? 'done' : (x.status === '?' ? '' : 'part')}" title="${x.key}: ${x.status}"></i>`).join('');
+    const scripts = p.scripts.map(sc =>
+      `<a onclick="openFile('products/${p.slug}/${sc.file}')"><span class="dot ${sc.status === 'approved' ? 'ok' : 'warn'}"></span>${sc.file.replace('scripts/','').replace('.md','')}</a>`
+    ).join('');
+    return `<div class="product">
+      <div class="prodhead">
+        <div class="name">${p.product}</div>
+        <button class="mini danger" onclick="deleteProduct('${p.slug}')" title="Move to .trash (recoverable)">🗑</button>
+      </div>
+      <div class="stagebar">${bars}</div>
+      <div class="stagelabel">${done}/${p.stages.length} stages done · ${p.scripts.length} scripts</div>
+      <div class="scriptlist">${scripts}</div>
+    </div>`;
+  }).join('') || '<span style="color:var(--dim)">No products yet — click ＋ new above</span>';
+
+  // research
+  $('#research').innerHTML = s.research.map(r => `
+    <div class="docrow">
+      <a onclick="openFile('${r}')"><span class="dot ok"></span>${r.replace('research/','')}</a>
+      <button class="mini danger" onclick="deleteDoc('${r}')" title="Move to .trash">✕</button>
+    </div>`
+  ).join('') || '<span style="color:var(--dim)">none</span>';
+
+  // rendered outputs — grouped render manager
+  const outRow = o => `
+    <div class="outrow ${o.current ? '' : 'archived'}">
+      <button class="mini primary" onclick="playMedia('${o.path}','${o.group ? o.group + ' / ' : ''}${o.name}')">▶</button>
+      <b>${o.name}</b>
+      ${o.current && o.kind === 'dub' ? '<span class="pill ok">current</span>' : ''}
+      ${!o.current ? '<span class="pill" style="background:rgba(139,150,171,.15);color:var(--dim)">old version</span>' : ''}
+      ${o.on_desktop ? '<span class="pill ok" title="A copy exists on your Desktop">💾 Desktop</span>' : ''}
+      <span class="meta">${fmtBytes(o.size)} · ${fmtTime(o.mtime)}</span>
+      <span class="grow"></span>
+      <button class="mini" onclick="editVideo('${o.path}','${o.name}')" title="Cut & zoom — renders a new copy, original untouched">✂</button>
+      <button class="mini" onclick="location.href='/qc?path='+encodeURIComponent('${o.path}')" title="Open in Quality Control — lip-sync/realism review, clear subtitles">🔬 QC</button>
+      <button class="mini" onclick="saveToDesktop('${o.path}')" title="Copy to Desktop">→ Desktop</button>
+      ${o.kind === 'dub' && o.current ? '' : `<button class="mini" onclick="renameOutput('${o.path}','${o.name}')" title="Rename">✎</button>`}
+      <button class="mini danger" onclick="deleteOutput('${o.path}','${o.name}')" title="Move to trash (recoverable)">🗑</button>
+    </div>`;
+
+  const vslOuts = s.outputs.filter(o => o.kind === 'vsl');
+  const dubGroups = {};
+  s.outputs.filter(o => o.kind === 'dub').forEach(o => (dubGroups[o.group] = dubGroups[o.group] || []).push(o));
+
+  let outHtml = '';
+  if (vslOuts.length) outHtml += `<div class="outsection">Assembled VSLs</div>` + vslOuts.map(outRow).join('');
+  for (const [group, items] of Object.entries(dubGroups))
+    outHtml += `<div class="outsection">Dub — ${group}</div>` + items.map(outRow).join('');
+  if (!outHtml) outHtml = '<span style="color:var(--dim);font-size:12px">Nothing rendered yet — assemble a VSL or run a dub.</span>';
+
+  if (s.trash.length) {
+    outHtml += `<div class="outsection" style="cursor:pointer" onclick="const t=$('#trashlist');t.style.display=t.style.display==='none'?'':'none'">
+      🗑 Trash (${s.trash.length}) — click to toggle</div>
+      <div id="trashlist" style="display:none">` +
+      s.trash.map(t => `
+        <div class="outrow archived">
+          <span style="font-size:11.5px">${t.original}</span>
+          <span class="meta">${t.deleted ? fmtTime(t.deleted) : ''}</span>
+          <span class="grow"></span>
+          <button class="mini" onclick="restoreTrash('${t.name}')" title="Restore to original location">↩ restore</button>
+          <button class="mini danger" onclick="purgeTrash('${t.name}','${t.original}')" title="Delete forever">✕ purge</button>
+        </div>`).join('') + '</div>';
+  }
+  $('#outputs').innerHTML = outHtml;
+
+  // banks
+  $('#banks').innerHTML = Object.entries(s.banks).map(([k, n]) =>
+    `<div class="bank" onclick="openBank('${k}')"><div class="n">${n}</div><div class="t">${k}</div></div>`
+  ).join('');
+
+  // vsl builder selects
+  renderBuilder(s);
+
+  // uploads pipeline moved to /creator — keep the review badge pointing there
+  const reviews = s.uploads.reduce((n, u) => n + needsReview(u), 0);
+  const badge = $('#reviewbadge');
+  badge.style.display = reviews ? '' : 'none';
+  badge.textContent = `👁 ${reviews} need${reviews === 1 ? 's' : ''} review — open Creator`;
+  badge.onclick = () => location.href = '/creator';
+
+  // vsls
+  $('#vsls').innerHTML = s.vsls.map(v => {
+    const vids = v.segments.filter(x => x.video_ok).length;
+    const vos = v.segments.filter(x => x.vo_ok).length;
+    const rows = v.segments.map(seg => `
+      <tr>
+        <td>${seg.shot}</td>
+        <td>${seg.video_ok
+          ? `<button class="mini" onclick="playMedia('${v.media_root}/${seg.video}','shot ${seg.shot}')" title="Play this shot">▶</button> <span class="pill ok">ready</span>`
+          : '<span class="pill bad">missing</span>'}</td>
+        <td>${seg.vo_ok
+          ? `<button class="mini" onclick="playMedia('${v.media_root}/${seg.vo}','VO ${seg.shot}')" title="Play voiceover">🔊</button> <span class="pill ok">ready</span>`
+          : '<span class="pill bad">missing</span>'}</td>
+        <td style="color:var(--dim)">${seg.vo_text}</td>
+        <td>${seg.video_ok ? '' : `<button class="mini" onclick="genShot('${v.slug}',${seg.shot})" title="Generate this shot via fal.ai with the selected model">gen $</button>`}</td>
+      </tr>`).join('');
+    const missing = v.segments.filter(x => !x.video_ok).length;
+    return `<div class="panel">
+      <div class="vsl-head">
+        <span class="title">${v.name}</span>
+        <span class="meta">${v.aspect_ratio || ''} · target ${v.target_duration || '?'}s · ${vids}/${v.segments.length} shots · ${vos}/${v.segments.length} VO · music ${v.music_ok ? '✓' : '✗ (manual: Suno/Pixabay → ' + (v.music_file||'') + ')'}</span>
+      </div>
+      <div class="actions">
+        <button onclick="run('generate-vo','${v.slug}')">🎙 Generate VO <small>(free)</small></button>
+        <select class="modelsel" id="vmodel-${v.slug}" onchange="renderGenCost('${v.slug}', ${missing})" title="fal.ai video model">
+          ${Object.entries(VIDEO_MODELS).map(([k, c]) => `<option value="${k}" ${k === genModel ? 'selected' : ''}>${k} — $${c.toFixed(2)}/clip</option>`).join('')}
+        </select>
+        <button class="danger" onclick="genAll('${v.slug}', ${missing})" id="genbtn-${v.slug}" ${missing ? '' : 'disabled title="All shots already generated"'}>
+          🎬 Generate ${missing || 'all'} missing <small id="gencost-${v.slug}">${missing ? `(~$${(VIDEO_MODELS[genModel] * missing).toFixed(2)})` : ''}</small>
+        </button>
+        <button onclick="run('check-media','${v.slug}')">🔍 Check media</button>
+        <button class="primary" onclick="assemble('${v.slug}', ${v.music_ok})">⚡ Assemble VSL <small>(free)</small></button>
+        <button onclick="run('print-prompts','${v.slug}')">📋 Prompts (manual gen)</button>
+      </div>
+      <table class="segs">
+        <tr><th>#</th><th>video</th><th>vo</th><th>line</th><th></th></tr>
+        ${rows}
+      </table>
+      ${v.output_exists ? `
+        <div class="outputrow">
+          <span class="pill ok">rendered</span>
+          <span>output/${v.slug}.mp4 · ${fmtBytes(v.output_size)} · ${fmtTime(v.output_mtime)}</span>
+          <button class="primary" style="margin-left:auto" onclick="togglePlayer('${v.slug}')">▶ Play</button>
+        </div>
+        <video class="player" id="player-${v.slug}" style="display:none" controls src="/media/output/${v.slug}.mp4"></video>`
+      : `<div class="outputrow"><span class="pill bad">not rendered</span><span style="color:var(--dim)">run Assemble once media is ready</span></div>`}
+    </div>`;
+  }).join('');
+}
+
+function togglePlayer(slug) {
+  const p = $('#player-' + slug);
+  const show = p.style.display === 'none';
+  p.style.display = show ? 'block' : 'none';
+  if (show) p.play(); else p.pause();
+}
+
+// ------------------------------------------------------------- actions
+async function run(action, slug, extra) {
+  try {
+    const res = await api('/api/run', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(Object.assign({action, slug}, extra || {})),
+    });
+    watchJob(res.job_id);
+    toast('Started: ' + action + (slug ? ' — ' + slug : ''));
+  } catch (e) { toast('Error: ' + e.message); }
+}
+
+function assemble(slug, hasMusic) {
+  run('assemble', slug, hasMusic ? {} : {no_music: true});
+}
+
+// per-clip cost mirrors scripts/generate-video.py MODELS
+const VIDEO_MODELS = {
+  'seedance-480p': 0.05, 'seedance-720p': 0.11, 'seedance-1080p': 0.24,
+  'wan-5b-720p': 0.15, 'wan-480p': 0.20, 'hailuo-768p': 0.27,
+  'wan-580p': 0.30, 'kling-turbo': 0.35, 'wan-720p': 0.40,
+};
+let genModel = localStorage.getItem('genModel') || 'seedance-720p';
+
+function selectedModel(slug) {
+  const sel = $('#vmodel-' + slug);
+  return sel ? sel.value : genModel;
+}
+
+function renderGenCost(slug, missing) {
+  genModel = selectedModel(slug);
+  localStorage.setItem('genModel', genModel);
+  const el = $('#gencost-' + slug);
+  if (el) el.textContent = missing ? `(~$${(VIDEO_MODELS[genModel] * missing).toFixed(2)})` : '';
+}
+
+function genShot(slug, shot) {
+  const m = selectedModel(slug);
+  if (!confirm(`Generate shot ${shot} with ${m}?\nThis costs real money (~$${VIDEO_MODELS[m].toFixed(2)} for one clip).`)) return;
+  run('generate-video', slug, {confirm_cost: true, shot, video_model: m});
+}
+
+function genAll(slug, missing) {
+  const m = selectedModel(slug);
+  const cost = (VIDEO_MODELS[m] * (missing || 1)).toFixed(2);
+  if (!confirm(`Generate ${missing} missing shot(s) with ${m}?\nThis costs real money (~$${cost}). Existing shots are skipped.`)) return;
+  run('generate-video', slug, {confirm_cost: true, video_model: m});
+}
+
+async function saveToDesktop(path) {
+  try {
+    const r = await api('/api/output-to-desktop', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({path}),
+    });
+    toast('Saved: ' + r.saved_to);
+    lastStateJson = ''; refresh();
+  } catch (e) { toast('Error: ' + e.message); }
+}
+
+async function deleteOutput(path, name) {
+  if (!confirm(`Move "${name}" to trash?\nYou can restore it from the Trash section.`)) return;
+  try {
+    const r = await api('/api/output?path=' + encodeURIComponent(path), {method: 'DELETE'});
+    toast('Moved to ' + r.moved_to);
+    lastStateJson = ''; refresh();
+  } catch (e) { toast('Error: ' + e.message); }
+}
+
+async function renameOutput(path, current) {
+  const newName = prompt('New name for this video:', current);
+  if (!newName || newName === current) return;
+  try {
+    const r = await api('/api/output-rename', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({path, new_name: newName}),
+    });
+    toast('Renamed to ' + r.renamed_to);
+    lastStateJson = ''; refresh();
+  } catch (e) { toast('Error: ' + e.message.slice(0, 200)); }
+}
+
+async function restoreTrash(name) {
+  try {
+    const r = await api('/api/trash/restore', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({name}),
+    });
+    toast('Restored to ' + r.restored_to);
+    lastStateJson = ''; refresh();
+  } catch (e) { toast('Error: ' + e.message.slice(0, 200)); }
+}
+
+async function purgeTrash(name, original) {
+  if (!confirm(`Permanently delete "${original}"?\nThis CANNOT be undone.`)) return;
+  try {
+    await api('/api/trash?name=' + encodeURIComponent(name), {method: 'DELETE'});
+    toast('Permanently deleted.');
+    lastStateJson = ''; refresh();
+  } catch (e) { toast('Error: ' + e.message); }
+}
+
+function playMedia(path, title) {
+  $('#modaltitle').textContent = '▶ ' + (title || path);
+  $('#modalbody').innerHTML = `<video controls autoplay style="width:100%;max-height:70vh;border-radius:10px;background:#000"
+    src="/media/${path}"></video>
+    <div style="color:var(--dim);font-size:11.5px;margin-top:8px;font-family:var(--mono)">${path}</div>`;
+  $('#modal').classList.add('open');
+}
+
+// ---- products / research CRUD ----
+function newProduct() {
+  $('#modaltitle').textContent = 'New product';
+  $('#modalbody').innerHTML = `
+    <div style="display:flex;flex-direction:column;gap:10px;max-width:420px">
+      <label style="font-size:12px;color:var(--dim)">Product name
+        <input id="npname" placeholder="e.g. Night Mode Gummies" style="width:100%;margin-top:4px;background:var(--panel2);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:8px 10px;font:13px 'Segoe UI',sans-serif"></label>
+      <label style="font-size:12px;color:var(--dim)">Slug (folder name, letters/dashes)
+        <input id="npslug" placeholder="e.g. night-mode" style="width:100%;margin-top:4px;background:var(--panel2);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:8px 10px;font:13px 'Segoe UI',sans-serif"></label>
+      <button class="primary" onclick="createProduct()">Create product</button>
+      <span style="font-size:12px;color:var(--dim)">Creates products/&lt;slug&gt;/ with a stage-1 manifest — then run /vsl or /prospector on it.</span>
+    </div>`;
+  $('#npname').addEventListener('input', () => {
+    $('#npslug').value = $('#npname').value.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  });
+  $('#modal').classList.add('open');
+}
+
+async function createProduct() {
+  try {
+    const r = await api('/api/product', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({name: $('#npname').value.trim(), slug: $('#npslug').value.trim()}),
+    });
+    closeModal(); toast('Created product: ' + r.created);
+    lastStateJson = ''; refresh();
+  } catch (e) { toast('Error: ' + e.message.slice(0, 200)); }
+}
+
+async function deleteProduct(slug) {
+  if (!confirm(`Delete product "${slug}"?\n\nThe folder moves to .trash/ (recoverable), it is not destroyed.\nResearch docs and VSL media are NOT touched.`)) return;
+  try {
+    const r = await api('/api/product/' + encodeURIComponent(slug), {method: 'DELETE'});
+    toast('Moved to ' + r.moved_to);
+    lastStateJson = ''; refresh();
+  } catch (e) { toast('Error: ' + e.message); }
+}
+
+function newDoc() {
+  const slug = (state && state.products[0]) ? state.products[0].slug : 'my-product';
+  $('#modaltitle').textContent = 'New research / brand doc';
+  $('#modalbody').innerHTML = `
+    <div style="display:flex;flex-direction:column;gap:10px">
+      <label style="font-size:12px;color:var(--dim)">Path (under research/)
+        <input id="ndpath" value="research/${slug}/notes/new-note.md" style="width:100%;margin-top:4px;background:var(--panel2);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:8px 10px;font:12.5px var(--mono)"></label>
+      <textarea id="ndcontent" placeholder="# Title&#10;&#10;Write or paste the doc content…" style="width:100%;height:260px;background:#0a0d13;color:var(--text);border:1px solid var(--line);border-radius:10px;padding:12px;font:13px/1.6 'Segoe UI',sans-serif;resize:vertical"></textarea>
+      <button class="primary" onclick="createDoc()" style="align-self:flex-start">Create doc</button>
+    </div>`;
+  $('#modal').classList.add('open');
+}
+
+async function createDoc() {
+  try {
+    const r = await api('/api/research-doc', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({path: $('#ndpath').value.trim(), content: $('#ndcontent').value}),
+    });
+    closeModal(); toast('Created ' + r.created);
+    lastStateJson = ''; refresh();
+  } catch (e) { toast('Error: ' + e.message.slice(0, 200)); }
+}
+
+async function deleteDoc(path) {
+  if (!confirm(`Delete ${path}?\nIt moves to .trash/ (recoverable).`)) return;
+  try {
+    const r = await api('/api/research-doc?path=' + encodeURIComponent(path), {method: 'DELETE'});
+    toast('Moved to ' + r.moved_to);
+    lastStateJson = ''; refresh();
+  } catch (e) { toast('Error: ' + e.message); }
+}
+
+// ------------------------------------------------------------- vsl builder
+function renderBuilder(s) {
+  const bp = $('#bproduct'), bs = $('#bscript'), bm = $('#bmodel');
+  const prevProduct = bp.value, prevScript = bs.value, prevModel = bm.value || genModel;
+  bp.innerHTML = s.products.map(p => `<option value="${p.slug}">${p.product}</option>`).join('');
+  if ([...bp.options].some(o => o.value === prevProduct)) bp.value = prevProduct;
+  bm.innerHTML = Object.entries(VIDEO_MODELS).map(([k, c]) =>
+    `<option value="${k}">${k} — $${c.toFixed(2)}/clip</option>`).join('');
+  bm.value = [...bm.options].some(o => o.value === prevModel) ? prevModel : genModel;
+  builderProductChanged(prevScript);
+}
+
+function builderProductChanged(keepScript) {
+  const s = state; if (!s) return;
+  const p = s.products.find(x => x.slug === $('#bproduct').value);
+  const bs = $('#bscript');
+  bs.innerHTML = (p ? p.scripts : []).map(sc =>
+    `<option value="${sc.file}">${sc.file.replace('scripts/','').replace('.md','')} (${sc.status})</option>`).join('')
+    || '<option value="">no scripts yet — write with /vsl</option>';
+  if (keepScript && [...bs.options].some(o => o.value === keepScript)) bs.value = keepScript;
+  // docs: all research docs, pre-checked for this product; preserve user toggles
+  const prevChecked = new Set([...document.querySelectorAll('#bdocs input:checked')].map(i => i.value));
+  const hadAny = document.querySelectorAll('#bdocs input').length > 0;
+  $('#bdocs').innerHTML = state.research.map(r => {
+    const mine = p && r.startsWith('research/' + p.slug + '/');
+    const checked = hadAny ? prevChecked.has(r) : mine;
+    return `<label><input type="checkbox" value="${r}" ${checked ? 'checked' : ''}>${r.replace('research/','')}</label>`;
+  }).join('') || '<span style="color:var(--dim);font-size:12px">no research docs yet</span>';
+}
+
+async function buildVsl() {
+  const product = $('#bproduct').value, script = $('#bscript').value;
+  const name = $('#bname').value.trim();
+  const docs = [...document.querySelectorAll('#bdocs input:checked')].map(i => i.value);
+  if (!product || !script) { toast('Pick a product and a script first'); return; }
+  if (!name) { toast('Give the VSL a name (e.g. wine-angle-v1)'); $('#bname').focus(); return; }
+  try {
+    const r = await api('/api/build-vsl', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({product, script, docs, name}),
+    });
+    watchJob(r.job_id);
+    toast(`Building VSL "${name}" — watch the console; it appears below when ready.`);
+  } catch (e) { toast('Error: ' + e.message.slice(0, 200)); }
+}
+
+// ------------------------------------------------------------- uploads / pipeline cards
+const timeAgo = t => {
+  if (!t) return '';
+  const s = Math.max(0, (Date.now() / 1000) - t);
+  if (s < 90) return Math.round(s) + 's ago';
+  if (s < 5400) return Math.round(s / 60) + 'm ago';
+  if (s < 129600) return Math.round(s / 3600) + 'h ago';
+  return Math.round(s / 86400) + 'd ago';
+};
+const dur = (a, b) => (a && b) ? Math.round(b - a) + 's' : '';
+
+function jobDur(action, u) {
+  const j = (window._jobs || []).filter(x => x.action === action && (x.slug === u.name || x.slug === u.stem) && x.ended)
+    .sort((a, b) => b.started - a.started)[0];
+  return j ? `took ${dur(j.started, j.ended)}` : '';
+}
+
+const isAcked = u => localStorage.getItem('ack-' + u.stem) === String(Math.round(u.dub_mtime || 0));
+
+function computeStages(u) {
+  const a = u.active || {};
+  const run = a.status === 'running';
+  const fail = a.status === 'failed';
+  const st = {};
+  st.transcript = u.transcript ? 'done'
+    : (run && a.action === 'transcribe') ? 'running'
+    : (fail && a.action === 'transcribe') ? 'failed' : 'queued';
+  st.script = u.script_edited ? 'done' : (u.transcript ? 'review' : 'queued');
+  st.dub = u.vo_ready ? 'done'
+    : (run && a.action === 'dub' && a.substage !== 'lipsync') ? 'running'
+    : (fail && a.action === 'dub') ? 'failed' : 'queued';
+  st.lipsync = u.dub_final ? (isAcked(u) ? 'done' : 'review')
+    : (run && a.action === 'dub' && a.substage === 'lipsync') ? 'running'
+    : (fail && a.action === 'dub' && u.vo_ready) ? 'failed' : 'queued';
+  return st;
+}
+
+const needsReview = u => {
+  const st = computeStages(u);
+  return Object.values(st).some(v => v === 'review' || v === 'failed') ? 1 : 0;
+};
+
+function uploadCard(u) {
+  const st = computeStages(u);
+  const chip = (key, label, when, title) => `
+    <div class="stage st-${st[key]}" title="${title || ''}">
+      <span class="chip">${st[key] === 'running' ? '⏳ ' : ''}${label}</span>
+      <span class="when">${when || (st[key] === 'running' ? 'running…' : st[key])}</span>
+    </div>`;
+
+  // one loud next action per card
+  let action = '';
+  if (st.transcript === 'queued') action = `<button class="primary" onclick="transcribeUpload('${u.name}')">▶ Transcribe (free)</button>`;
+  else if (st.transcript === 'failed') action = `<button class="danger lead" onclick="transcribeUpload('${u.name}')">↻ Retry transcribe</button>`;
+  else if (st.script === 'review') action = `<button class="primary lead" onclick="editScript('${u.stem}')">✍ Review script → approve for dub</button>`;
+  else if (st.dub === 'failed' || st.lipsync === 'failed') action = `<button class="danger lead" onclick="dubUpload('${u.name}')">↻ Retry dub $</button>`;
+  else if (u.is_video && st.script === 'done' && st.dub === 'queued' && st.lipsync === 'queued')
+    action = `<button class="primary lead" onclick="dubUpload('${u.name}')">✓ Approve script & dub $</button>
+              <button class="mini" onclick="editScript('${u.stem}')">↻ redo script</button>`;
+  else if (st.lipsync === 'review')
+    action = `<button class="primary lead" onclick="playMedia('${u.dub_final}','${u.stem} — dubbed result')">▶ Review result</button>
+              <button class="primary" onclick="approveDub('${u.stem}', ${Math.round(u.dub_mtime || 0)})">✓ Approve</button>
+              <button class="mini" onclick="dubUpload('${u.name}')" title="Re-run with different voice / lip-sync models">🎤 Try other models $</button>
+              ${(u.dub_versions || []).length > 1 ? `<button class="mini" onclick="compareTakes('${u.stem}')">⚖ Compare ${u.dub_versions.length} takes</button>` : ''}
+              <button class="mini" onclick="editScript('${u.stem}')" title="Edit the script and re-dub">↻ Redo script</button>`;
+  else if (st.lipsync === 'done')
+    action = `<span class="pill ok">✓ approved</span>
+              ${!u.captioned || u.captioned_stale
+                ? `<button class="primary lead" onclick="captionUpload('${u.stem}')" title="Word-timed captions from your script's VO — free, local whisper + ffmpeg">📝 Captions from script (free)${u.captioned_stale ? ' ↻' : ''}</button>`
+                : `<button class="primary" onclick="playMedia('${u.captioned}','${u.stem} — captioned')">▶ Captioned final</button>`}
+              ${(u.dub_versions || []).length > 1 ? `<button class="mini" onclick="compareTakes('${u.stem}')">⚖ Compare ${u.dub_versions.length} takes</button>` : ''}`;
+
+  return `
+    <div class="upload" style="flex-direction:column;align-items:stretch">
+      <div style="display:flex;gap:10px;align-items:baseline">
+        <span class="fname">${u.name}</span>
+        <span class="size">${fmtBytes(u.size)} · up ${timeAgo(u.mtime)}</span>
+        <span class="grow"></span>
+        <button class="mini danger" onclick="deleteUpload('${u.name}')" title="Remove this video and its whole pipeline (recoverable from Trash)">🗑</button>
+      </div>
+      <div class="stagetrack">
+        ${chip('transcript', 'transcript', u.transcript_mtime ? timeAgo(u.transcript_mtime) : '', jobDur('transcribe', u))}<span class="stagelink"></span>
+        ${chip('script', 'script', u.script_mtime ? timeAgo(u.script_mtime) : (st.script === 'review' ? 'needs you' : ''))}<span class="stagelink"></span>
+        ${chip('dub', 'dub', u.vo_mtime ? timeAgo(u.vo_mtime) : (u.active && u.active.substage ? u.active.substage : ''), jobDur('dub', u))}<span class="stagelink"></span>
+        ${chip('lipsync', 'lip-sync', u.dub_mtime ? timeAgo(u.dub_mtime) : (st.lipsync === 'review' ? 'needs you' : ''))}
+      </div>
+      <div class="nextaction">${action}</div>
+      <div class="minirow">
+        ${u.is_video ? `<button class="mini" onclick="playMedia('uploads/${u.name}','${u.name} (source)')">▶ source</button>
+          <button class="mini" onclick="cleanSubs('${u.name}')" title="Erase burned-in subtitles from the source (free, local ffmpeg) — do this BEFORE dubbing">🧹 remove subs${u.cleaned ? ' ✓' : ''}</button>` : ''}
+        ${u.is_video && u.cleaned ? `<button class="mini" onclick="recaptionUpload('${u.name}')" title="Burn NEW word-timed subtitles from the video's original audio over the erased band (free, local whisper + ffmpeg)">📝 new subtitles${u.recaptioned && !u.recaptioned_stale ? ' ✓' : ''}${u.recaptioned_stale ? ' ↻' : ''}</button>
+          ${u.recaptioned ? `<button class="mini" onclick="playMedia('${u.recaptioned}','${u.stem} — new subtitles')">▶ new-subs</button>` : ''}` : ''}
+        ${u.transcript ? `<button class="mini" onclick="openFile('${u.transcript_path}')">📄 transcript</button>
+          <button class="mini" onclick="editScript('${u.stem}')">✍ script</button>` : ''}
+        ${u.dub_final ? `<button class="mini" onclick="playMedia('${u.dub_final}','${u.stem} — dubbed')">🎬 result</button>
+          <button class="mini" onclick="dubUpload('${u.name}')" title="Re-run dub with the current script">🎤 re-dub $</button>
+          <button class="mini" onclick="captionUpload('${u.stem}')" title="Burn word-timed captions from the script VO (free)">📝 captions${u.captioned && !u.captioned_stale ? ' ✓' : ''}</button>` : ''}
+        ${u.transcript && state.products.length ? `<select id="slug-${u.stem}" class="modelsel" style="padding:2px 6px;font-size:11px">${state.products.map(p => `<option value="${p.slug}">${p.slug}</option>`).join('')}</select>
+          <button class="mini" onclick="sendToProduct('${u.stem}')">→ research</button>` : ''}
+      </div>
+    </div>`;
+}
+
+function compareTakes(stem) {
+  const u = state.uploads.find(x => x.stem === stem);
+  if (!u || !(u.dub_versions || []).length) { toast('No takes to compare'); return; }
+  const label = v => [v.current ? '★ CURRENT' : '', v.tts ? 'voice:' + v.tts : 'voice:?',
+                      v.tier ? 'sync:' + v.tier : 'sync:?', timeAgo(v.mtime)].filter(Boolean).join(' · ');
+  $('#modaltitle').textContent = `⚖ Compare dub takes — ${stem}`;
+  $('#modalbody').innerHTML = `
+    <p style="color:var(--dim);font-size:12.5px;margin-bottom:10px">
+      Play the takes side by side, then crown the winner — it becomes the official final and replaces
+      the deliverable on your Desktop. The others stay archived here.
+    </p>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px">
+      ${u.dub_versions.map(v => `
+        <div style="border:1px solid ${v.current ? 'var(--ok)' : 'var(--line)'};border-radius:10px;padding:10px;background:var(--panel2)">
+          <div style="font-size:11px;font-family:var(--mono);color:${v.current ? 'var(--ok)' : 'var(--dim)'};margin-bottom:6px">${label(v)}</div>
+          <video controls preload="metadata" style="width:100%;border-radius:8px;background:#000" src="/media/${v.path}"></video>
+          <div style="margin-top:8px;display:flex;gap:6px">
+            ${v.current
+              ? '<span class="pill ok">this is the current final</span>'
+              : `<button class="primary" onclick="promoteTake('${stem}','${v.file}')">★ Use this one</button>`}
+          </div>
+        </div>`).join('')}
+    </div>`;
+  $('#modal').classList.add('open');
+}
+
+async function promoteTake(stem, file) {
+  try {
+    const r = await api('/api/dub-promote', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({stem, file}),
+    });
+    localStorage.setItem('ack-' + stem, String(Math.round(r.mtime)));  // choosing the winner IS the approval
+    closeModal();
+    toast(`Promoted ${file} — it's now the final and the Desktop deliverable.`);
+    lastStateJson = ''; refresh();
+  } catch (e) { toast('Error: ' + e.message.slice(0, 200)); }
+}
+
+// ---- subtitle cleaner v2 (draw box → preview methods → apply) ----
+let csBox = null;
+function cleanSubs(name) {
+  csBox = null;
+  const u = state && state.uploads.find(x => x.name === name);
+  $('#modaltitle').textContent = `🧹 Remove subtitles — ${name}`;
+  $('#modalbody').innerHTML = `
+    <p style="color:var(--dim);font-size:12.5px;margin-bottom:10px">
+      <b>1.</b> Drag a box over the subtitles &nbsp;·&nbsp; <b>2.</b> pick a method and <b>Preview</b> it &nbsp;·&nbsp;
+      <b>3.</b> Apply to the whole video. Free + local, audio untouched, original always backed up.
+    </p>
+    <div style="display:flex;gap:16px;flex-wrap:wrap;justify-content:center">
+      <div>
+        <div id="cswrap" style="position:relative;width:300px;cursor:crosshair">
+          <video id="csvideo" src="/media/uploads/${name}" muted playsinline style="width:100%;border-radius:10px;background:#000;display:block"></video>
+          <canvas id="cscanvas" style="position:absolute;inset:0;width:100%;height:100%"></canvas>
+        </div>
+        <div style="width:300px;margin-top:6px;display:flex;gap:8px;align-items:center">
+          <span style="font-size:11px;color:var(--dim)">scrub</span>
+          <input type="range" id="csseek" min="0" max="100" value="0" style="flex:1;accent-color:var(--accent)">
+        </div>
+      </div>
+      <div style="width:300px">
+        <div id="cspreviewbox" style="width:300px;min-height:200px;border:1px dashed var(--line);border-radius:10px;display:flex;align-items:center;justify-content:center;color:var(--dim);font-size:12px">
+          preview appears here
+        </div>
+      </div>
+    </div>
+    <div style="display:flex;gap:14px;justify-content:center;margin-top:12px;flex-wrap:wrap;font-size:12.5px">
+      <label style="cursor:pointer"><input type="radio" name="csmode" value="bar" checked style="accent-color:var(--accent)"> 🖤 Caption bar <span style="color:var(--dim)">(clean backdrop — best when adding new captions)</span></label>
+      <label style="cursor:pointer"><input type="radio" name="csmode" value="smart" style="accent-color:var(--accent)"> 🧠 Smart fill <span style="color:var(--dim)">(inpaint)</span></label>
+      <label style="cursor:pointer"><input type="radio" name="csmode" value="blur" style="accent-color:var(--accent)"> 🌫 Blur</label>
+      <label style="cursor:pointer"><input type="radio" name="csmode" value="erase" style="accent-color:var(--accent)"> ✨ AI erase <span style="color:var(--dim)">(ProPainter rebuilds the real background — best quality, GPU, takes minutes; preview is approximate)</span></label>
+    </div>
+    <div style="display:flex;gap:10px;align-items:center;justify-content:center;margin-top:12px;flex-wrap:wrap">
+      <button id="cspreviewbtn" disabled onclick="csPreview('${name}')">👁 Preview this frame</button>
+      <button class="primary" id="csgo" disabled onclick="startCleanSubs('${name}')">✅ Apply to whole video (free)</button>
+      <button class="mini" onclick="csBox=null;csDraw()">clear box</button>
+      ${u && u.cleaned ? `<button class="mini danger" onclick="restoreOriginal('${name}')" title="Undo the previous clean — bring back the original video">↩ restore original</button>` : ''}
+      <span id="cshint" style="font-size:12px;color:var(--dim)">draw a box first</span>
+    </div>`;
+  $('#modal').classList.add('open');
+
+  const video = $('#csvideo'), canvas = $('#cscanvas');
+  video.addEventListener('loadedmetadata', () => { video.currentTime = Math.min(1, video.duration / 2); csSizeCanvas(); });
+  $('#csseek').addEventListener('input', e => { if (video.duration) video.currentTime = e.target.value / 100 * video.duration; });
+  let drag = null;
+  const pos = e => { const r = canvas.getBoundingClientRect(); return {x: e.clientX - r.left, y: e.clientY - r.top}; };
+  canvas.addEventListener('mousedown', e => { drag = pos(e); e.preventDefault(); });
+  canvas.addEventListener('mousemove', e => {
+    if (!drag) return;
+    const p = pos(e);
+    csBox = {x: Math.min(drag.x, p.x), y: Math.min(drag.y, p.y),
+             w: Math.abs(p.x - drag.x), h: Math.abs(p.y - drag.y)};
+    csDraw();
+  });
+  canvas.addEventListener('mouseup', () => {
+    if (csBox && csBox.w > 6 && csBox.h > 6) {
+      $('#csgo').disabled = false;
+      $('#cspreviewbtn').disabled = false;
+      $('#cshint').textContent = 'region locked — preview a method, scrub to check coverage';
+    }
+    drag = null;
+  });
+}
+
+function csPayload(name) {
+  const video = $('#csvideo'), canvas = $('#cscanvas');
+  const sx = video.videoWidth / canvas.clientWidth, sy = video.videoHeight / canvas.clientHeight;
+  return {
+    file: name,
+    x: Math.round(csBox.x * sx), y: Math.round(csBox.y * sy),
+    w: Math.round(csBox.w * sx), h: Math.round(csBox.h * sy),
+    mode: (document.querySelector('input[name=csmode]:checked') || {}).value || 'bar',
+    t: $('#csvideo').currentTime || 1,
+  };
+}
+
+async function csPreview(name) {
+  if (!csBox) return;
+  const box = $('#cspreviewbox');
+  box.innerHTML = '<span style="color:var(--dim);font-size:12px">rendering preview…</span>';
+  try {
+    const resp = await fetch('/api/clean-preview', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(csPayload(name)),
+    });
+    if (!resp.ok) throw new Error(await resp.text());
+    const blob = await resp.blob();
+    box.innerHTML = `<img src="${URL.createObjectURL(blob)}" style="width:100%;border-radius:10px;display:block">`;
+    $('#cshint').textContent = 'happy with it? Apply — or switch method and preview again';
+  } catch (e) {
+    box.textContent = 'preview failed: ' + e.message.replace(/<[^>]*>/g, ' ').slice(0, 120);
+  }
+}
+
+async function restoreOriginal(name) {
+  if (!confirm(`Restore the original (subtitled) ${name}?\nThe cleaned version is discarded.`)) return;
+  try {
+    await api('/api/clean-restore', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({file: name}),
+    });
+    closeModal();
+    toast('Original restored — re-clean whenever you like (and re-dub if a dub used the cleaned video).');
+    lastStateJson = ''; refresh();
+  } catch (e) { toast('Error: ' + e.message.slice(0, 200)); }
+}
+
+function csSizeCanvas() {
+  const c = $('#cscanvas'); if (!c) return;
+  c.width = c.clientWidth; c.height = c.clientHeight;
+  csDraw();
+}
+
+function csDraw() {
+  const c = $('#cscanvas'); if (!c) return;
+  const g = c.getContext('2d');
+  g.clearRect(0, 0, c.width, c.height);
+  if (!csBox) { const btn = $('#csgo'); if (btn) btn.disabled = true; return; }
+  g.fillStyle = 'rgba(124,92,255,.25)';
+  g.strokeStyle = '#7c5cff'; g.lineWidth = 2;
+  g.fillRect(csBox.x, csBox.y, csBox.w, csBox.h);
+  g.strokeRect(csBox.x, csBox.y, csBox.w, csBox.h);
+}
+
+async function startCleanSubs(name) {
+  if (!csBox || !$('#csvideo').videoWidth) { toast('Draw a box over the subtitles first'); return; }
+  try {
+    const r = await api('/api/clean-subs', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(csPayload(name)),
+    });
+    closeModal();
+    watchJob(r.job_id);
+    toast('Cleaning subtitles — watch the console. Original is backed up.');
+  } catch (e) { toast('Error: ' + e.message.slice(0, 200)); }
+}
+
+function approveDub(stem, mtime) {
+  localStorage.setItem('ack-' + stem, String(mtime));
+  toast('Approved — deliverable is on your Desktop (liitt testimonial Ready)');
+  lastStateJson = ''; refresh();
+}
+
+function transcribeUpload(name) {
+  run('transcribe', '', {file: name});
+}
+
+async function deleteUpload(name) {
+  if (!confirm(`Remove "${name}" from the pipeline?\n\nGoes to Trash (recoverable): the video, its transcript, edited script, and dub takes.\nDeliverables already saved to your Desktop are NOT touched.`)) return;
+  try {
+    const r = await api('/api/upload?file=' + encodeURIComponent(name), {method: 'DELETE'});
+    toast(`Moved to trash (${r.pieces.length} item${r.pieces.length === 1 ? '' : 's'}) — restore from the Trash section anytime.`);
+    lastStateJson = ''; refresh();
+  } catch (e) { toast('Error: ' + e.message.slice(0, 200)); }
+}
+
+function captionUpload(stem) {
+  run('caption', '', {file: stem});
+}
+
+function recaptionUpload(name) {
+  run('recaption', '', {file: name});
+}
+
+async function editScript(stem) {
+  const s = await api('/api/script/' + encodeURIComponent(stem));
+  const slugs = (state ? state.products.map(p => p.slug) : []);
+  $('#modaltitle').textContent = `Edit script — ${stem} (${s.source === 'edited' ? 'saved edit' : 'from transcript'})`;
+  $('#modalbody').innerHTML = `
+    <p style="color:var(--dim);margin-bottom:10px;font-size:12.5px">
+      This is what the cloned voice will say. Edit freely — keep roughly the same length as the original
+      so the lip-sync stays natural. Saving invalidates any previous dub so the next run re-voices it.
+    </p>
+    <textarea id="scripttext" style="width:100%;height:280px;background:#0a0d13;color:var(--text);
+      border:1px solid var(--line);border-radius:10px;padding:12px;font:13px/1.6 'Segoe UI',sans-serif;resize:vertical"></textarea>
+
+    <div style="border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-top:10px;background:var(--panel2)">
+      <div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--dim);margin-bottom:8px">
+        ✨ Claude copywriter
+      </div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">
+        <button onclick="aiRewrite(this.textContent)">Punch up the hook</button>
+        <button onclick="aiRewrite(this.textContent)">More emotional and personal</button>
+        <button onclick="aiRewrite(this.textContent)">More natural, like real speech</button>
+        <button onclick="aiRewrite('Shorten by about 20% while keeping the strongest lines.')">Shorten ~20%</button>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <input id="aiinstruction" placeholder="Or describe what to change… e.g. 'make it about brain fog instead of stress'"
+          style="flex:1;min-width:220px;background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:7px 10px;font:12.5px 'Segoe UI',sans-serif">
+        <select id="aicontext" onchange="loadBankPicker()" title="Product context Claude writes against"
+          style="background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:7px 8px;font-size:12px">
+          ${slugs.map(sl => `<option value="${sl}">${sl}</option>`).join('')}
+          <option value="">no product context</option>
+        </select>
+        <button class="primary" id="aigo" onclick="aiRewrite()">✨ Rewrite</button>
+        <button id="aiundo" style="display:none" onclick="aiUndo()">↩ Undo</button>
+      </div>
+      <details style="margin-top:8px" ontoggle="if(this.open)loadBankPicker()">
+        <summary style="cursor:pointer;font-size:12px;color:var(--accent2)">📚 Pull from the banks — proven hooks, angles &amp; scripts (<span id="bankpickcount">0</span> selected)</summary>
+        <div id="bankpicker" style="max-height:200px;overflow-y:auto;margin-top:8px;display:flex;flex-direction:column;gap:2px;font-size:12px">loading…</div>
+      </details>
+      <div id="aistatus" style="color:var(--dim);font-size:12px;margin-top:6px"></div>
+    </div>
+
+    <div style="display:flex;gap:8px;margin-top:12px;align-items:center">
+      <button class="primary" onclick="saveScript('${stem}')">💾 Save script</button>
+      <span style="color:var(--dim);font-size:12px" id="scripthint">${s.source === 'empty' ? 'No transcript found — write the script from scratch.' : ''}</span>
+    </div>`;
+  $('#scripttext').value = s.text;
+  $('#modal').classList.add('open');
+}
+
+async function loadBankPicker() {
+  const box = $('#bankpicker');
+  if (!box) return;
+  try {
+    const [hooks, angles] = await Promise.all([api('/api/bank/hooks'), api('/api/bank/angles')]);
+    const slug = $('#aicontext') ? $('#aicontext').value : '';
+    const prod = state && state.products.find(p => p.slug === slug);
+    const keep = new Set([...document.querySelectorAll('#bankpicker input:checked')]
+      .map(i => i.dataset.type + '|' + i.dataset.ref));
+    const row = (type, ref, label) => `
+      <label style="display:flex;gap:7px;align-items:flex-start;cursor:pointer;padding:2px 4px;border-radius:6px">
+        <input type="checkbox" data-type="${type}" data-ref="${ref}" ${keep.has(type + '|' + ref) ? 'checked' : ''}
+          onchange="$('#bankpickcount').textContent=document.querySelectorAll('#bankpicker input:checked').length"
+          style="accent-color:var(--accent);margin-top:2px">
+        <span>${label}</span></label>`;
+    const section = t => `<div style="font-size:10.5px;text-transform:uppercase;letter-spacing:1px;color:var(--dim);margin:6px 0 2px">${t}</div>`;
+    box.innerHTML =
+      section(`hooks (${hooks.length})`) +
+      hooks.map(h => row('hook', h.id,
+        `<b style="font-family:var(--mono);font-size:10.5px;color:var(--accent2)">${h.id}</b> ${(h.text_verbatim || '').slice(0, 90)} <span style="color:var(--dim)">· ${h.hook_class || ''}</span>`)).join('') +
+      section(`angles (${angles.length})`) +
+      angles.map(a => row('angle', a.id,
+        `<b style="font-family:var(--mono);font-size:10.5px;color:var(--accent2)">${a.id}</b> ${a.name || ''} <span style="color:var(--dim)">· ${(a.argument || '').slice(0, 70)}…</span>`)).join('') +
+      (prod && prod.scripts.length
+        ? section(`${prod.slug} scripts (${prod.scripts.length})`) +
+          prod.scripts.map(sc => row('script', `products/${prod.slug}/${sc.file}`,
+            `📄 ${sc.file.replace('scripts/', '').replace('.md', '')}`)).join('')
+        : '');
+  } catch (e) { box.textContent = 'could not load banks: ' + e.message; }
+}
+
+function bankRefs() {
+  return [...document.querySelectorAll('#bankpicker input:checked')].map(i =>
+    i.dataset.type === 'script' ? {type: 'script', path: i.dataset.ref} : {type: i.dataset.type, id: i.dataset.ref});
+}
+
+let aiPrevText = null;
+async function aiRewrite(preset) {
+  const ta = $('#scripttext');
+  const instruction = preset || $('#aiinstruction').value.trim();
+  const go = $('#aigo'), status = $('#aistatus');
+  if (!ta.value.trim()) { toast('Script is empty'); return; }
+  go.disabled = true; ta.disabled = true;
+  status.textContent = 'Claude is rewriting… (can take up to a minute)';
+  try {
+    const r = await api('/api/copywrite', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({text: ta.value, instruction, slug: $('#aicontext').value, bank_refs: bankRefs()}),
+    });
+    aiPrevText = ta.value;
+    ta.value = r.text;
+    $('#aiundo').style.display = '';
+    const w = ta.value.split(/\s+/).filter(Boolean).length;
+    status.textContent = `Done — ${w} words. Review it, tweak if needed, then Save.`;
+  } catch (e) {
+    status.textContent = '';
+    toast('Copywriter error: ' + e.message.slice(0, 200));
+  } finally {
+    go.disabled = false; ta.disabled = false;
+  }
+}
+
+function aiUndo() {
+  if (aiPrevText === null) return;
+  $('#scripttext').value = aiPrevText;
+  aiPrevText = null;
+  $('#aiundo').style.display = 'none';
+  $('#aistatus').textContent = 'Reverted to your previous version.';
+}
+
+async function saveScript(stem) {
+  const text = $('#scripttext').value;
+  try {
+    const r = await api('/api/script/' + encodeURIComponent(stem), {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({text}),
+    });
+    closeModal();
+    toast(`Script saved (${r.chars} chars) — ready to dub`);
+    lastStateJson = ''; refresh();
+  } catch (e) { toast('Error: ' + e.message); }
+}
+
+function dubUpload(name) {
+  const sel = (id, saved, opts) => `
+    <select id="${id}" class="modelsel" style="width:100%">
+      ${opts.map(([v, label]) => `<option value="${v}" ${v === saved ? 'selected' : ''}>${label}</option>`).join('')}
+    </select>`;
+  $('#modaltitle').textContent = `Dub settings — ${name}`;
+  $('#modalbody').innerHTML = `
+    <div style="display:flex;flex-direction:column;gap:12px;max-width:440px">
+      <label style="font-size:12px;color:var(--dim)">Voice / TTS model (speaks your edited script in the source voice)
+        ${sel('dubtts', localStorage.getItem('dubTts') || 'local', [
+          ['local', '💻 Local — XTTS voice clone (FREE, offline, on your GPU)'],
+          ['f5', 'F5-TTS — fal.ai $0.05/1k chars, clones free from source 💰'],
+          ['turbo', 'MiniMax speech-02-turbo — fal.ai (+$1.50 one-time clone) 💰'],
+          ['hd', 'MiniMax speech-02-hd — fal.ai, best voice ($0.10/1k + $1.50 clone) 💰'],
+        ])}</label>
+      <label style="font-size:12px;color:var(--dim)">Lip-sync model
+        ${sel('dubtier', localStorage.getItem('dubTier') || 'wav2lip-hd', [
+          ['wav2lip-hd', '💸 CHEAPEST — Wav2Lip HD, local GPU (FREE)'],
+          ['latentsync', '⭐ BEST VALUE — LatentSync, near-best quality ~$0.20/40s 💰'],
+          ['pro', '🏆 BEST — sync v2 PRO, studio-grade (priciest ~$6/min) 💰'],
+          ['musetalk', 'MuseTalk — fal.ai, fast + balanced ~$0.20/40s 💰'],
+          ['wav2lip', 'Wav2Lip — local GPU, faster but soft mouth (FREE)'],
+          ['none', 'None — keep the original mouth (FREE)'],
+          ['veed', 'VEED lipsync — fal.ai ~$0.40/min 💰'],
+          ['standard', 'sync-lipsync v2 — fal.ai ~$3/min 💰'],
+        ])}</label>
+      <label style="display:flex;gap:8px;align-items:center;font-size:12.5px;cursor:pointer">
+        <input type="checkbox" id="dubcaptions" ${localStorage.getItem('dubCaptions') !== 'off' ? 'checked' : ''} style="accent-color:var(--accent)">
+        📝 Auto-burn captions from the script after lip-sync (free — placed over the erased subtitle band if you cleaned one)
+      </label>
+      <div id="dubcost" style="font-size:12.5px;line-height:1.5;padding:9px 11px;border:1px solid var(--line);border-radius:9px;background:var(--panel2)"></div>
+      <button class="primary" id="dubgo" onclick="startDub('${name}')" style="align-self:flex-start">🎤 Start dub</button>
+    </div>`;
+  $('#modal').classList.add('open');
+  ['dubtts', 'dubtier'].forEach(id => $('#' + id).addEventListener('change', updateDubCost));
+  updateDubCost();
+}
+
+// resolve the current modal selection into an engine plan + whether it costs money
+function dubPlan() {
+  const tts = $('#dubtts').value, tier = $('#dubtier').value;
+  if (tts === 'local') {
+    if (tier === 'none')
+      return {engine: 'local', lipsync: 'none', paid: false,
+              note: '💻 <b>100% local & free</b> — voice cloned on your GPU, original mouth kept. $0.'};
+    if (tier === 'wav2lip-hd')
+      return {engine: 'local', lipsync: 'wav2lip-hd', paid: false,
+              note: '💻 <b>100% local & free · HD</b> — voice + Wav2Lip + GFPGAN sharpening on your GPU. $0.'};
+    if (tier === 'wav2lip')
+      return {engine: 'local', lipsync: 'wav2lip', paid: false,
+              note: '💻 <b>100% local & free</b> — voice + Wav2Lip lip-sync on your GPU. $0.'};
+    return {engine: 'local', lipsync: tier, paid: true,
+            note: `💻 <b>Local voice (free)</b> + <b>${tier}</b> lip-sync on fal.ai (💰 paid).`};
+  }
+  const t = (tier === 'none' || tier === 'wav2lip' || tier === 'wav2lip-hd') ? 'latentsync' : tier;  // cloud dub uses a fal lip-sync
+  return {engine: 'fal', tts, tier: t, paid: true,
+          note: `☁ <b>FAL.AI</b> voice (${tts}) + <b>${t}</b> lip-sync — 💰 both paid.`};
+}
+
+function updateDubCost() {
+  const p = dubPlan();
+  const el = $('#dubcost'); if (el) el.innerHTML = p.note;
+  const go = $('#dubgo');
+  if (go) { go.textContent = p.paid ? '🎤 Start dub — approve cost $' : '🎤 Start dub (free)';
+            go.className = p.paid ? 'danger' : 'primary'; }
+}
+
+function startDub(name) {
+  const p = dubPlan();
+  const captions = $('#dubcaptions').checked;
+  localStorage.setItem('dubTts', $('#dubtts').value);
+  localStorage.setItem('dubTier', $('#dubtier').value);
+  localStorage.setItem('dubCaptions', captions ? 'on' : 'off');
+  const body = {file: name, engine: p.engine, captions};
+  if (p.engine === 'local') body.lipsync = p.lipsync;
+  else { body.tts = p.tts; body.tier = p.tier; }
+  if (p.paid) {
+    const plain = p.note.replace(/<[^>]+>/g, '');
+    if (!confirm('⚠ This run spends money on fal.ai:\n\n' + plain + '\n\nSource: ' + name +
+                 '\n\nApprove and start? (Cancel = nothing is charged)')) {
+      toast('Cancelled — nothing was charged'); return;
+    }
+    body.confirm_cost = true;
+  }
+  closeModal();
+  run('dub', '', body);
+}
+
+async function sendToProduct(stem) {
+  const slug = $('#slug-' + stem).value;
+  try {
+    const r = await api('/api/transcript-to-product', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({stem, slug}),
+    });
+    toast('Saved to ' + r.copied_to + ' — the vsl/prospector agents will see it there');
+  } catch (e) { toast('Error: ' + e.message); }
+}
+
+function uploadFiles(files) {
+  for (const file of files) {
+    const fd = new FormData();
+    fd.append('file', file);
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/upload');
+    xhr.upload.onprogress = e => {
+      if (e.lengthComputable) $('#dropmsg').textContent = `Uploading ${file.name} — ${Math.round(e.loaded / e.total * 100)}%`;
+    };
+    xhr.onload = () => {
+      $('#dropmsg').textContent = '⬆ Drop videos here or click to upload — transcription starts automatically (free)';
+      if (xhr.status === 200) {
+        let r = {};
+        try { r = JSON.parse(xhr.responseText); } catch (e) {}
+        const saved = r.name || file.name;    // server may rename to avoid clobbering an in-flight video
+        toast(r.renamed
+          ? `Uploaded as "${saved}" (a video with that name already exists — both are kept) — transcribing…`
+          : `Uploaded: ${saved} — starting transcription…`);
+        transcribeUpload(saved);              // auto-start stage 1, no extra click
+        lastStateJson = ''; refresh();
+      }
+      else toast('Upload failed: ' + xhr.responseText.replace(/<[^>]*>/g, ' ').trim().slice(0, 200));
+    };
+    xhr.onerror = () => toast('Upload failed: network error');
+    xhr.send(fd);
+  }
+}
+
+// upload dropzone + per-video pipeline now live on /creator
+const fi = $('#fileinput'), dz = $('#dropzone');
+if (fi) fi.addEventListener('change', e => { uploadFiles(e.target.files); e.target.value = ''; });
+if (dz) {
+  dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('drag'); });
+  dz.addEventListener('dragleave', () => dz.classList.remove('drag'));
+  dz.addEventListener('drop', e => { e.preventDefault(); dz.classList.remove('drag'); uploadFiles(e.dataTransfer.files); });
+}
+
+// ------------------------------------------------------------- dev chat
+let chatSession = null, chatBusy = false;
+
+function chatAppend(cls, text) {
+  const log = $('#chatlog');
+  const hint = log.querySelector('.chat-hint');
+  if (hint) hint.remove();
+  const div = document.createElement('div');
+  div.className = cls;
+  div.textContent = text;
+  log.appendChild(div);
+  log.scrollTop = log.scrollHeight;
+  return div;
+}
+
+function newChat() {
+  chatSession = null;
+  $('#chatlog').innerHTML = '<div class="chat-hint">New conversation started — previous context cleared.</div>';
+}
+
+async function sendChat() {
+  if (chatBusy) return;
+  const input = $('#chatinput');
+  const message = input.value.trim();
+  if (!message) return;
+  chatBusy = true;
+  $('#chatsend').disabled = true;
+  input.value = '';
+  chatAppend('bubble user', message);
+  const typing = chatAppend('chat-typing', 'thinking…');
+  try {
+    const r = await api('/api/chat', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({message, session_id: chatSession, model: $('#chatmodel').value}),
+    });
+    let offset = 0;
+    while (true) {
+      const p = await api(`/api/chat/${r.turn_id}?offset=${offset}`);
+      for (const ev of p.events) {
+        if (ev.kind === 'text') chatAppend('bubble ai', ev.text);
+        else if (ev.kind === 'tool') chatAppend('chat-tool', '🔎 ' + ev.text);
+        else if (ev.kind === 'error') chatAppend('bubble err', ev.text);
+        $('#chatlog').appendChild(typing);          // keep typing indicator last
+        $('#chatlog').scrollTop = $('#chatlog').scrollHeight;
+      }
+      offset = p.next_offset;
+      if (p.session_id) chatSession = p.session_id;
+      if (p.status === 'done') break;
+      await new Promise(res => setTimeout(res, 800));
+    }
+  } catch (e) {
+    chatAppend('bubble err', 'Chat error: ' + e.message.slice(0, 200));
+  } finally {
+    typing.remove();
+    chatBusy = false;
+    $('#chatsend').disabled = false;
+    input.focus();
+  }
+}
+
+if ($('#chatinput')) $('#chatinput').addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat(); }
+});
+
+// ------------------------------------------------------------- jobs & log
+function watchJob(id) {
+  activeJob = id; logOffset = 0;
+  $('#log').textContent = '';
+  pollJob();
+}
+
+async function pollJob() {
+  if (!activeJob) return;
+  try {
+    const j = await api(`/api/job/${activeJob}?offset=${logOffset}`);
+    if (j.lines.length) {
+      const log = $('#log');
+      for (const line of j.lines) {
+        const div = document.createElement('div');
+        div.textContent = line;
+        if (/error|missing|✗|failed|traceback/i.test(line)) div.className = 'err';
+        log.appendChild(div);
+      }
+      log.scrollTop = log.scrollHeight;
+      logOffset = j.next_offset;
+    }
+    $('#jobhint').textContent = j.status === 'running' ? 'running…' : j.status;
+    if (j.status === 'running') setTimeout(pollJob, 800);
+    else {
+      refresh(); loadJobs();
+      if (j.cost) {
+        // tell the user exactly what this dub/lip-sync cost, right when it finishes
+        if (j.cost.free) toast(`✅ Done — this dub was FREE (local). fal.ai total unchanged: $${(j.cost.total||0).toFixed(2)}`);
+        else costToast(j.cost);
+      } else {
+        toast(j.label + ': ' + j.status);
+      }
+    }
+  } catch (e) { setTimeout(pollJob, 2000); }
+}
+
+function costToast(c) {
+  const t = $('#toast');
+  t.innerHTML = `💰 <b>This lip-sync cost ~$${c.this_run.toFixed(3)}</b> on fal.ai` +
+                `<br><span style="color:var(--dim);font-size:11.5px">${c.summary || ''}</span>` +
+                `<br>🧾 Total spent on fal.ai so far: <b>$${(c.total||0).toFixed(2)}</b>`;
+  t.style.display = 'block';
+  clearTimeout(window._costToastT);
+  window._costToastT = setTimeout(() => { t.style.display = 'none'; t.textContent = ''; }, 9000);
+}
+
+async function loadJobs() {
+  const jobs = await api('/api/jobs');
+  window._jobs = jobs;                        // used for per-stage durations on cards
+  $('#joblist').innerHTML = jobs.slice(0, 8).map(j => {
+    const p = j.progress;
+    const pctTxt = (p && p.pct != null) ? ` — ${p.label} ${p.pct}%` : (p ? ` — ${p.label}` : '');
+    const bar = (j.status === 'running' && p && p.pct != null)
+      ? `<div class="jbar"><i style="width:${p.pct}%"></i></div>` : '';
+    return `<div class="job ${j.id === activeJob ? 'active' : ''}" onclick="watchJob('${j.id}')">
+      ${j.status === 'running' ? '<span class="spin"></span>' : `<span class="dot ${j.status === 'done' ? 'ok' : (j.status === 'issues' ? 'warn' : 'bad')}"></span>`}
+      ${j.label}
+      <span class="status">${j.status}${j.status === 'running' ? pctTxt : ''}</span>
+      ${j.status === 'running' ? `<button class="mini danger" onclick="event.stopPropagation();stopJob('${j.id}')" title="Cancel this job (source files are not harmed)">⏹</button>` : ''}
+      ${bar}
+    </div>`;
+  }).join('');
+
+  // top banner for the most recent running job
+  const run = jobs.find(j => j.status === 'running');
+  const rb = $('#runbanner');
+  if (run) {
+    const p = run.progress || {};
+    $('#rb-label').textContent = run.label;
+    $('#rb-pct').textContent = p.pct != null ? p.pct + '%' : (p.label || '…');
+    $('#rb-fill').style.width = (p.pct != null ? p.pct : 3) + '%';
+    rb.classList.add('on');
+  } else {
+    rb.classList.remove('on');
+  }
+}
+
+function editVideo(path, name) {
+  $('#modaltitle').textContent = '✂ Cut & Zoom — ' + name;
+  $('#modalbody').innerHTML = `<div style="display:flex;flex-direction:column;gap:10px;max-width:430px">
+    <video controls src="/media/${path}" style="width:100%;max-height:260px;border-radius:10px;background:#000"
+      ontimeupdate="$('#ed-now').textContent=this.currentTime.toFixed(1)+'s'"></video>
+    <div style="color:var(--dim);font-size:12px">Playhead: <b id="ed-now">0s</b> — scrub to find your cut points, then type them below.</div>
+    <div style="display:flex;gap:8px">
+      <label style="flex:1;font-size:12px;color:var(--dim)">Start (s)<input id="ed-s" type="number" value="0" min="0" step="0.1" style="width:100%;background:var(--panel2);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:7px"></label>
+      <label style="flex:1;font-size:12px;color:var(--dim)">End (s)<input id="ed-e" type="number" value="10" min="0.1" step="0.1" style="width:100%;background:var(--panel2);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:7px"></label>
+      <label style="flex:1;font-size:12px;color:var(--dim)">Zoom ×<input id="ed-z" type="number" value="1" min="1" max="3" step="0.1" style="width:100%;background:var(--panel2);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:7px"></label>
+    </div>
+    <button class="primary" onclick="runEdit('${path}')">✂ Cut & render (free, local)</button>
+    <span style="color:var(--dim);font-size:12px">Renders a NEW video into output/edits/ and lists it here — the original is never touched.</span></div>`;
+  $('#modal').classList.add('open');
+}
+async function runEdit(path) {
+  try {
+    const r = await api('/api/edit', {method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({path, start: +$('#ed-s').value, end: +$('#ed-e').value, zoom: +$('#ed-z').value})});
+    closeModal(); watchJob(r.job_id); toast('✂ Editing — the new cut appears in Rendered videos');
+  } catch (e) { toast('Error: ' + e.message.slice(0, 150)); }
+}
+
+async function stopJob(id) {
+  if (!confirm('Stop this job? Source files are not harmed.')) return;
+  try { await api('/api/job/' + id + '/stop', {method: 'POST'}); toast('⏹ Stopped'); loadJobs(); refresh(); }
+  catch (e) { toast('Error: ' + e.message.slice(0, 150)); }
+}
+
+// ------------------------------------------------------------- modals
+function closeModal() { $('#modal').classList.remove('open'); }
+$('#modal').addEventListener('click', e => { if (e.target.id === 'modal') closeModal(); });
+
+async function openFile(path) {
+  const f = await api('/api/file?path=' + encodeURIComponent(path));
+  $('#modaltitle').textContent = path;
+  $('#modalbody').innerHTML = '<pre></pre>';
+  $('#modalbody pre').textContent = f.content;
+  $('#modal').classList.add('open');
+}
+
+async function showSpend() {
+  try {
+    const s = await api('/api/spend');
+    $('#modaltitle').textContent = `💰 fal.ai API spend — $${s.total.toFixed(2)} total`;
+    const rows = (s.runs || []).map(r => `
+      <div style="display:flex;gap:10px;padding:7px 4px;border-bottom:1px solid var(--line);font-size:12.5px">
+        <span style="color:var(--warn);font-family:var(--mono);min-width:64px">$${(r.cost||0).toFixed(3)}</span>
+        <span style="flex:1">${r.summary || r.engine || ''}</span>
+        <span style="color:var(--dim);font-size:11px">${fmtTime(r.ts)}</span>
+      </div>`).join('') || '<span style="color:var(--dim)">No paid runs yet — everything so far has been free/local.</span>';
+    $('#modalbody').innerHTML = `
+      <div style="font-size:13px;color:var(--dim);margin-bottom:10px">
+        Estimated from fal.ai's published rates (voice per 1k chars + lip-sync per second of video).
+        Check <b>fal.ai/dashboard</b> for the exact invoice.</div>
+      <div style="font-weight:700;font-size:15px;margin-bottom:8px">Total: $${s.total.toFixed(2)} · ${s.runs.length} paid run(s)</div>
+      ${rows}`;
+    $('#modal').classList.add('open');
+  } catch (e) { toast('Error: ' + e.message.slice(0, 200)); }
+}
+
+async function openBank(name) {
+  const entries = await api('/api/bank/' + name);
+  $('#modaltitle').textContent = `banks/${name}.jsonl — ${entries.length} entries`;
+  $('#modalbody').innerHTML = entries.map(e => {
+    const text = e.text_verbatim || e.name || e.text || e.description || e.id || '';
+    const meta = [e.hook_class || e.class, e.avatar, e.status, (e.tags || []).join(', ')].filter(Boolean).join(' · ');
+    const evidence = typeof e.evidence === 'string' ? e.evidence : (Array.isArray(e.evidence) ? e.evidence.join(' | ') : '');
+    return `<div class="entry">
+      <span class="id">${e.id || ''}</span>
+      <div class="txt">${text}</div>
+      <div class="meta">${meta}</div>
+      ${evidence ? `<div class="meta" style="margin-top:4px">📎 ${evidence}</div>` : ''}
+    </div>`;
+  }).join('') || 'Empty — run /prospector to fill this bank.';
+  $('#modal').classList.add('open');
+}
+
+// ------------------------------------------------------------- boot
+let lastStateJson = '';
+async function refresh() {
+  try {
+    state = await api('/api/overview');
+    $('#conndot').style.display = 'none';
+    const j = JSON.stringify(state);
+    if (j !== lastStateJson) { lastStateJson = j; render(); }  // avoid nuking DOM (and in-flight clicks) when nothing changed
+  }
+  catch (e) {
+    $('#conndot').style.display = 'flex';     // backend unreachable — say so instead of showing stale data silently
+    console.error(e);
+  }
+  loadJobs().catch(() => {});
+}
+refresh(); loadJobs();
+setInterval(() => { if (!activeJob || $('#jobhint').textContent !== 'running…') refresh(); }, 8000);
+</script>
+</body>
+</html>

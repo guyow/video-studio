@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Captions — Video Studio</title>
+<link rel="stylesheet" href="/static/vs.css">
+<script src="/static/vs-nav.js" defer></script>
+<style>
+  * { box-sizing:border-box; margin:0; }
+  body { background:radial-gradient(1100px 500px at 75% -10%, #1a2036 0%, var(--bg) 55%);
+         color:var(--text); min-height:100vh; }
+  a { color:var(--accent2); text-decoration:none; }
+  .cols { display:grid; grid-template-columns:290px 1fr; gap:18px; align-items:start; }
+  @media (max-width:900px) { .cols { grid-template-columns:1fr; } }
+  .vid { display:flex; align-items:center; gap:10px; padding:9px 10px; border-radius:10px;
+         cursor:pointer; border:1px solid transparent; }
+  .vid:hover { background:var(--panel2); }
+  .vid.sel { background:var(--panel2); border-color:var(--accent); }
+  .vid img { width:52px; aspect-ratio:16/10; object-fit:cover; border-radius:6px; background:#000; flex:none; }
+  .vid .nm { font-size:12.5px; font-weight:700; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .vid .st { font-size:11px; color:var(--dim); }
+  .vid .st.ok { color:var(--ok); }
+  .lnrow { display:flex; gap:8px; align-items:center; margin-bottom:6px; }
+  .lnrow .t { color:var(--dim); font:11px var(--mono); width:96px; flex:none; text-align:right; }
+  .lnrow input { flex:1; background:#0a0d13; border:1px solid var(--line); border-radius:8px;
+                 color:var(--text); padding:7px 10px; font-size:13px;
+                 text-transform:uppercase; }
+  .lnrow input:focus { outline:none; border-color:var(--accent); }
+  .rowflex { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-top:14px; }
+  .hint { color:var(--dim); font-size:12px; }
+  video { width:100%; max-width:520px; border-radius:12px; border:1px solid var(--line);
+          background:#000; margin-top:10px; }
+</style>
+</head>
+<body>
+<div class="vs-page" style="max-width:1240px">
+  <h2>Captions</h2>
+  <p class="lead">Generate word-timed captions (local whisper), fix them by hand or with AI, and burn them in.
+     <span class="hint">Dubbed finals get captions on the Dubbing page (timed to the new voice).</span></p>
+
+  <div class="cols">
+    <div class="vs-panel" style="margin:0">
+      <h3>🎞 Videos</h3>
+      <div id="vids"></div>
+      <div id="novids" class="hint" style="display:none; padding:8px 4px">
+        Nothing uploaded yet — start in <a href="/new">New Project</a>.</div>
+    </div>
+
+    <div>
+      <div class="vs-panel" id="detail" style="display:none">
+        <h3 id="dtitle">—</h3>
+        <div class="rowflex" style="margin:0 0 10px">
+          <button class="vs-btn" id="btn-gen">🎙 Generate captions (free, local)</button>
+          <span class="hint" id="jobnote"></span>
+        </div>
+        <div id="editor" style="display:none">
+          <div id="lines"></div>
+          <div class="rowflex">
+            <button class="vs-btn" id="btn-burn">💾 Save &amp; burn</button>
+            <button class="vs-btn ghost" id="btn-aifix">✨ AI spell-fix (free)</button>
+            <span class="hint" id="editnote"></span>
+          </div>
+        </div>
+        <div id="result" style="display:none">
+          <h3 style="margin-top:20px">▶ Captioned result</h3>
+          <video id="preview" controls preload="metadata"></video>
+        </div>
+      </div>
+      <div class="vs-soon" id="pick" style="padding:50px 20px">
+        <div class="big">💬</div><b>Pick a video on the left.</b>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+let SEL = null, LINES = [], poll = null;
+const $ = id => document.getElementById(id);
+const fmt = s => `${Math.floor(s/60)}:${(s%60).toFixed(1).padStart(4,"0")}`;
+
+async function loadList() {
+  const d = await (await fetch("/api/creator/library")).json();
+  const box = $("vids");
+  box.innerHTML = "";
+  const vids = d.videos || [];
+  $("novids").style.display = vids.length ? "none" : "block";
+  for (const v of vids) {
+    const el = document.createElement("div");
+    el.className = "vid";
+    el.innerHTML =
+      `<img loading="lazy" src="/api/thumb/${encodeURIComponent(v.name)}" onerror="this.style.visibility='hidden'">
+       <div style="min-width:0">
+         <div class="nm">${v.title || v.stem}</div>
+         <div class="st">…</div>
+       </div>`;
+    el.onclick = () => select(v, el);
+    box.appendChild(el);
+    const st = el.querySelector(".st");
+    fetch(`/api/captions/${encodeURIComponent(v.stem)}`).then(r => r.json()).then(c => {
+      if (c.captioned) { st.textContent = "✓ captioned"; st.className = "st ok"; }
+      else if (c.lines.length) st.textContent = c.lines.length + " caption lines";
+      else st.textContent = "no captions";
+    });
+  }
+}
+
+async function select(v, el) {
+  SEL = v;
+  clearInterval(poll);
+  document.querySelectorAll(".vid").forEach(e => e.classList.remove("sel"));
+  el.classList.add("sel");
+  $("pick").style.display = "none";
+  $("detail").style.display = "block";
+  $("dtitle").textContent = "🎬 " + (v.title || v.stem);
+  $("jobnote").textContent = ""; $("editnote").textContent = "";
+  await loadCaptions();
+}
+
+async function loadCaptions() {
+  const c = await (await fetch(`/api/captions/${encodeURIComponent(SEL.stem)}`)).json();
+  LINES = c.lines;
+  $("editor").style.display = LINES.length ? "block" : "none";
+  $("btn-gen").textContent = LINES.length ? "🔁 Re-generate from audio" : "🎙 Generate captions (free, local)";
+  renderLines();
+  $("result").style.display = c.captioned ? "block" : "none";
+  if (c.captioned)
+    $("preview").src = `/captioned/${encodeURIComponent(SEL.stem)}?v=${c.captioned_mtime}`;
+}
+
+function renderLines() {
+  const box = $("lines");
+  box.innerHTML = "";
+  LINES.forEach((ln, i) => {
+    const row = document.createElement("div");
+    row.className = "lnrow";
+    row.innerHTML = `<span class="t">${fmt(ln.start)}–${fmt(ln.end)}</span>`;
+    const inp = document.createElement("input");
+    inp.value = ln.text;
+    inp.oninput = () => { LINES[i].text = inp.value; };
+    row.appendChild(inp);
+    box.appendChild(row);
+  });
+}
+
+function watch(jobId, after) {
+  poll = setInterval(async () => {
+    const j = await (await fetch(`/api/job/${jobId}`)).json();
+    if (j.status === "running") { $("jobnote").textContent = "⏳ " + (j.lines.at(-1) || "working…"); return; }
+    clearInterval(poll);
+    if (j.status === "done") { $("jobnote").textContent = "✓ done"; after(); }
+    else $("jobnote").textContent = "❌ job " + j.status + " — log in Power Tools";
+    $("btn-gen").disabled = $("btn-burn").disabled = false;
+  }, 3000);
+}
+
+$("btn-gen").onclick = async () => {
+  $("btn-gen").disabled = true;
+  const r = await fetch("/api/recaption", {method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({path: "uploads/" + SEL.name, mode: "captions"})});
+  if (!r.ok) { $("jobnote").textContent = "❌ " + await r.text(); $("btn-gen").disabled = false; return; }
+  $("jobnote").textContent = "⏳ transcribing + burning…";
+  watch((await r.json()).job_id, loadCaptions);
+};
+
+$("btn-burn").onclick = async () => {
+  $("btn-burn").disabled = true;
+  const s = await fetch(`/api/captions/${encodeURIComponent(SEL.stem)}`, {method:"POST",
+    headers:{"Content-Type":"application/json"}, body: JSON.stringify({lines: LINES})});
+  if (!s.ok) { $("editnote").textContent = "❌ " + await s.text(); $("btn-burn").disabled = false; return; }
+  const r = await fetch("/api/recaption", {method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({path: "uploads/" + SEL.name, mode: "burn-lines"})});
+  if (!r.ok) { $("editnote").textContent = "❌ " + await r.text(); $("btn-burn").disabled = false; return; }
+  $("jobnote").textContent = "⏳ burning your edited lines…";
+  watch((await r.json()).job_id, loadCaptions);
+};
+
+$("btn-aifix").onclick = async () => {
+  $("btn-aifix").disabled = true;
+  $("editnote").textContent = "✨ proofreading with local Claude…";
+  try {
+    const r = await fetch(`/api/aifix/${encodeURIComponent(SEL.stem)}`, {method:"POST",
+      headers:{"Content-Type":"application/json"}, body: JSON.stringify({lines: LINES})});
+    if (!r.ok) { $("editnote").textContent = "❌ " + await r.text(); return; }
+    const d = await r.json();
+    LINES = d.lines;
+    renderLines();
+    $("editnote").textContent = d.changed ? `✓ fixed ${d.changed} line(s) — review, then Save & burn` : "✓ nothing to fix";
+  } finally { $("btn-aifix").disabled = false; }
+};
+
+loadList();
+</script>
+</body>
+</html>

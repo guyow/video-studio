@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Brand Studio — Video Studio</title>
+<link rel="stylesheet" href="/static/vs.css">
+<script src="/static/vs-nav.js" defer></script>
+<style>
+  * { box-sizing:border-box; margin:0; }
+  body { background:radial-gradient(1100px 500px at 75% -10%, #1a2036 0%, var(--bg) 55%);
+         color:var(--text); min-height:100vh; }
+  a { color:var(--accent2); text-decoration:none; }
+  .cols { display:grid; grid-template-columns:400px 1fr; gap:18px; align-items:start; }
+  @media (max-width:960px){ .cols{ grid-template-columns:1fr; } }
+  label.fld { display:block; font-size:12px; color:var(--dim); margin:12px 0 4px; text-transform:uppercase; letter-spacing:.4px; }
+  select, input[type=text], textarea { width:100%; background:#0a0d13; border:1px solid var(--line);
+    border-radius:10px; color:var(--text); padding:9px 12px; font-size:13.5px; font-family:inherit; }
+  textarea { resize:vertical; min-height:52px; }
+  .health { display:flex; flex-direction:column; gap:6px; margin-bottom:6px; }
+  .hrow { display:flex; align-items:center; gap:8px; font-size:12.5px; }
+  .dot { width:9px; height:9px; border-radius:50%; flex:none; }
+  .dot.ok{ background:var(--ok);} .dot.bad{ background:var(--bad);}
+  .hfix { color:var(--warn); font-size:11.5px; }
+  .copyfields { background:var(--panel2); border:1px solid var(--line); border-radius:12px; padding:12px; margin-top:10px; display:none; }
+  .previewwrap { background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:18px; min-height:300px;
+    display:flex; align-items:center; justify-content:center; }
+  .previewwrap img { max-width:100%; max-height:70vh; border-radius:10px; }
+  .gallery { display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:10px; margin-top:14px; }
+  .gallery img { width:100%; border-radius:8px; border:1px solid var(--line); cursor:pointer; }
+  .hint{ color:var(--dim); font-size:12px; }
+  .wm-approve { background:var(--panel2); border:1px solid var(--accent); border-radius:12px; padding:14px; margin-bottom:16px; }
+  .wm-approve img { max-width:260px; display:block; margin:8px 0; background:#0B0A1C; border-radius:8px; padding:10px; }
+</style>
+</head>
+<body>
+<div class="vs-page" style="max-width:1240px">
+  <h2>Brand Studio <span class="hint">— liitt · Fairy Flame</span></h2>
+  <p class="lead">On-brand Instagram / Meta content. AI paints the imagery; the brand kit paints the words,
+     colours &amp; logo — so type, product name and logo are pixel-identical every time.</p>
+
+  <div class="vs-panel" id="health-panel">
+    <h3>System check</h3>
+    <div class="health" id="health"></div>
+  </div>
+
+  <div class="wm-approve" id="wm-approve" style="display:none">
+    <b>🔥 Approve the locked liitt wordmark</b>
+    <div class="hint">This exact PNG goes on every post — approve it once. (Regenerate anytime later.)</div>
+    <img id="wm-img" src="" alt="liitt wordmark">
+    <button class="vs-btn" id="btn-approve-wm">✓ Approve &amp; lock this wordmark</button>
+    <button class="vs-btn ghost" id="btn-upload-wm" style="margin-left:8px">📤 Use my official logo instead (PNG)</button>
+    <input type="file" id="wm-file" accept=".png,.webp" hidden>
+  </div>
+
+  <div class="cols">
+    <div class="vs-panel" style="margin:0">
+      <h3>1 · Brief</h3>
+      <label class="fld">Format</label>
+      <select id="format"></select>
+      <label class="fld">Background scene (preset)</label>
+      <select id="preset"></select>
+      <label class="fld">Campaign name</label>
+      <input type="text" id="campaign" placeholder="e.g. burned-out-mom-oct">
+      <label class="fld">Extra brief for the copywriter (optional)</label>
+      <textarea id="brief" placeholder="leave blank to use the format's built-in brief"></textarea>
+
+      <button class="vs-btn" id="btn-copy" style="margin-top:14px">✍️ Generate copy</button>
+
+      <div class="copyfields" id="copyfields">
+        <label class="fld">Eyebrow</label><input type="text" id="c-eyebrow">
+        <label class="fld">Headline</label><textarea id="c-headline"></textarea>
+        <label class="fld">Subhead</label><textarea id="c-subhead"></textarea>
+        <label class="fld">CTA</label><input type="text" id="c-cta">
+        <label class="fld">Price line</label><input type="text" id="c-price">
+        <div class="hint" id="copynote" style="margin-top:6px"></div>
+        <button class="vs-btn" id="btn-generate" style="margin-top:12px">🎨 Generate the ad</button>
+      </div>
+    </div>
+
+    <div>
+      <div class="previewwrap" id="preview">
+        <span class="hint">Your finished ad appears here.</span>
+      </div>
+      <div class="hint" id="jobnote" style="margin-top:8px"></div>
+      <div class="vs-log" id="joblog" style="display:none; margin-top:8px"></div>
+      <h3 style="margin-top:22px; font-size:14px; color:var(--accent2)">Recent</h3>
+      <div class="gallery" id="gallery"></div>
+      <p class="hint" style="margin-top:14px">Need raw ComfyUI controls? <a href="/studio">Advanced image studio →</a></p>
+    </div>
+  </div>
+</div>
+<script>
+const $ = id => document.getElementById(id);
+let COPY = null, poll = null;
+
+async function health() {
+  const d = await (await fetch("/api/brand/health")).json();
+  $("health").innerHTML = d.checks.map(c =>
+    `<div class="hrow"><span class="dot ${c.ok?'ok':'bad'}"></span>${c.name}
+     ${c.ok?'':'<span class="hfix">— '+(c.fix||'')+'</span>'}</div>`).join("");
+  return d.healthy;
+}
+
+async function wordmarkGate() {
+  const d = await (await fetch("/api/brand/wordmark")).json();
+  if (d.img && !d.approved) {
+    $("wm-approve").style.display = "block";
+    $("wm-img").src = d.img + "?v=" + Date.now();
+  } else { $("wm-approve").style.display = "none"; }
+}
+$("btn-approve-wm").onclick = async () => {
+  await fetch("/api/brand/wordmark/approve", {method:"POST"});
+  $("wm-approve").style.display = "none";
+};
+$("btn-upload-wm").onclick = () => $("wm-file").click();
+$("wm-file").addEventListener("change", async () => {
+  const f = $("wm-file").files[0];
+  if (!f) return;
+  const fd = new FormData();
+  fd.append("logo", f);
+  const r = await fetch("/api/brand/wordmark/upload", {method:"POST", body: fd});
+  if (!r.ok) { alert(await r.text()); return; }
+  $("wm-approve").style.display = "none";
+  alert("Official logo installed — every post now uses this exact file.");
+});
+
+async function loadFormats() {
+  const d = await (await fetch("/api/brand/formats")).json();
+  $("format").innerHTML = d.formats.map(f =>
+    `<option value="${f.template}" data-preset="${f.default_preset||''}">${f.label||f.id}</option>`).join("");
+  $("preset").innerHTML = d.presets.map(p =>
+    `<option value="${p.id}">${p.label||p.id}</option>`).join("");
+  syncPreset();
+}
+function syncPreset(){
+  const opt = $("format").selectedOptions[0];
+  if (opt && opt.dataset.preset) $("preset").value = opt.dataset.preset;
+}
+$("format").onchange = syncPreset;
+
+$("btn-copy").onclick = async () => {
+  $("btn-copy").disabled = true;
+  $("copynote").textContent = "";
+  $("jobnote").textContent = "✍️ writing on-brand, compliant copy (local Claude)…";
+  try {
+    const r = await fetch("/api/brand/copy", {method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({template: $("format").value, brief: $("brief").value.trim()})});
+    if (!r.ok) { $("jobnote").textContent = "❌ " + await r.text(); return; }
+    COPY = (await r.json()).copy;
+    $("c-eyebrow").value = COPY.eyebrow||""; $("c-headline").value = COPY.headline||"";
+    $("c-subhead").value = COPY.subhead||""; $("c-cta").value = COPY.cta||"";
+    $("c-price").value = COPY.price_line||"";
+    $("copyfields").style.display = "block";
+    $("jobnote").textContent = "✓ copy ready — edit if you like, then Generate the ad.";
+  } finally { $("btn-copy").disabled = false; }
+};
+
+$("btn-generate").onclick = async () => {
+  const copy = {eyebrow:$("c-eyebrow").value, headline:$("c-headline").value,
+    subhead:$("c-subhead").value, cta:$("c-cta").value, price_line:$("c-price").value};
+  $("btn-generate").disabled = true;
+  $("joblog").style.display = "block";
+  $("jobnote").textContent = "🎨 generating imagery on the GPU + compositing…";
+  const r = await fetch("/api/brand/generate", {method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({template: $("format").value, preset: $("preset").value,
+      campaign: $("campaign").value.trim(), copy})});
+  if (!r.ok) { $("jobnote").textContent = "❌ " + await r.text(); $("btn-generate").disabled=false; return; }
+  const {job_id} = await r.json();
+  poll = setInterval(async () => {
+    const j = await (await fetch(`/api/job/${job_id}`)).json();
+    $("joblog").textContent = (j.lines||[]).slice(-6).join("\n");
+    const pct = j.progress && j.progress.pct!=null ? ` (${j.progress.pct}%)` : "";
+    if (j.status === "running") { $("jobnote").textContent = "🎨 working…" + pct; return; }
+    clearInterval(poll); $("btn-generate").disabled = false;
+    if (j.status === "done") { $("jobnote").textContent = "✅ done"; await showLatest(); }
+    else $("jobnote").textContent = "❌ job " + j.status + " — see log / Power Tools";
+  }, 2500);
+};
+
+async function showLatest() {
+  const d = await (await fetch("/api/brand/campaigns")).json();
+  if (d.campaigns[0] && d.campaigns[0].images[0]) {
+    $("preview").innerHTML = `<img src="${d.campaigns[0].images[0]}?v=${Date.now()}">`;
+  }
+  const all = d.campaigns.flatMap(c => c.images);
+  $("gallery").innerHTML = all.slice(0,18).map(u =>
+    `<img src="${u}" onclick="document.getElementById('preview').innerHTML='<img src=\\'${u}?v='+Date.now()+'\\'>'">`).join("");
+}
+
+(async () => { await health(); await wordmarkGate(); await loadFormats(); await showLatest(); })();
+</script>
+</body>
+</html>

@@ -1,0 +1,657 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dubbing Studio — autoVSL</title>
+<style>
+  :root {
+    --bg:#0b0e14; --panel:#141926; --panel2:#1b2231; --line:#28324a;
+    --text:#eef2fb; --dim:#8b96ab; --accent:#7c5cff; --accent2:#4cc9f0;
+    --ok:#3ddc84; --bad:#ff5c72; --warn:#ffb454;
+    --radius:14px; --mono:ui-monospace,'Cascadia Code',Consolas,monospace;
+  }
+  * { box-sizing:border-box; margin:0; }
+  body { background:radial-gradient(1200px 600px at 70% -10%, #1a2036 0%, var(--bg) 55%); color:var(--text);
+         font:15px/1.55 'Segoe UI',system-ui,sans-serif; min-height:100vh; }
+  a { color:var(--accent2); text-decoration:none; }
+  header { display:flex; align-items:center; gap:14px; padding:16px 26px; border-bottom:1px solid var(--line);
+           position:sticky; top:0; background:rgba(11,14,20,.9); backdrop-filter:blur(8px); z-index:20; }
+  header h1 { font-size:18px; letter-spacing:.3px; }
+  header h1 b { color:var(--accent); }
+  header .sub { color:var(--dim); font-size:12.5px; }
+  header .nav { margin-left:auto; display:flex; gap:8px; }
+  header .nav a { background:var(--panel2); border:1px solid var(--line); padding:6px 13px; border-radius:20px; font-size:13px; font-weight:600; }
+  header .nav a:hover { border-color:var(--accent); }
+  main { display:grid; grid-template-columns:330px 1fr; gap:20px; padding:20px 26px; max-width:1500px; margin:0 auto; align-items:start; }
+  @media (max-width:1050px){ main { grid-template-columns:1fr; } }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:var(--radius); padding:18px; margin-bottom:18px; }
+  .card h2 { font-size:12px; text-transform:uppercase; letter-spacing:1.3px; color:var(--dim); margin-bottom:14px; }
+  .card h2 .r { float:right; font-weight:400; text-transform:none; letter-spacing:0; }
+
+  .drop { display:block; border:2px dashed var(--line); border-radius:12px; padding:20px; text-align:center;
+          color:var(--dim); cursor:pointer; transition:.15s; font-size:13.5px; margin-bottom:14px; }
+  .drop:hover,.drop.drag { border-color:var(--accent); color:var(--accent2); background:rgba(124,92,255,.06); }
+  .sec { font-size:10.5px; text-transform:uppercase; letter-spacing:1px; color:var(--dim); margin:14px 0 7px; }
+  .sec:first-child { margin-top:0; }
+  .row { display:flex; align-items:center; gap:9px; padding:9px 11px; border:1px solid var(--line); border-radius:11px;
+         background:var(--panel2); margin-bottom:7px; cursor:pointer; font-size:13px; transition:.12s; }
+  .row:hover { border-color:var(--accent); transform:translateX(2px); }
+  .row.sel { border-color:var(--accent); background:rgba(124,92,255,.14); box-shadow:0 0 0 1px var(--accent) inset; }
+  .row .nm { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:600; }
+  .row .mt { color:var(--dim); font-size:10.5px; flex:none; }
+  .dots { display:flex; gap:3px; flex:none; }
+  .dots i { width:7px; height:7px; border-radius:50%; background:var(--line); }
+  .dots i.on { background:var(--ok); }
+  .dots i.run { background:var(--warn); animation:pulse 1.2s infinite; }
+  @keyframes pulse { 50%{opacity:.4;} }
+
+  .stage { position:relative; background:#000; border-radius:12px; overflow:hidden; min-height:220px;
+           display:flex; align-items:center; justify-content:center; }
+  .stage video { max-width:100%; max-height:38vh; width:auto; display:block; background:#000; }
+  .stage .empty { color:var(--dim); font-size:14px; padding:50px 20px; text-align:center; }
+
+  /* step flow */
+  .steps { counter-reset:step; }
+
+  /* interview (duo) mode */
+  .turn { display:flex; gap:8px; align-items:flex-start; padding:8px 10px; border:1px solid var(--line);
+          border-radius:10px; background:var(--panel); margin-top:7px; }
+  .turn .chip { flex:none; width:34px; height:26px; border-radius:8px; border:none; cursor:pointer;
+                font:700 12px 'Segoe UI',sans-serif; color:#fff; }
+  .turn .chip.A { background:#7c5cff; }
+  .turn .chip.B { background:#e8863a; }
+  .turn .tm { flex:none; width:86px; font:11px var(--mono); color:var(--dim); padding-top:5px; cursor:pointer; }
+  .turn .tm:hover { color:var(--accent2); }
+  .turn input.txt { flex:1; background:#080b11; color:var(--text); border:1px solid var(--line);
+                    border-radius:8px; padding:6px 9px; font:13px 'Segoe UI',sans-serif; }
+  .turn .wc { flex:none; font-size:10.5px; color:var(--dim); padding-top:6px; width:56px; text-align:right; }
+  .turn .wc.bad { color:var(--warn); }
+  .spkrow { display:flex; gap:10px; margin-top:8px; flex-wrap:wrap; }
+  .spkrow label { flex:1; min-width:180px; font-size:11.5px; color:var(--dim); }
+  .spkrow input { width:100%; background:#080b11; color:var(--text); border:1px solid var(--line);
+                  border-radius:8px; padding:7px 10px; font:13px 'Segoe UI',sans-serif; margin-top:4px; }
+  .spkdot { display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:5px; }
+  #duoturns { max-height:340px; overflow:auto; }
+  .step { border:1px solid var(--line); border-radius:12px; padding:16px; margin-top:14px; background:var(--panel2); opacity:.5; transition:.2s; }
+  .step.active { opacity:1; border-color:var(--accent); }
+  .step.done { opacity:1; border-color:rgba(61,220,132,.4); }
+  .step .head { display:flex; align-items:center; gap:10px; font-weight:700; font-size:14px; margin-bottom:4px; }
+  .step .num { width:24px; height:24px; border-radius:50%; background:var(--line); color:var(--text); display:flex;
+               align-items:center; justify-content:center; font-size:12px; flex:none; }
+  .step.active .num { background:var(--accent); color:#fff; }
+  .step.done .num { background:var(--ok); color:#08110a; }
+  .step .body { font-size:13px; color:var(--dim); margin-top:8px; }
+
+  textarea#script { width:100%; height:150px; background:#080b11; color:var(--text); border:1px solid var(--line);
+    border-radius:10px; padding:11px 13px; font:13.5px/1.6 'Segoe UI',sans-serif; resize:vertical; margin-top:4px; }
+  select, button.ghost { background:var(--panel); color:var(--text); border:1px solid var(--line); border-radius:9px;
+    padding:9px 12px; font:inherit; font-size:13px; cursor:pointer; }
+  select:hover, button.ghost:hover { border-color:var(--accent); }
+  button.ghost:disabled { opacity:.4; cursor:not-allowed; }
+  .selrow { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  .selrow label { font-size:11.5px; color:var(--dim); display:flex; flex-direction:column; gap:5px; }
+  .selrow select { width:100%; }
+  .btnrow { display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-top:8px; }
+
+  .bigbtn { background:linear-gradient(135deg,var(--accent),#5b8cff); color:#fff; border:none; border-radius:13px;
+            padding:14px 28px; font:700 16px 'Segoe UI',sans-serif; cursor:pointer; box-shadow:0 8px 24px rgba(124,92,255,.38);
+            transition:.15s; display:inline-flex; align-items:center; gap:9px; }
+  .bigbtn:hover { transform:translateY(-2px); box-shadow:0 12px 30px rgba(124,92,255,.5); }
+  .bigbtn:disabled { opacity:.5; cursor:not-allowed; transform:none; box-shadow:none; }
+  .cost { font-size:12px; color:var(--warn); }
+  .engbtn { flex:1; background:var(--panel); color:var(--text); border:1px solid var(--line); border-radius:10px;
+            padding:11px; font:600 13.5px 'Segoe UI',sans-serif; cursor:pointer; transition:.15s; }
+  .engbtn:hover { border-color:var(--accent); }
+  .engbtn.on { border-color:var(--accent); background:rgba(124,92,255,.16); color:var(--accent2); box-shadow:0 0 0 1px var(--accent) inset; }
+
+  .prog { margin-top:14px; display:none; } .prog.on { display:block; }
+  .bar { height:11px; background:var(--panel); border:1px solid var(--line); border-radius:8px; overflow:hidden; }
+  .bar i { display:block; height:100%; width:0%; border-radius:8px; background:linear-gradient(90deg,var(--accent),var(--accent2)); transition:width .4s; }
+  .prog .lbl { display:flex; justify-content:space-between; font-size:12.5px; color:var(--dim); margin-bottom:6px; }
+  .prog .lbl b { color:var(--text); }
+  .subst { display:flex; gap:6px; margin-top:9px; }
+  .subst .p { flex:1; text-align:center; font-size:10.5px; text-transform:uppercase; letter-spacing:.5px; color:var(--dim);
+              padding:5px; border:1px solid var(--line); border-radius:7px; background:var(--panel); }
+  .subst .p.on { border-color:var(--accent); color:var(--accent2); background:rgba(124,92,255,.12); }
+  .subst .p.done { border-color:rgba(61,220,132,.5); color:var(--ok); }
+  #log { margin-top:11px; background:#080b11; border:1px solid var(--line); border-radius:10px; padding:10px;
+         font-family:var(--mono); font-size:11px; line-height:1.5; max-height:150px; overflow-y:auto;
+         white-space:pre-wrap; word-break:break-word; color:#aeb9cf; display:none; } #log.on{display:block;}
+  #log .err { color:var(--bad); }
+  .result { display:none; margin-top:16px; } .result.on { display:block; }
+  .result video { width:100%; max-width:340px; border-radius:12px; background:#000; display:block; margin:10px auto 0; }
+  .toast { position:fixed; bottom:22px; left:50%; transform:translateX(-50%); background:var(--panel2);
+           border:1px solid var(--accent); color:var(--text); padding:11px 20px; border-radius:11px; z-index:60; display:none;
+           box-shadow:0 8px 30px rgba(0,0,0,.4); }
+</style>
+<link rel="stylesheet" href="/static/vs.css"><script src="/static/vs-nav.js" defer></script></head>
+<body>
+<header>
+  <div>
+    <h1>🎙 <b>Dubbing</b> Studio</h1>
+    <div class="sub">Clone the voice, swap the words, re-lip-sync — from your source video</div>
+  </div>
+  <div class="nav">
+    <a href="/subtitles">💬 Subtitles</a>
+    <a href="/">🎬 Mission Control</a>
+  </div>
+</header>
+
+<main>
+  <section>
+    <div class="card">
+      <h2>Source videos <span class="r" id="count"></span></h2>
+      <label class="drop" id="drop">
+        <input type="file" id="file" accept="video/*,audio/*,.mp4,.mov,.mkv,.webm,.m4v,.mp3,.m4a,.wav" multiple style="display:none">
+        <span id="dropmsg">⬆ Drop a video here or click to upload</span>
+      </label>
+      <div id="list"><span style="color:var(--dim);font-size:13px">Loading…</span></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="card">
+      <h2 id="title">Pick or upload a source video</h2>
+      <div class="stage" id="stage"><div class="empty">← Select a video to start dubbing</div></div>
+
+      <div class="steps" id="steps" style="display:none">
+        <!-- Step 1: transcribe -->
+        <div class="step" id="s1">
+          <div class="head"><span class="num">1</span> Transcribe <span id="s1tag" style="margin-left:auto;font-size:12px;font-weight:400;color:var(--dim)"></span></div>
+          <div class="body">
+            <span id="s1msg">The original words are transcribed locally (free, on your GPU).</span>
+            <div class="btnrow"><button class="ghost" id="s1btn" onclick="transcribe()">▶ Transcribe</button></div>
+          </div>
+        </div>
+
+        <!-- Step 2: script -->
+        <div class="step" id="s2">
+          <div class="head"><span class="num">2</span> New script <span id="s2tag" style="margin-left:auto;font-size:12px;font-weight:400;color:var(--dim)"></span></div>
+          <div class="body">
+            This is exactly what the cloned voice will say. Keep it about the same length as the original so the lip-sync stays natural.
+            <textarea id="script" placeholder="Transcribe first, then edit the words here…"></textarea>
+            <div class="btnrow"><button class="ghost" id="s2btn" onclick="saveScript()">💾 Save script</button>
+              <span id="s2hint" style="font-size:12px;color:var(--dim)"></span></div>
+          </div>
+        </div>
+
+        <!-- Step 3: engine + models + dub -->
+        <div class="step" id="s3">
+          <div class="head"><span class="num">3</span> Engine, voice &amp; lip-sync</div>
+          <div class="body">
+            <div style="display:flex;gap:8px;margin-bottom:14px">
+              <button class="engbtn on" id="eng-local" onclick="setEngine('local')">💻 Local — free &amp; offline</button>
+              <button class="engbtn" id="eng-fal" onclick="setEngine('fal')">☁ FAL.AI — cloud, paid</button>
+            </div>
+
+            <!-- LOCAL controls -->
+            <div id="localopts">
+              <div style="font-size:12.5px;color:var(--dim);margin-bottom:10px">
+                Clones the speaker's voice and speaks your script on your own GPU (XTTS v2) — no network, no cost.
+              </div>
+              <div class="selrow">
+                <label>Lip-sync
+                  <select id="llip">
+                    <option value="wav2lip-hd">💸 CHEAPEST — Wav2Lip HD, local GPU (FREE)</option>
+                    <option value="latentsync">⭐ BEST VALUE — LatentSync, near-best quality ~$0.20 / 40s 💰</option>
+                    <option value="pro">🏆 BEST — sync v2 PRO, studio-grade (priciest ~$6/min) 💰</option>
+                    <option value="musetalk">MuseTalk — fal.ai, fast + balanced ~$0.20 / 40s 💰</option>
+                    <option value="wav2lip">Wav2Lip — local GPU, faster/softer (FREE)</option>
+                    <option value="none">None — keep the original mouth (free)</option>
+                    <option value="veed">VEED — fal.ai ~$0.40 / min 💰</option>
+                    <option value="standard">sync v2 — fal.ai ~$3 / min 💰</option>
+                  </select></label>
+                <label>Language
+                  <select id="llang"><option value="en">English</option><option value="es">Spanish</option>
+                    <option value="fr">French</option><option value="de">German</option>
+                    <option value="it">Italian</option><option value="pt">Portuguese</option></select></label>
+              </div>
+            </div>
+
+            <!-- FAL controls -->
+            <div id="falopts" style="display:none">
+              <div class="selrow">
+                <label>Voice model
+                  <select id="tts">
+                    <option value="f5">F5 — clones from source ($0.05/1k chars) 💰</option>
+                    <option value="turbo">MiniMax turbo (+$1.50 one-time clone) 💰</option>
+                    <option value="hd">MiniMax HD — best voice (+$1.50 clone) 💰</option>
+                  </select></label>
+                <label>Lip-sync model
+                  <select id="tier">
+                    <option value="latentsync">LatentSync — sharpest/most realistic ~$0.20 / 40s 💰</option>
+                    <option value="musetalk">MuseTalk — fast + balanced ~$0.20 / 40s 💰</option>
+                    <option value="veed">VEED — ~$0.40 / min 💰</option>
+                    <option value="standard">sync v2 — ~$3 / min 💰</option>
+                    <option value="pro">sync v2 PRO — best accuracy 💰</option>
+                  </select></label>
+              </div>
+            </div>
+
+            <div class="btnrow" style="margin-top:14px">
+              <button class="bigbtn" id="dubbtn" onclick="dub()" disabled>🎙 Dub</button>
+              <span class="cost" id="costnote"></span>
+            </div>
+            <div class="prog" id="prog">
+              <div class="lbl"><span id="plbl">Starting…</span><b id="ppct"></b></div>
+              <div class="bar"><i id="pbar"></i></div>
+              <div class="subst">
+                <div class="p" id="sub-0">Voice clone</div>
+                <div class="p" id="sub-1">Speech</div>
+                <div class="p" id="sub-2">Lip-sync / finish</div>
+              </div>
+              <div id="log"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="step" id="s4">
+          <div class="head"><span class="num">🎤</span> Interview mode — two speakers
+            <span id="duotag" style="margin-left:auto;font-size:12px;font-weight:400;color:var(--dim)"></span></div>
+          <div class="body">
+            <span id="duomsg">Video with an interviewer AND a guest? Detect who speaks when, give each
+              their own cloned voice, and lip-sync each face only during its own lines
+              (sync.so active-speaker detection).</span>
+            <div class="btnrow">
+              <button class="ghost" id="duodetect" onclick="duoDetect()">🔍 Detect speakers</button>
+              <span id="duohint" style="font-size:12px;color:var(--dim)"></span>
+            </div>
+            <div id="duoedit" style="display:none">
+              <div class="spkrow">
+                <label><span class="spkdot" style="background:#7c5cff"></span>Speaker A — name
+                  <input id="duoNameA" placeholder="e.g. Interviewer"></label>
+                <label><span class="spkdot" style="background:#e8863a"></span>Speaker B — name
+                  <input id="duoNameB" placeholder="e.g. Goldy"></label>
+              </div>
+              <div class="hintline" style="font-size:11.5px;color:var(--dim);margin-top:8px">
+                Click a colored chip to flip a wrong speaker · click the time to jump the player there ·
+                edit each line's words freely (keep near the shown word budget so lips match).</div>
+              <div id="duoturns"></div>
+              <div class="btnrow" style="margin-top:10px">
+                <button class="ghost" onclick="duoSave()">💾 Save turns</button>
+                <select id="duotier">
+                  <option value="pro" selected>sync v2 PRO — best multi-face (~premium)</option>
+                  <option value="standard">sync v2 standard (~$3/min)</option>
+                </select>
+                <button class="bigbtn" id="duorun" onclick="duoRun()" style="padding:11px 20px;font-size:14px">
+                  🎙 Dub interview (2 voices)</button>
+              </div>
+              <div id="duocost" style="font-size:12px;color:var(--warn);margin-top:6px"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="result" id="result">
+          <div class="card" style="background:rgba(61,220,132,.08);border-color:rgba(61,220,132,.4);margin:0">
+            <h2 style="color:var(--ok)">✅ Dubbed video ready</h2>
+            <video id="rvid" controls playsinline></video>
+            <div class="btnrow" style="justify-content:center;margin-top:12px">
+              <button class="ghost" onclick="download()">⬇ Download</button>
+              <button class="ghost" onclick="location.href='/subtitles?v='+encodeURIComponent(dubOut)">🧼 Remove its subtitles</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+<div class="toast" id="toast"></div>
+
+<script>
+const $=s=>document.querySelector(s);
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const fmtMB=b=>b>1e6?(b/1e6).toFixed(1)+' MB':Math.round(b/1e3)+' KB';
+function toast(m){const t=$('#toast');t.textContent=m;t.style.display='block';setTimeout(()=>t.style.display='none',4000);}
+async function api(p,o){const r=await fetch(p,o);if(!r.ok)throw new Error((await r.text()).slice(0,200));return r.json();}
+const post=(p,b)=>api(p,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});
+
+let uploads=[], cur=null, dubOut=null, busy=false, poll=null;
+
+function stageDots(u){
+  const d=(on)=>`<i class="${on}"></i>`;
+  const a=u.active||{};
+  return `<span class="dots">
+    ${d(u.transcript?'on':(a.action==='transcribe'&&a.status==='running'?'run':''))}
+    ${d(u.script_edited?'on':'')}
+    ${d(u.dub_final?'on':(a.action==='dub'&&a.status==='running'?'run':''))}
+  </span>`;
+}
+
+function render(){
+  const vids=uploads.filter(u=>u.is_video);
+  $('#count').textContent=vids.length+' video'+(vids.length===1?'':'s');
+  $('#list').innerHTML = vids.map(u=>`
+    <div class="row ${cur===u.name?'sel':''}" onclick="pick('${esc(u.name)}')">
+      <span>🎬</span>
+      <div class="nm" title="${esc(u.name)}">${esc(u.name)}</div>
+      <span class="mt">${fmtMB(u.size)}</span>
+      ${stageDots(u)}
+    </div>`).join('') || '<span style="color:var(--dim);font-size:13px">No videos yet — drop one above.</span>';
+}
+
+async function load(){
+  const d=await api('/api/overview');
+  uploads=d.uploads||[];
+  render();
+  if(cur){ const u=uploads.find(x=>x.name===cur); if(u) syncSteps(u); }
+}
+
+function pick(name){
+  cur=name; dubOut=null;
+  const u=uploads.find(x=>x.name===name);
+  render();
+  $('#title').textContent=name;
+  $('#stage').innerHTML=`<video src="/media/uploads/${encodeURIComponent(name)}" controls playsinline></video>`;
+  $('#steps').style.display='';
+  $('#result').classList.remove('on');
+  $('#prog').classList.remove('on'); $('#log').classList.remove('on'); $('#log').innerHTML='';
+  $('#script').value='';
+  syncSteps(u); loadScript(u); duoLoad(u);
+  history.replaceState(null,'','/dubbing?v='+encodeURIComponent(name));
+}
+
+function setStep(id,state){ const e=$('#'+id); e.classList.remove('active','done'); if(state)e.classList.add(state); }
+
+function syncSteps(u){
+  const a=u.active||{};
+  // step 1 transcribe
+  if(u.transcript){ setStep('s1','done'); $('#s1tag').textContent='✓ done'; $('#s1btn').textContent='↻ Re-transcribe'; $('#s1msg').textContent='Transcribed. Edit the words below.'; }
+  else if(a.action==='transcribe'&&a.status==='running'){ setStep('s1','active'); $('#s1tag').textContent='⏳ running…'; $('#s1btn').disabled=true; }
+  else { setStep('s1','active'); $('#s1tag').textContent=''; $('#s1btn').disabled=false; }
+  // step 2 script
+  if(u.script_edited){ setStep('s2','done'); $('#s2tag').textContent='✓ saved'; }
+  else if(u.transcript){ setStep('s2','active'); $('#s2tag').textContent='needs you'; }
+  else { setStep('s2',''); $('#s2tag').textContent=''; }
+  // step 3 dub
+  const canDub=u.script_edited;
+  $('#dubbtn').disabled = !canDub || busy;
+  setStep('s3', canDub?'active':'');
+  // result
+  if(u.dub_final){ dubOut=u.dub_final; showResult(u.dub_final); setStep('s3','done'); }
+}
+
+async function loadScript(u){
+  try{ const s=await api('/api/script/'+encodeURIComponent(u.stem));
+    $('#script').value=s.text||'';
+    $('#s2hint').textContent = s.source==='edited'?'saved edit loaded':(s.source==='transcript'?'from transcript — edit freely':'no transcript yet');
+  }catch(e){ $('#script').value=''; }
+}
+
+function transcribe(){
+  if(!cur) return;
+  $('#s1btn').disabled=true; $('#s1tag').textContent='⏳ starting…';
+  post('/api/run',{action:'transcribe',file:cur})
+    .then(r=>watch(r.job_id,'transcribe'))
+    .catch(e=>{ toast('Error: '+e.message); $('#s1btn').disabled=false; });
+}
+
+async function saveScript(){
+  if(!cur) return;
+  const u=uploads.find(x=>x.name===cur);
+  const text=$('#script').value.trim();
+  if(!text){ toast('Write the script first'); return; }
+  try{ await post('/api/script/'+encodeURIComponent(u.stem),{text});
+    toast('Script saved'); await load();
+  }catch(e){ toast('Error: '+e.message); }
+}
+
+let engine='local';
+function setEngine(e){
+  engine=e;
+  $('#eng-local').classList.toggle('on',e==='local');
+  $('#eng-fal').classList.toggle('on',e==='fal');
+  $('#localopts').style.display = e==='local'?'':'none';
+  $('#falopts').style.display = e==='fal'?'':'none';
+  localStorage.setItem('dubEngine',e);
+  updateCostNote();
+}
+
+// returns {paid:bool, lines:[...], summary:'...'} describing what THIS run will charge
+function plan(){
+  if(engine==='local'){
+    const lip=$('#llip').value;
+    if(lip==='none') return {paid:false, lines:['Voice clone + speech: local XTTS (free)','Lip-sync: none (free)'], summary:'100% local — nothing is charged.'};
+    if(lip==='wav2lip-hd') return {paid:false, lines:['Voice clone + speech: local XTTS (free)','Lip-sync: Wav2Lip + GFPGAN HD on your GPU (free)'], summary:'100% local & HD — voice + sharp lip-sync on your GPU, nothing is charged.'};
+    if(lip==='wav2lip') return {paid:false, lines:['Voice clone + speech: local XTTS (free)','Lip-sync: Wav2Lip on your GPU (free)'], summary:'100% local — voice + lip-sync on your GPU, nothing is charged.'};
+    const cost={latentsync:'~$0.20 / 40s',musetalk:'~$0.20 / 40s',veed:'~$0.40 / min',standard:'~$3 / min',pro:'premium'}[lip];
+    return {paid:true, lines:['Voice clone + speech: local XTTS (free)',`Lip-sync: ${lip} on fal.ai (${cost}) — PAID`],
+            summary:`Voice is free/local; only the ${lip} lip-sync is charged on fal.ai.`};
+  }
+  const tts=$('#tts').value, tier=$('#tier').value;
+  const clone = tts==='f5' ? 'zero-shot (no clone fee)' : '+$1.50 one-time clone';
+  const sc={latentsync:'~$0.20 / 40s',musetalk:'~$0.20 / 40s',veed:'~$0.40 / min',standard:'~$3 / min',pro:'premium'}[tier];
+  return {paid:true, lines:[`Voice: MiniMax/${tts} on fal.ai (${clone}) — PAID`,`Lip-sync: ${tier} on fal.ai (${sc}) — PAID`],
+          summary:'Full cloud pipeline — voice and lip-sync are both charged on fal.ai.'};
+}
+
+function updateCostNote(){
+  const p=plan(); const n=$('#costnote');
+  if(p.paid){ n.textContent='💰 '+p.summary; n.style.color='var(--warn)'; $('#dubbtn').textContent='🎙 Dub — approve cost'; }
+  else { n.textContent='✓ '+p.summary; n.style.color='var(--ok)'; $('#dubbtn').textContent='🎙 Dub (free)'; }
+}
+
+function dub(){
+  if(!cur||busy) return;
+  const p=plan();
+  const body={action:'dub', file:cur, engine};
+  if(engine==='local'){ body.lipsync=$('#llip').value; body.language=$('#llang').value; }
+  else { body.tts=$('#tts').value; body.tier=$('#tier').value; }
+
+  if(p.paid){
+    // explicit cost approval before consuming any credits
+    const ok=confirm('⚠ This run will spend money on fal.ai:\n\n • '+p.lines.join('\n • ')+
+      '\n\nSource: '+cur+'\n\nApprove and start? (Cancel = nothing is charged)');
+    if(!ok){ toast('Cancelled — nothing was charged'); return; }
+    body.confirm_cost=true;
+  }
+
+  busy=true; $('#dubbtn').disabled=true;
+  $('#prog').classList.add('on'); $('#log').classList.add('on'); $('#log').innerHTML='';
+  $('#result').classList.remove('on');
+  ['sub-clone','sub-speak','sub-lip'].forEach(id=>$('#'+id).classList.remove('on','done'));
+  $('#pbar').style.width='3%'; $('#ppct').textContent=''; $('#plbl').textContent='Starting…';
+  post('/api/run',body)
+    .then(r=>watch(r.job_id,'dub'))
+    .catch(e=>{ toast('Error: '+e.message); busy=false; $('#dubbtn').disabled=false; $('#prog').classList.remove('on'); });
+}
+
+async function watch(jobId, kind){
+  let off=0, status='running', cost=null;
+  const all=[];
+  while(status==='running'){
+    await sleep(1000);
+    let j; try{ j=await api(`/api/job/${jobId}?offset=${off}`); }catch(e){ continue; }
+    for(const line of j.lines){
+      all.push(line);
+      if(kind==='dub'){ const d=document.createElement('div'); d.textContent=line;
+        if(/error|failed|traceback/i.test(line)) d.className='err'; $('#log').appendChild(d); $('#log').scrollTop=$('#log').scrollHeight; }
+    }
+    off=j.next_offset; status=j.status; cost=j.cost||cost;
+    if(kind==='dub') dubProgress(all);
+  }
+  if(kind==='dub'){
+    if(status==='done'){
+      $('#pbar').style.width='100%'; $('#plbl').textContent='Done'; ['sub-0','sub-1','sub-2'].forEach(id=>$('#'+id).classList.add('done'));
+      if(cost && cost.free) toast(`✅ Done — this dub was FREE (local). fal.ai total: $${(cost.total||0).toFixed(2)}`);
+      else if(cost) toast(`💰 This dub cost ~$${cost.this_run.toFixed(3)} on fal.ai · total so far $${(cost.total||0).toFixed(2)}`);
+      else toast('✅ Dub complete');
+    }
+    else { $('#plbl').textContent='Failed'; toast('Dub failed — see the log'); }
+    busy=false;
+  }
+  await load();
+}
+
+// map each pipeline's "=== stage: X ===" lines onto the 3 boxes (voice / speech / finish)
+const STAGE_MAP = {
+  clone:      {box:0, pct:15, lbl:'Cloning the voice…'},
+  'local-voice':{box:1, pct:20, lbl:'Cloning voice + speaking your script (local, ~1 min)…'},
+  speak:      {box:1, pct:45, lbl:'Generating speech…'},
+  mux:        {box:2, pct:90, lbl:'Swapping in the new audio…'},
+  lipsync:    {box:2, pct:60, lbl:'Lip-syncing (this is the long one)…'},
+  captions:   {box:2, pct:95, lbl:'Burning captions…'},
+};
+function dubProgress(lines){
+  let key='';
+  for(const l of lines){ const m=l.match(/===\s*stage:\s*([\w-]+)/i); if(m) key=m[1].toLowerCase(); }
+  const info=STAGE_MAP[key];
+  const box = info?info.box:-1;
+  [0,1,2].forEach(i=>{ const e=$('#sub-'+i); e.classList.remove('on','done'); if(i<box)e.classList.add('done'); else if(i===box)e.classList.add('on'); });
+  if(info){ $('#pbar').style.width=info.pct+'%'; $('#plbl').textContent=info.lbl; }
+}
+
+// ── interview (duo) mode ─────────────────────────────────────────────────────
+let duoCfg=null;
+
+function duoReset(){
+  duoCfg=null;
+  $('#duoedit').style.display='none';
+  $('#duotag').textContent=''; $('#duohint').textContent='';
+  $('#duodetect').disabled=false; $('#duocost').textContent='';
+  setStep('s4','');
+}
+
+async function duoLoad(u){
+  duoReset();
+  try{
+    const d=await api('/api/duo/config?file='+encodeURIComponent(u.name));
+    if(d.config){ duoCfg=d.config; duoRender(); setStep('s4','done');
+      $('#duotag').textContent=`✓ ${d.config.segments.length} turns` + (d.voices_cloned?' · voices cloned':''); }
+    else setStep('s4','active');
+  }catch(e){ setStep('s4','active'); }
+}
+
+function duoDetect(){
+  if(!cur) return;
+  $('#duodetect').disabled=true; $('#duotag').textContent='⏳ listening to both voices…';
+  $('#duohint').textContent='transcribes first if needed — a few minutes';
+  post('/api/duo/diarize',{file:cur})
+    .then(r=>duoWatch(r.job_id))
+    .catch(e=>{ toast('Error: '+e.message); $('#duodetect').disabled=false; $('#duotag').textContent=''; });
+}
+
+async function duoWatch(jobId){
+  let off=0, status='running';
+  while(status==='running'){
+    await sleep(1500);
+    let j; try{ j=await api(`/api/job/${jobId}?offset=${off}`); }catch(e){ continue; }
+    off=j.next_offset; status=j.status;
+    const stageLine=[...j.lines].reverse().find(l=>/stage:|speaker|turns/i.test(l));
+    if(stageLine) $('#duohint').textContent=stageLine.slice(0,90);
+  }
+  $('#duodetect').disabled=false;
+  if(status==='done'){
+    toast('Speakers detected — review the turns');
+    const u=uploads.find(x=>x.name===cur);
+    if(u) await duoLoad(u);
+  } else { $('#duotag').textContent='❌ failed'; toast('Speaker detection failed — see Jobs'); }
+}
+
+function duoRender(){
+  if(!duoCfg) return;
+  $('#duoedit').style.display='';
+  $('#duoNameA').value = duoCfg.speakers?.A?.label || 'Speaker A';
+  $('#duoNameB').value = duoCfg.speakers?.B?.label || 'Speaker B';
+  const box=$('#duoturns'); box.innerHTML='';
+  duoCfg.segments.forEach((s,i)=>{
+    const win=s.end-s.start, lo=Math.round(win*2.3), hi=Math.round(win*3.0);
+    const row=document.createElement('div'); row.className='turn';
+    row.innerHTML=`<button class="chip ${s.speaker}" title="click to flip speaker">${s.speaker}</button>`+
+      `<span class="tm" title="jump player here">${fmtT(s.start)}–${fmtT(s.end)}</span>`+
+      `<input class="txt" value="">`+
+      `<span class="wc"></span>`;
+    const chip=row.querySelector('.chip'), txt=row.querySelector('.txt'), wc=row.querySelector('.wc');
+    txt.value=s.text;
+    const upd=()=>{ const n=txt.value.trim().split(/\s+/).filter(Boolean).length;
+      wc.textContent=`${n}/${lo}-${hi}w`; wc.className='wc'+((n<lo-2||n>hi+2)?' bad':''); };
+    upd();
+    chip.onclick=()=>{ s.speaker = s.speaker==='A'?'B':'A'; chip.textContent=s.speaker; chip.className='chip '+s.speaker; };
+    txt.oninput=()=>{ s.text=txt.value; upd(); };
+    row.querySelector('.tm').onclick=()=>{ const v=document.querySelector('#stage video'); if(v){ v.currentTime=s.start; v.play(); } };
+    box.appendChild(row);
+  });
+}
+function fmtT(s){ return Math.floor(s/60)+':'+(s%60).toFixed(1).padStart(4,'0'); }
+
+async function duoSave(){
+  if(!cur||!duoCfg) return;
+  duoCfg.speakers.A.label=$('#duoNameA').value.trim()||'Speaker A';
+  duoCfg.speakers.B.label=$('#duoNameB').value.trim()||'Speaker B';
+  try{ await post('/api/duo/config',{file:cur,config:duoCfg}); toast('Turns saved'); }
+  catch(e){ toast('Error: '+e.message); }
+}
+
+async function duoRun(){
+  if(!cur||!duoCfg||busy) return;
+  await duoSave();
+  const tier=$('#duotier').value;
+  let est;
+  try{
+    const r=await fetch('/api/duo/run',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({file:cur,tier})});
+    const d=await r.json();
+    if(r.status===402){ est=d.estimate; }
+    else if(!r.ok){ throw new Error(JSON.stringify(d).slice(0,150)); }
+    else { duoJobStarted(d); return; }
+  }catch(e){ toast('Error: '+e.message); return; }
+  $('#duocost').textContent=`Estimated: $${est.this_run.toFixed(2)} — ${est.summary}`;
+  const ok=confirm('⚠ This interview dub will spend money on fal.ai:\n\n'+est.summary+
+    `\n\n≈ $${est.this_run.toFixed(2)} total\n\nApprove and start? (Cancel = nothing is charged)`);
+  if(!ok){ toast('Cancelled — nothing was charged'); return; }
+  try{
+    const d=await post('/api/duo/run',{file:cur,tier,confirm_cost:true});
+    duoJobStarted(d);
+  }catch(e){ toast('Error: '+e.message); }
+}
+
+function duoJobStarted(d){
+  toast('🎙 Interview dub started — both voices cloning now');
+  busy=true;
+  $('#prog').classList.add('on'); $('#log').classList.add('on'); $('#log').innerHTML='';
+  $('#result').classList.remove('on');
+  $('#pbar').style.width='3%'; $('#plbl').textContent='Interview dub starting…';
+  watch(d.job_id,'dub');
+}
+
+function showResult(path){
+  dubOut=path;
+  $('#result').classList.add('on');
+  $('#rvid').src='/media/'+path;
+}
+function download(){ if(dubOut) window.open('/media/'+dubOut,'_blank'); }
+
+// upload
+function upload(files){
+  for(const f of files){
+    const fd=new FormData(); fd.append('file',f);
+    const x=new XMLHttpRequest(); x.open('POST','/api/upload');
+    x.upload.onprogress=e=>{ if(e.lengthComputable)$('#dropmsg').textContent=`Uploading ${f.name} — ${Math.round(e.loaded/e.total*100)}%`; };
+    x.onload=async()=>{ $('#dropmsg').textContent='⬆ Drop a video here or click to upload';
+      if(x.status===200){ toast('Uploaded '+f.name+' — transcribing…'); await load(); pick(f.name);
+        post('/api/run',{action:'transcribe',file:f.name}).catch(()=>{}); }
+      else toast('Upload failed: '+x.responseText.slice(0,120)); };
+    x.onerror=()=>toast('Upload failed'); x.send(fd);
+  }
+}
+$('#file').addEventListener('change',e=>{ upload(e.target.files); e.target.value=''; });
+const dz=$('#drop');
+dz.addEventListener('dragover',e=>{e.preventDefault();dz.classList.add('drag');});
+dz.addEventListener('dragleave',()=>dz.classList.remove('drag'));
+dz.addEventListener('drop',e=>{e.preventDefault();dz.classList.remove('drag');upload(e.dataTransfer.files);});
+
+// keep stage state fresh (transcribe finishing, etc.)
+setInterval(()=>{ if(!busy) load().catch(()=>{}); }, 4000);
+
+['llip','tts','tier'].forEach(id=>{ const e=$('#'+id); if(e) e.addEventListener('change',updateCostNote); });
+
+(async()=>{
+  setEngine(localStorage.getItem('dubEngine')||'local');
+  await load();
+  const want=new URLSearchParams(location.search).get('v');
+  if(want && uploads.some(u=>u.name===want)) pick(want);
+})();
+</script>
+</body>
+</html>

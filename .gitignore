@@ -1,0 +1,82 @@
+# Virtual environments
+**/.venv/
+**/venv/
+**/env/
+**/__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# Model weights & large binary assets (download separately)
+tools/Wav2Lip/checkpoints/
+tools/Wav2Lip/gfpgan_weights/
+tools/ProPainter/
+CodeFormer/
+ComfyUI_windows_portable/
+
+# User data & runtime outputs (not source code)
+autoVSL/uploads/
+autoVSL/output/
+autoVSL/outputs/
+video-studio/jobs/jobs.json
+video-studio/jobs/logs/
+
+# Subtitle Studio runtime data (videos, results, caches — deliverables live on Desktop)
+subtitle-studio/files/
+subtitle-studio/output/
+subtitle-studio/.trash/
+subtitle-studio/tags.json
+subtitle-studio/server.log
+subtitle-studio/server.err.log
+
+# video-subtitle-remover: upstream clone w/ bundled models (1.7 GB) — re-clone + apply
+# subtitle-studio/vsr-patches/vsr-fixes.patch (see vsr-patches/README.md)
+tools/vsr/
+
+# Local media archives / large blobs
+liitt-local-tool.zip
+liitt-local-tool.tar.gz
+/output/
+subtitle-studio/output/
+subtitle-studio/files/
+dubbing-studio/outputs/
+**/.trash/
+**/__pycache__/
+
+# autoVSL is its own git repository (committed separately)
+/autoVSL/
+
+# Course videos (large, licensed content — never commit)
+/courses/
+
+# Model weights anywhere under tools/
+tools/**/*.pth
+tools/**/*.onnx
+
+# Root-level scratch & media
+/liitt-local-tool.tar.gz
+/liitt-local-tool.zip
+/*.mp3
+/bm.json
+/fin.json
+/j.json
+/mj.json
+/st.json
+
+# Development & runtime
+.env
+.DS_Store
+*.log
+*.tmp
+temp/
+.claude/launch.json
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+Thumbs.db
+.DS_Store

@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>New Project — Video Studio</title>
+<link rel="stylesheet" href="/static/vs.css">
+<script src="/static/vs-nav.js" defer></script>
+<style>
+  * { box-sizing:border-box; margin:0; }
+  body { background:radial-gradient(1100px 500px at 75% -10%, #1a2036 0%, var(--bg) 55%);
+         color:var(--text); min-height:100vh; }
+  a { color:var(--accent2); text-decoration:none; }
+  #done { display:none; }
+</style>
+</head>
+<body>
+<div class="vs-page" style="max-width:760px">
+  <h2>New Project</h2>
+  <p class="lead">Step 1 of the pipeline: upload a video, then analyze it (local whisper transcription).</p>
+
+  <div class="vs-panel">
+    <div class="vs-drop" id="drop">
+      <div style="font-size:34px; margin-bottom:10px">📥</div>
+      <b>Drop a video here</b> or click to choose<br>
+      <span style="font-size:12px">mp4 · mov · mkv · webm · m4v · avi · mp3 · m4a · wav</span>
+      <input type="file" id="file" accept=".mp4,.mov,.mkv,.webm,.m4v,.avi,.mp3,.m4a,.wav" hidden>
+    </div>
+    <div id="status" style="margin-top:12px; color:var(--dim)"></div>
+  </div>
+
+  <div class="vs-panel" id="done">
+    <h3>✅ Uploaded</h3>
+    <div id="upname" style="font-weight:700; margin-bottom:14px"></div>
+    <button class="vs-btn" id="transcribe">🎙 Analyze — transcribe now (free, local GPU)</button>
+    <a class="vs-btn ghost" href="/library" style="margin-left:8px; display:inline-block; text-decoration:none">Go to Library</a>
+    <div id="jobnote" style="margin-top:12px; color:var(--dim)"></div>
+  </div>
+</div>
+<script>
+const drop = document.getElementById("drop"), input = document.getElementById("file");
+let uploaded = null;
+
+drop.addEventListener("click", () => input.click());
+drop.addEventListener("dragover", e => { e.preventDefault(); drop.classList.add("over"); });
+drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+drop.addEventListener("drop", e => {
+  e.preventDefault(); drop.classList.remove("over");
+  if (e.dataTransfer.files[0]) upload(e.dataTransfer.files[0]);
+});
+input.addEventListener("change", () => { if (input.files[0]) upload(input.files[0]); });
+
+async function upload(f) {
+  document.getElementById("status").textContent = `Uploading ${f.name} (${(f.size/1048576).toFixed(1)} MB)…`;
+  const fd = new FormData();
+  fd.append("file", f);
+  const r = await fetch("/api/upload", {method:"POST", body:fd});
+  if (!r.ok) { document.getElementById("status").textContent = "❌ " + await r.text(); return; }
+  const d = await r.json();
+  uploaded = d.name;
+  document.getElementById("status").textContent = "";
+  document.getElementById("done").style.display = "block";
+  document.getElementById("upname").textContent =
+    d.name + (d.renamed ? " (renamed for safety)" : "");
+}
+
+document.getElementById("transcribe").addEventListener("click", async e => {
+  e.target.disabled = true;
+  const r = await fetch("/api/run", {method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({action:"transcribe", file: uploaded})});
+  if (!r.ok) { document.getElementById("jobnote").textContent = "❌ " + await r.text(); e.target.disabled = false; return; }
+  const d = await r.json();
+  document.getElementById("jobnote").innerHTML =
+    `Transcription started (job <b>${d.job_id}</b>) — watch it in <a href="/tools">Power Tools</a>.
+     The transcript lands in the Transcript &amp; Script tab.`;
+});
+</script>
+</body>
+</html>

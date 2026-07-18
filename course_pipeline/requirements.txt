@@ -1,0 +1,7 @@
+faster-whisper>=1.0
+imageio-ffmpeg>=0.4.9
+tqdm>=4.66
+
+# Optional: NVIDIA GPU acceleration (Windows/Linux with CUDA-capable GPU).
+# pip install nvidia-cublas-cu12 nvidia-cudnn-cu12
+# transcribe.py picks the DLLs up automatically and falls back to CPU if absent.

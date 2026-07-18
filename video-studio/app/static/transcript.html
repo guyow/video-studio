@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Transcript &amp; Script — Video Studio</title>
+<link rel="stylesheet" href="/static/vs.css">
+<script src="/static/vs-nav.js" defer></script>
+<style>
+  * { box-sizing:border-box; margin:0; }
+  body { background:radial-gradient(1100px 500px at 75% -10%, #1a2036 0%, var(--bg) 55%);
+         color:var(--text); min-height:100vh; }
+  a { color:var(--accent2); text-decoration:none; }
+  .cols { display:grid; grid-template-columns:290px 1fr; gap:18px; align-items:start; }
+  @media (max-width:900px) { .cols { grid-template-columns:1fr; } }
+  .vid { display:flex; align-items:center; gap:10px; padding:9px 10px; border-radius:10px;
+         cursor:pointer; border:1px solid transparent; }
+  .vid:hover { background:var(--panel2); }
+  .vid.sel { background:var(--panel2); border-color:var(--accent); }
+  .vid img { width:52px; aspect-ratio:16/10; object-fit:cover; border-radius:6px; background:#000; flex:none; }
+  .vid .nm { font-size:12.5px; font-weight:700; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .vid .st { font-size:11px; color:var(--dim); }
+  .vid .st.ok { color:var(--ok); }
+  textarea { width:100%; min-height:260px; background:#0a0d13; border:1px solid var(--line);
+             border-radius:10px; color:var(--text); padding:14px; font:14px/1.7 'Segoe UI',system-ui,sans-serif;
+             resize:vertical; }
+  textarea:focus { outline:none; border-color:var(--accent); }
+  #instruction { min-height:0; height:44px; padding:10px 14px; font-size:13px; }
+  .rowflex { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-top:12px; }
+  .hint { color:var(--dim); font-size:12px; }
+  .pill { background:var(--panel2); border:1px solid var(--line); border-radius:10px;
+          padding:3px 10px; font-size:11.5px; color:var(--dim); }
+</style>
+</head>
+<body>
+<div class="vs-page" style="max-width:1240px">
+  <h2>Transcript &amp; Script</h2>
+  <p class="lead">Verify what was said, then edit (or AI-rewrite) the script that will be dubbed onto the video.</p>
+
+  <div class="cols">
+    <div class="vs-panel" style="margin:0">
+      <h3>🎞 Videos</h3>
+      <div id="vids"></div>
+      <div id="novids" class="hint" style="display:none; padding:8px 4px">
+        Nothing uploaded yet — start in <a href="/new">New Project</a>.</div>
+    </div>
+
+    <div>
+      <div class="vs-panel" id="detail" style="display:none; margin-bottom:18px">
+        <h3 id="dtitle">—</h3>
+        <div id="notx" style="display:none">
+          <p class="hint" style="margin-bottom:12px">No transcript yet. Analyze the audio first (free, local whisper).</p>
+          <button class="vs-btn" id="btn-transcribe">🎙 Transcribe now</button>
+          <div id="txjob" class="hint" style="margin-top:10px"></div>
+        </div>
+        <div id="hastx" style="display:none">
+          <div class="rowflex" style="margin:0 0 8px">
+            <span class="pill" id="srcpill"></span>
+            <span class="pill" id="wordpill"></span>
+            <a class="pill" id="mdlink" target="_blank">open raw transcript ↗</a>
+          </div>
+          <textarea id="script" spellcheck="true"></textarea>
+          <div class="rowflex">
+            <button class="vs-btn" id="btn-save">💾 Save script</button>
+            <span class="hint" id="savenote"></span>
+          </div>
+          <div class="rowflex" style="margin-top:16px">
+            <input type="text" id="instruction" style="flex:1; min-width:240px"
+                   class="" placeholder="AI rewrite instruction… e.g. “translate to Spanish”, “punch up the hook”">
+            <button class="vs-btn ghost" id="btn-ai">✨ AI rewrite (free, local Claude)</button>
+          </div>
+          <div class="hint" id="ainote" style="margin-top:6px"></div>
+        </div>
+      </div>
+      <div class="vs-soon" id="pick" style="padding:50px 20px">
+        <div class="big">📝</div><b>Pick a video on the left.</b>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+let VIDEOS = [], SEL = null, txPoll = null;
+
+const $ = id => document.getElementById(id);
+
+async function loadList() {
+  const d = await (await fetch("/api/creator/library")).json();
+  VIDEOS = d.videos || [];
+  const box = $("vids");
+  box.innerHTML = "";
+  $("novids").style.display = VIDEOS.length ? "none" : "block";
+  for (const v of VIDEOS) {
+    const el = document.createElement("div");
+    el.className = "vid" + (SEL && SEL.stem === v.stem ? " sel" : "");
+    el.innerHTML =
+      `<img loading="lazy" src="/api/thumb/${encodeURIComponent(v.name)}" onerror="this.style.visibility='hidden'">
+       <div style="min-width:0">
+         <div class="nm">${v.title || v.stem}</div>
+         <div class="st ${v.transcript ? "ok" : ""}">${v.transcript ? "✓ transcribed" + (v.orig_words ? " · " + v.orig_words + " words" : "") : "no transcript"}</div>
+       </div>`;
+    el.onclick = () => select(v, el);
+    box.appendChild(el);
+  }
+}
+
+async function select(v) {
+  SEL = v;
+  clearInterval(txPoll);
+  document.querySelectorAll(".vid").forEach(e => e.classList.remove("sel"));
+  [...document.querySelectorAll(".vid")].find(e => e.querySelector(".nm").textContent === (v.title || v.stem))?.classList.add("sel");
+  $("pick").style.display = "none";
+  $("detail").style.display = "block";
+  $("dtitle").textContent = "🎬 " + (v.title || v.stem);
+  $("savenote").textContent = ""; $("ainote").textContent = "";
+  const d = await (await fetch(`/api/script/${encodeURIComponent(v.stem)}`)).json();
+  const has = d.source !== "empty";
+  $("notx").style.display = has ? "none" : "block";
+  $("hastx").style.display = has ? "block" : "none";
+  if (has) {
+    $("script").value = d.text;
+    $("srcpill").textContent = d.source === "edited" ? "✏️ edited script" : "🎙 raw transcript";
+    $("wordpill").textContent = d.text.split(/\s+/).filter(Boolean).length + " words";
+    $("mdlink").href = `/api/file?path=uploads/transcripts/${encodeURIComponent(v.stem)}.md`;
+  }
+}
+
+$("btn-transcribe").onclick = async () => {
+  $("btn-transcribe").disabled = true;
+  const r = await fetch("/api/run", {method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({action:"transcribe", file: SEL.name})});
+  if (!r.ok) { $("txjob").textContent = "❌ " + await r.text(); $("btn-transcribe").disabled = false; return; }
+  const d = await r.json();
+  $("txjob").textContent = "Transcribing… (job " + d.job_id + ")";
+  txPoll = setInterval(async () => {
+    const j = await (await fetch(`/api/job/${d.job_id}`)).json();
+    if (j.status === "running") return;
+    clearInterval(txPoll);
+    $("btn-transcribe").disabled = false;
+    if (j.status === "done") { $("txjob").textContent = ""; await loadList(); select(SEL); }
+    else $("txjob").textContent = "❌ job " + j.status + " — see Power Tools for the log";
+  }, 3000);
+};
+
+$("btn-save").onclick = async () => {
+  const text = $("script").value.trim();
+  if (!text) return;
+  const r = await fetch(`/api/script/${encodeURIComponent(SEL.stem)}`, {method:"POST",
+    headers:{"Content-Type":"application/json"}, body: JSON.stringify({text})});
+  $("savenote").textContent = r.ok ? "✓ saved — the Dubbing tab will use this version" : "❌ " + await r.text();
+  if (r.ok) { $("srcpill").textContent = "✏️ edited script";
+              $("wordpill").textContent = text.split(/\s+/).filter(Boolean).length + " words"; }
+};
+
+$("btn-ai").onclick = async () => {
+  const text = $("script").value.trim();
+  if (!text) return;
+  $("btn-ai").disabled = true;
+  $("ainote").textContent = "✨ rewriting with local Claude (free)… this takes ~15-60s";
+  try {
+    const r = await fetch("/api/copywrite", {method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({text, instruction: $("instruction").value.trim()})});
+    if (!r.ok) { $("ainote").textContent = "❌ " + await r.text(); return; }
+    const d = await r.json();
+    $("script").value = d.text;
+    $("wordpill").textContent = d.text.split(/\s+/).filter(Boolean).length + " words";
+    $("ainote").textContent = "✓ rewritten — review it, then Save. (Undo: Ctrl+Z in the editor)";
+  } finally { $("btn-ai").disabled = false; }
+};
+
+loadList();
+</script>
+</body>
+</html>

@@ -1,0 +1,548 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DubSync Repair — Video Studio</title>
+<link rel="stylesheet" href="/static/vs.css">
+<script src="/static/vs-nav.js" defer></script>
+<style>
+  * { box-sizing:border-box; margin:0; }
+  body { background:radial-gradient(1100px 500px at 75% -10%, #1a2036 0%, var(--bg) 55%);
+         color:var(--text); min-height:100vh; }
+  a { color:var(--accent2); text-decoration:none; }
+  .cols { display:grid; grid-template-columns:300px 1fr; gap:18px; align-items:start; }
+  @media (max-width:900px) { .cols { grid-template-columns:1fr; } }
+  .dub { padding:10px 12px; border-radius:10px; cursor:pointer; border:1px solid transparent; }
+  .dub:hover { background:var(--panel2); }
+  .dub.sel { background:var(--panel2); border-color:var(--accent); }
+  .dub .nm { font-size:12.5px; font-weight:700; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .dub .st { font-size:11px; color:var(--dim); margin-top:2px; }
+  video { width:100%; max-width:480px; border-radius:12px; border:1px solid var(--line); background:#000; }
+  .fix { display:flex; gap:10px; align-items:flex-start; padding:12px; border:1px solid var(--line);
+         border-radius:12px; margin-bottom:10px; cursor:pointer; }
+  .fix:hover, .fix.sel { border-color:var(--accent); background:var(--panel2); }
+  .fix input[type=radio] { margin-top:3px; accent-color:var(--accent); }
+  .fix b { font-size:13.5px; }
+  .fix .d { color:var(--dim); font-size:12px; margin-top:2px; }
+  .fix .free { color:var(--ok); font-size:11px; font-weight:700; }
+  select { background:var(--panel2); border:1px solid var(--line); color:var(--text);
+           border-radius:8px; padding:6px 10px; font-size:12.5px; }
+  .take { display:flex; align-items:center; gap:10px; padding:8px 10px;
+          border-bottom:1px solid var(--line); font-size:12.5px; }
+  .take .rowbtn { background:var(--panel2); border:1px solid var(--line); color:var(--text);
+                  border-radius:8px; padding:4px 12px; font-size:12px; font-weight:700; cursor:pointer; }
+  .take .rowbtn:hover { border-color:var(--accent); }
+  .hint { color:var(--dim); font-size:12px; }
+  .vs-log { margin-top:10px; display:none; }
+  #vidwrap { position:relative; display:inline-block; max-width:100%; }
+  #boxoverlay { position:absolute; inset:0; cursor:crosshair; display:none; z-index:5; }
+  #lipbox { position:absolute; border:2px dashed var(--accent); border-radius:50%;
+            pointer-events:none; display:none; z-index:4;
+            box-shadow:0 0 0 2000px rgba(0,0,0,.25); }
+  #previewstrip { width:100%; border-radius:10px; border:1px solid var(--line);
+                  margin-top:10px; display:none; }
+  .chk { display:inline-flex; gap:6px; align-items:center; font-size:12px; color:var(--dim);
+         margin-right:14px; cursor:pointer; }
+  .chk input { accent-color:var(--accent); }
+</style>
+</head>
+<body>
+<div class="vs-page" style="max-width:1240px">
+  <h2>DubSync Repair</h2>
+  <p class="lead">Fix a finished dub without paying for a re-dub — every repair is local, free,
+     and lands as a new take (the current final is never overwritten).</p>
+
+  <div class="vs-panel" id="dropzone-panel">
+    <h3>🩹 Repair any video — drag &amp; drop</h3>
+    <div style="display:flex; gap:12px; flex-wrap:wrap">
+      <div class="vs-drop" id="drop-dubbed" style="flex:1; min-width:220px; padding:22px 14px">
+        <b id="dd-label">Drop the DAMAGED video</b><br>
+        <span style="font-size:11.5px">I'll find its original in your library automatically</span>
+        <input type="file" id="file-dubbed" accept=".mp4,.mov,.mkv,.webm,.m4v,.avi" hidden>
+      </div>
+      <div class="vs-drop" id="drop-original" style="flex:1; min-width:220px; padding:22px 14px; display:none">
+        <b id="do-label">Drop the ORIGINAL video</b><br>
+        <span style="font-size:11.5px">only needed because I couldn't find it myself</span>
+        <input type="file" id="file-original" accept=".mp4,.mov,.mkv,.webm,.m4v,.avi" hidden>
+      </div>
+    </div>
+    <div class="hint" id="dropnote" style="margin-top:8px"></div>
+  </div>
+
+  <div class="cols">
+    <div class="vs-panel" style="margin:0">
+      <h3>🎛 Dubs</h3>
+      <div id="dubs"></div>
+      <div id="nodubs" class="hint" style="display:none; padding:8px 4px">
+        No dubs yet — make one on the <a href="/dubbing">Dubbing</a> page first.</div>
+    </div>
+
+    <div>
+      <div class="vs-panel" id="detail" style="display:none">
+        <h3 id="dtitle">—</h3>
+        <div style="display:flex; gap:18px; flex-wrap:wrap">
+          <div style="flex:1; min-width:280px">
+            <div class="hint" style="margin-bottom:6px">Current final</div>
+            <div id="vidwrap">
+              <video id="preview" controls preload="metadata"></video>
+              <div id="boxoverlay"></div>
+              <div id="lipbox"></div>
+            </div>
+          </div>
+          <div style="flex:1; min-width:300px">
+            <div class="hint" style="margin-bottom:6px">Pick a repair</div>
+            <label class="fix"><input type="radio" name="fix" value="swap" checked>
+              <span><b>⏱ Swap the exact moments you mark</b> <span class="free">FREE · you're in control</span>
+              <div class="d">You know exactly WHEN the bug happens. Play the video, pause at the
+                bad part, press <b>Mark start</b> — then <b>Mark end</b> where it's over. Those
+                frames are exchanged 1:1 with the original video (soft-blended at the edges);
+                the voice and everything else stays the dub. Mark as many moments as you want.
+                <div style="margin-top:8px">
+                  <button class="rowbtn" id="btn-mark-start" type="button">⏺ Mark start</button>
+                  <button class="rowbtn" id="btn-mark-end" type="button" disabled>⏹ Mark end</button>
+                  <span class="hint" id="marknote"></span>
+                </div>
+                <div id="ranges" style="margin-top:8px"></div>
+              </div></span></label>
+            <label class="fix"><input type="radio" name="fix" value="object">
+              <span><b>🎯 Fix a damaged object</b> <span class="free">FREE · keeps the dub 100%</span>
+              <div class="d">Something specific got warped by the AI (a cup, glasses, a hand)?
+                Describe it below and Analyze — the tool tracks that object, restores <b>only its
+                damaged pixels</b> from the original, and <b>never touches the lip-sync</b>.
+                When the object passes over the mouth, the clean original naturally covers it
+                for that moment — just like the real footage.
+              </div></span></label>
+            <label class="fix"><input type="radio" name="fix" value="visual">
+              <span><b>🖼 Fix visuals from original</b> <span class="free">FREE · no AI</span>
+              <div class="d">The AI mangled something near the lips (a cup, the background, the face)?
+                This restores <b>every pixel from the original video</b>, frame-matched, keeping only
+                the lip region from the dub. Audio untouched.
+                <div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap">
+                  <input type="text" id="complaint" placeholder="Describe what's wrong… e.g. “the cup near his lips is broken”"
+                         style="flex:1; min-width:220px; background:#0a0d13; border:1px solid var(--line);
+                                border-radius:10px; color:var(--text); padding:9px 12px; font-size:13px">
+                  <button class="rowbtn" id="btn-advise" type="button" style="border-color:var(--accent)">🪄 Analyze &amp; set up</button>
+                </div>
+                <div id="advise-note" style="display:none; margin-top:8px; padding:10px 12px;
+                     background:var(--panel2); border:1px solid var(--accent); border-radius:10px;
+                     font-size:12.5px; color:var(--text)"></div>
+                <div style="margin-top:8px">
+                  <span class="hint">or by hand:</span>
+                  <button class="rowbtn" id="btn-drawbox" type="button">▭ Draw the lip region</button>
+                  <button class="rowbtn" id="btn-vpreview" type="button" disabled>👁 Preview at current moment</button>
+                  <span class="hint" id="boxinfo"></span>
+                  <span class="hint" id="vpnote"></span>
+                </div>
+                <div style="margin-top:8px">
+                  <label class="chk"><input type="checkbox" id="opt-colorfix" checked> hide seams (color fix)</label>
+                  <label class="chk"><input type="checkbox" id="opt-track"> speaker moves around</label>
+                  <label class="chk"><input type="checkbox" id="opt-nvenc"> fast encoder (GPU chip)</label>
+                </div>
+              </div></span></label>
+            <label class="fix"><input type="radio" name="fix" value="relipsync">
+              <span><b>🫦 Re-run lip-sync</b> <span class="free">FREE · GPU</span>
+              <div class="d">Redo the mouth movement (Wav2Lip) on the source video with the existing
+                voice — for a sync that came out bad.
+                Restorer: <select id="restorer">
+                  <option value="gfpgan">GFPGAN (sharp, default)</option>
+                  <option value="codeformer">CodeFormer (identity-faithful)</option>
+                  <option value="none">none (fast preview)</option>
+                </select></div></span></label>
+            <label class="fix"><input type="radio" name="fix" value="refit">
+              <span><b>⏱ Re-fit voice length</b> <span class="free">FREE · instant</span>
+              <div class="d">Time-stretch the voice (pitch preserved) to end exactly with the video —
+                fixes drift and overrun. No lip change.</div></span></label>
+            <label class="fix"><input type="radio" name="fix" value="remux">
+              <span><b>🔄 Re-mux voice</b> <span class="free">FREE · instant</span>
+              <div class="d">Put the voice back onto the untouched source video — recovers from a
+                corrupted final.</div></span></label>
+            <label class="fix"><input type="radio" name="fix" value="renorm">
+              <span><b>🔊 Re-normalize loudness</b> <span class="free">FREE · instant</span>
+              <div class="d">Fix a too-quiet / too-hot final to the −16 LUFS social standard.</div></span></label>
+            <button class="vs-btn" id="btn-run" style="margin-top:4px">🔧 Run repair</button>
+            <div class="hint" id="jobnote" style="margin-top:8px"></div>
+            <div class="vs-log" id="joblog"></div>
+          </div>
+        </div>
+        <img id="previewstrip" alt="repair preview">
+        <div class="hint" id="stripnote" style="display:none; margin-top:4px">
+          Left to right: original · dubbed (with artifacts) · repaired · diff heat-map.
+          Scrub the video and preview at 2–3 different moments before running.</div>
+
+        <div id="takes-wrap" style="margin-top:20px; display:none">
+          <h3>🗂 Takes</h3>
+          <div id="takes"></div>
+          <div class="hint" style="margin-top:6px">Promote makes a take the new final
+            (the old final is archived, deliverable refreshed).</div>
+        </div>
+      </div>
+      <div class="vs-soon" id="pick" style="padding:50px 20px">
+        <div class="big">🔧</div><b>Pick a dub on the left.</b>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+let DUBS = [], SEL = null, poll = null;
+const $ = id => document.getElementById(id);
+const when = ts => new Date(ts * 1000).toLocaleString([], {month:"short", day:"numeric", hour:"2-digit", minute:"2-digit"});
+
+async function loadDubs(keepSel) {
+  const d = await (await fetch("/api/dubs")).json();
+  DUBS = d.dubs || [];
+  const box = $("dubs");
+  box.innerHTML = "";
+  $("nodubs").style.display = DUBS.length ? "none" : "block";
+  for (const dub of DUBS) {
+    const el = document.createElement("div");
+    el.className = "dub" + (SEL && SEL.stem === dub.stem ? " sel" : "");
+    const caps = [];
+    if (dub.has_source && dub.has_vo) caps.push("full repair");
+    else if (dub.has_vo) caps.push("audio fixes");
+    else caps.push("renorm only");
+    el.innerHTML = `<div class="nm">${dub.stem}</div>
+      <div class="st">${when(dub.final_mtime)} · ${(dub.final_size/1048576).toFixed(1)} MB · ${caps[0]}
+      ${dub.takes.length ? " · " + dub.takes.length + " take(s)" : ""}</div>`;
+    el.onclick = () => select(dub, el);
+    box.appendChild(el);
+  }
+  if (keepSel && SEL) {
+    const cur = DUBS.find(x => x.stem === SEL.stem);
+    if (cur) renderDetail(cur);
+  }
+}
+
+function select(dub, el) {
+  SEL = dub;
+  clearInterval(poll);
+  document.querySelectorAll(".dub").forEach(e => e.classList.remove("sel"));
+  el.classList.add("sel");
+  $("pick").style.display = "none";
+  $("detail").style.display = "block";
+  $("jobnote").textContent = ""; $("joblog").style.display = "none";
+  $("advise-note").style.display = "none";
+  $("complaint").value = "";
+  renderDetail(dub);
+}
+
+function renderDetail(dub) {
+  SEL = dub;
+  OBJSAMPLES = null;
+  SWAPRANGES = []; PENDING_START = null;
+  if ($("ranges")) { renderRanges(); $("marknote").textContent = ""; $("btn-mark-end").disabled = true; }
+  $("dtitle").textContent = "🎬 " + dub.stem;
+  $("preview").src = `/media/output/script-swap/${encodeURIComponent(dub.stem)}/final.mp4?v=${dub.final_mtime}`;
+  const objr = document.querySelector('input[value="object"]');
+  const visual = document.querySelector('input[value="visual"]');
+  const relips = document.querySelector('input[value="relipsync"]');
+  const remux = document.querySelector('input[value="remux"]');
+  const refit = document.querySelector('input[value="refit"]');
+  objr.disabled = visual.disabled = !dub.has_source;
+  relips.disabled = remux.disabled = refit.disabled = !(dub.has_source && dub.has_vo);
+  if (objr.disabled) document.querySelector('input[value="renorm"]').checked = true;
+  loadBox(dub.stem);
+  $("previewstrip").style.display = "none";
+  $("stripnote").style.display = "none";
+  $("vpnote").textContent = "";
+  $("takes-wrap").style.display = dub.takes.length ? "block" : "none";
+  const tk = $("takes");
+  tk.innerHTML = "";
+  for (const t of dub.takes) {
+    const row = document.createElement("div");
+    row.className = "take";
+    row.innerHTML =
+      `<span style="flex:1">${t.repair ? "🔧 " : ""}${t.file}</span>
+       <span class="hint">${when(t.mtime)} · ${(t.size/1048576).toFixed(1)} MB</span>
+       <a class="rowbtn" target="_blank"
+          href="/media/output/script-swap/${encodeURIComponent(dub.stem)}/${encodeURIComponent(t.file)}">▶ view</a>
+       <button class="rowbtn" onclick="promote('${dub.stem}','${t.file.replace(/'/g, "\\'")}')">⭐ Promote to final</button>`;
+    tk.appendChild(row);
+  }
+}
+
+async function promote(stem, file) {
+  if (!confirm(`Make “${file}” the new final for ${stem}? The current final is archived.`)) return;
+  const r = await fetch("/api/dub-promote", {method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({stem, file})});
+  if (!r.ok) { alert(await r.text()); return; }
+  await loadDubs(true);
+}
+
+// ---------- visual repair: lip-box drawing (letterbox-aware, coords in true video px)
+let LIPBOX = null, dragStart = null;
+const vid = $("preview"), overlay = $("boxoverlay"), boxEl = $("lipbox");
+
+function contentRect() {
+  const r = vid.getBoundingClientRect();
+  if (!vid.videoWidth) return null;
+  const va = vid.videoWidth / vid.videoHeight, ea = r.width / r.height;
+  let x, y, w, h;
+  if (va > ea) { w = r.width; h = r.width / va; x = 0; y = (r.height - h) / 2; }
+  else { h = r.height; w = r.height * va; y = 0; x = (r.width - w) / 2; }
+  return {x, y, w, h, scale: vid.videoWidth / w};
+}
+
+function showLipbox() {
+  const cr = contentRect();
+  if (!LIPBOX || !cr) { boxEl.style.display = "none"; return; }
+  boxEl.style.display = "block";
+  boxEl.style.left = (cr.x + LIPBOX.x / cr.scale) + "px";
+  boxEl.style.top = (cr.y + LIPBOX.y / cr.scale) + "px";
+  boxEl.style.width = (LIPBOX.w / cr.scale) + "px";
+  boxEl.style.height = (LIPBOX.h / cr.scale) + "px";
+  $("boxinfo").textContent = `✓ keeping ${LIPBOX.w}×${LIPBOX.h} at (${LIPBOX.x},${LIPBOX.y})`;
+  $("btn-vpreview").disabled = false;
+}
+
+function loadBox(stem) {
+  try { LIPBOX = JSON.parse(localStorage.getItem("lipbox-" + stem)); } catch { LIPBOX = null; }
+  $("boxinfo").textContent = "";
+  $("btn-vpreview").disabled = !LIPBOX;
+  if (vid.readyState >= 1) showLipbox(); else boxEl.style.display = "none";
+}
+vid.addEventListener("loadedmetadata", showLipbox);
+window.addEventListener("resize", showLipbox);
+
+$("btn-drawbox").onclick = () => {
+  vid.pause();
+  overlay.style.display = "block";
+  $("boxinfo").textContent = "drag a box over the lips + jaw…";
+};
+overlay.addEventListener("mousedown", e => {
+  const cr = contentRect(); if (!cr) return;
+  const r = overlay.getBoundingClientRect();
+  dragStart = {px: e.clientX - r.left, py: e.clientY - r.top};
+  e.preventDefault();
+});
+overlay.addEventListener("mousemove", e => {
+  if (!dragStart) return;
+  const r = overlay.getBoundingClientRect();
+  const px = e.clientX - r.left, py = e.clientY - r.top;
+  boxEl.style.display = "block";
+  boxEl.style.left = Math.min(px, dragStart.px) + "px";
+  boxEl.style.top = Math.min(py, dragStart.py) + "px";
+  boxEl.style.width = Math.abs(px - dragStart.px) + "px";
+  boxEl.style.height = Math.abs(py - dragStart.py) + "px";
+});
+overlay.addEventListener("mouseup", e => {
+  const cr = contentRect();
+  if (!dragStart || !cr) { dragStart = null; overlay.style.display = "none"; return; }
+  const r = overlay.getBoundingClientRect();
+  const px = e.clientX - r.left, py = e.clientY - r.top;
+  const x0 = Math.min(px, dragStart.px), y0 = Math.min(py, dragStart.py);
+  const w = Math.abs(px - dragStart.px), h = Math.abs(py - dragStart.py);
+  dragStart = null;
+  overlay.style.display = "none";
+  if (w < 8 || h < 8) { showLipbox(); return; }
+  LIPBOX = {
+    x: Math.max(0, Math.round((x0 - cr.x) * cr.scale)),
+    y: Math.max(0, Math.round((y0 - cr.y) * cr.scale)),
+    w: Math.round(w * cr.scale), h: Math.round(h * cr.scale),
+  };
+  localStorage.setItem("lipbox-" + SEL.stem, JSON.stringify(LIPBOX));
+  showLipbox();
+});
+
+// ---------- mark-and-swap: the user marks exact time ranges to exchange with the original
+let SWAPRANGES = [], PENDING_START = null;
+const fmtT = s => `${Math.floor(s / 60)}:${(s % 60).toFixed(2).padStart(5, "0")}`;
+
+function renderRanges() {
+  const box = $("ranges");
+  box.innerHTML = "";
+  SWAPRANGES.forEach((r, i) => {
+    const el = document.createElement("span");
+    el.className = "vs-badge";
+    el.style.cssText = "cursor:pointer; margin:2px 4px 2px 0";
+    el.title = "click to remove";
+    el.textContent = `✕ ${fmtT(r.start)} → ${fmtT(r.end)}`;
+    el.onclick = () => { SWAPRANGES.splice(i, 1); renderRanges(); };
+    box.appendChild(el);
+  });
+}
+
+$("btn-mark-start").onclick = () => {
+  vid.pause();
+  PENDING_START = vid.currentTime;
+  $("btn-mark-end").disabled = false;
+  $("marknote").textContent = `start ${fmtT(PENDING_START)} — now play/scrub to where it ends and press Mark end`;
+  document.querySelector('input[name="fix"][value="swap"]').checked = true;
+};
+$("btn-mark-end").onclick = () => {
+  vid.pause();
+  const end = vid.currentTime;
+  if (PENDING_START === null || end <= PENDING_START) {
+    $("marknote").textContent = "❌ end must be after start — scrub forward first";
+    return;
+  }
+  SWAPRANGES.push({start: +PENDING_START.toFixed(3), end: +end.toFixed(3)});
+  PENDING_START = null;
+  $("btn-mark-end").disabled = true;
+  $("marknote").textContent = "✓ marked — add more, or press Run repair";
+  renderRanges();
+};
+
+// ---------- describe-the-problem chat: Claude looks at the video + configures the fix
+let OBJSAMPLES = null;
+$("btn-advise").onclick = async () => {
+  const note = $("advise-note");
+  $("btn-advise").disabled = true;
+  note.style.display = "block";
+  note.textContent = "🪄 looking at the video, locating things, reading your description… (~1-3 min, free, local)";
+  try {
+    const r = await fetch("/api/dubsync/advise", {method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({stem: SEL.stem, text: $("complaint").value.trim()})});
+    if (!r.ok) { note.textContent = "❌ " + await r.text(); return; }
+    const d = await r.json();
+    const radio = document.querySelector(`input[name="fix"][value="${d.action}"]`);
+    if (radio && !radio.disabled) radio.checked = true;
+    if (d.action === "object" && d.samples) OBJSAMPLES = d.samples;
+    if (d.box) {
+      LIPBOX = d.box;
+      localStorage.setItem("lipbox-" + SEL.stem, JSON.stringify(LIPBOX));
+      showLipbox();
+    }
+    $("opt-track").checked = !!d.track;
+    note.textContent = "🤖 " + (d.explanation || "configured") +
+      (d.warning ? " ⚠ " + d.warning : "") +
+      " Check the preview below, then press Run repair.";
+    if (d.img) {
+      $("previewstrip").src = d.img + "?v=" + d.ts;
+      $("previewstrip").style.display = "block";
+      $("stripnote").style.display = "block";
+    }
+    if (d.align && d.align.zncc !== undefined) $("vpnote").textContent =
+      `✓ frame match confidence ${d.align.zncc ?? "?"} (${d.align.looks_like ?? "?"})`;
+  } finally { $("btn-advise").disabled = false; }
+};
+
+// ---------- drag & drop repair: ONE video — the backend finds the original itself
+const PAIR = {dubbed: null, original: null};
+function wireDrop(zoneId, inputId, key, labelId) {
+  const zone = $(zoneId), input = $(inputId);
+  zone.addEventListener("click", () => input.click());
+  zone.addEventListener("dragover", e => { e.preventDefault(); zone.classList.add("over"); });
+  zone.addEventListener("dragleave", () => zone.classList.remove("over"));
+  zone.addEventListener("drop", e => {
+    e.preventDefault(); zone.classList.remove("over");
+    if (e.dataTransfer.files[0]) setDropped(key, e.dataTransfer.files[0], labelId);
+  });
+  input.addEventListener("change", () => { if (input.files[0]) setDropped(key, input.files[0], labelId); });
+}
+function setDropped(key, file, labelId) {
+  PAIR[key] = file;
+  $(labelId).textContent = "✓ " + file.name;
+  doUpload();
+}
+function resetDrops() {
+  PAIR.dubbed = PAIR.original = null;
+  $("dd-label").textContent = "Drop the DAMAGED video";
+  $("do-label").textContent = "Drop the ORIGINAL video";
+  $("drop-original").style.display = "none";
+}
+async function doUpload() {
+  if (!PAIR.dubbed) return;
+  const needOriginal = $("drop-original").style.display !== "none";
+  if (needOriginal && !PAIR.original) return;   // waiting for the fallback file
+  $("dropnote").textContent = PAIR.original
+    ? "⏳ uploading both videos…"
+    : "⏳ uploading + searching your library for the original…";
+  const fd = new FormData();
+  fd.append("dubbed", PAIR.dubbed);
+  if (PAIR.original) fd.append("original", PAIR.original);
+  const r = await fetch("/api/dubsync/upload", {method:"POST", body: fd});
+  if (r.status === 422) {                        // no confident match — ask for the original
+    $("drop-original").style.display = "";
+    $("dropnote").textContent = "🔍 " + await r.text();
+    return;                                      // keep PAIR.dubbed; wait for the second file
+  }
+  if (!r.ok) { $("dropnote").textContent = "❌ " + await r.text(); resetDrops(); return; }
+  const d = await r.json();
+  $("dropnote").textContent = d.auto
+    ? `✓ found the original automatically: “${d.source}” (${Math.round((d.score || 0) * 100)}% match) — “${d.stem}” added below.`
+    : `✓ ready — “${d.stem}” added below. Describe what's wrong and press Analyze.`;
+  resetDrops();
+  await loadDubs();
+  const el = [...document.querySelectorAll(".dub")].find(e => e.textContent.includes(d.stem));
+  const dub = DUBS.find(x => x.stem === d.stem);
+  if (el && dub) select(dub, el);
+}
+wireDrop("drop-dubbed", "file-dubbed", "dubbed", "dd-label");
+wireDrop("drop-original", "file-original", "original", "do-label");
+
+$("btn-vpreview").onclick = async () => {
+  if (!LIPBOX) return;
+  $("btn-vpreview").disabled = true;
+  $("vpnote").textContent = "⏳ matching this moment against the original…";
+  try {
+    const r = await fetch("/api/dubsync/visual-preview", {method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({stem: SEL.stem, box: LIPBOX, at: vid.currentTime || 1.0,
+                            color_fix: $("opt-colorfix").checked})});
+    if (!r.ok) { $("vpnote").textContent = "❌ " + await r.text(); return; }
+    const d = await r.json();
+    $("previewstrip").src = d.img + "?v=" + d.ts;
+    $("previewstrip").style.display = "block";
+    $("stripnote").style.display = "block";
+    const a = d.align || {};
+    $("vpnote").textContent = d.warning ? "⚠ " + d.warning
+      : `✓ matched (confidence ${a.zncc ?? "?"}, looks like ${a.looks_like ?? "?"})`;
+  } finally { $("btn-vpreview").disabled = false; }
+};
+
+$("btn-run").onclick = async () => {
+  const action = document.querySelector('input[name="fix"]:checked').value;
+  if (action === "visual" && !LIPBOX) {
+    $("jobnote").textContent = "❌ draw the lip region first (step 1)";
+    return;
+  }
+  if (action === "object" && !OBJSAMPLES) {
+    $("jobnote").textContent = "❌ first describe the damaged object above and press Analyze";
+    return;
+  }
+  if (action === "swap" && !SWAPRANGES.length) {
+    $("jobnote").textContent = "❌ mark at least one start/end range on the video first";
+    return;
+  }
+  $("btn-run").disabled = true;
+  const body = {stem: SEL.stem, action, restorer: $("restorer").value};
+  if (action === "swap") {
+    body.ranges = SWAPRANGES;
+  }
+  if (action === "object") {
+    body.samples = OBJSAMPLES;   // color-fix off by design: same footage, measured diff < 2 gray levels
+  }
+  if (action === "visual") {
+    body.box = LIPBOX;
+    body.color_fix = $("opt-colorfix").checked;
+    body.track = $("opt-track").checked;
+    if ($("opt-nvenc").checked) body.encoder = "nvenc";
+  }
+  const r = await fetch("/api/dubsync/repair", {method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify(body)});
+  if (!r.ok) { $("jobnote").textContent = "❌ " + await r.text(); $("btn-run").disabled = false; return; }
+  const d = await r.json();
+  $("jobnote").textContent = "⏳ repairing… (job " + d.job_id + ")";
+  $("joblog").style.display = "block";
+  poll = setInterval(async () => {
+    const j = await (await fetch(`/api/job/${d.job_id}`)).json();
+    $("joblog").textContent = (j.lines || []).slice(-8).join("\n");
+    if (j.status === "running") return;
+    clearInterval(poll);
+    $("btn-run").disabled = false;
+    if (j.status === "done") { $("jobnote").textContent = "✅ repair ready — see Takes below"; loadDubs(true); }
+    else $("jobnote").textContent = "❌ job " + j.status + " — full log in Power Tools";
+  }, 2500);
+};
+
+document.querySelectorAll(".fix").forEach(f => f.addEventListener("click", () => {
+  document.querySelectorAll(".fix").forEach(x => x.classList.remove("sel"));
+  f.classList.add("sel");
+}));
+
+loadDubs();
+</script>
+</body>
+</html>

@@ -1,0 +1,37 @@
+# ============================================================================
+# Local Voice-Clone Dubbing Tool — pinned requirements (Windows + CUDA)
+# ============================================================================
+# PyTorch is NOT listed here on purpose. Install it FIRST with the CUDA wheel:
+#
+#   pip install torch==2.5.1 torchaudio==2.5.1 --index-url https://download.pytorch.org/whl/cu121
+#
+# Then:  pip install -r requirements.txt
+#
+# Notes:
+#  * We use `coqui-tts`, the actively-maintained drop-in fork of the abandoned
+#    `TTS` package. Same `from TTS.api import TTS` import, same xtts_v2 model,
+#    but it installs cleanly on Python 3.10 + modern torch/transformers.
+#  * torch 2.5.1 is chosen on purpose: torch >= 2.6 flips torch.load to
+#    weights_only=True which breaks XTTS checkpoint loading.
+# ----------------------------------------------------------------------------
+
+coqui-tts==0.25.1          # XTTS v2 voice cloning + synthesis
+gradio==5.49.1             # local drag-and-drop web UI (5.x: works with the
+                           # modern fastapi/starlette; 4.x crashed on serve)
+ffmpeg-python==0.2.0       # thin ffmpeg wrapper (we mostly call ffmpeg via subprocess)
+numpy<2.0                  # coqui-tts / torch 2.5 stack expects numpy 1.x
+soundfile==0.12.1          # reading/writing WAV files
+
+# --- Local lip-sync stage (Wav2Lip + GFPGAN) -------------------------------
+# Optional: only needed if you use the "Lip-sync locally" toggle. Install
+# AFTER the above so numpy stays pinned <2 (gfpgan's chain tries to pull
+# numpy 2 + opencv 5, which break coqui-tts — hence the pins below).
+gfpgan                     # face restoration (pulls basicsr/facexlib/realesrgan)
+realesrgan                 # full-frame upscaler (CodeFormer background enhance)
+codeformer-pip             # CodeFormer face restorer (bundles its own basicsr/facelib)
+opencv-python==4.10.0.84   # 4.x line is numpy-1.x compatible (5.x needs numpy>=2)
+tqdm                       # Wav2Lip inference progress
+# CodeFormer weights auto-download to <project-root>/CodeFormer/weights/ on first use.
+# NOTE: reinstall numpy==1.26.4 last if pip bumped it:
+#   pip install "numpy==1.26.4" "opencv-python==4.10.0.84"
+# Model weights are NOT pip-installed — see lipsync/ (Wav2Lip + GFPGAN .pth files).

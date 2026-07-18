@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Power Tools — Video Studio</title>
+<link rel="stylesheet" href="/static/vs.css">
+<script src="/static/vs-nav.js" defer></script>
+<style>
+  * { box-sizing:border-box; margin:0; }
+  body { background:radial-gradient(1100px 500px at 75% -10%, #1a2036 0%, var(--bg) 55%);
+         color:var(--text); min-height:100vh; }
+  a { color:var(--accent2); text-decoration:none; }
+  .rowbtn { background:var(--panel2); border:1px solid var(--line); color:var(--text);
+            border-radius:8px; padding:4px 12px; font-size:12px; font-weight:700; cursor:pointer; }
+  .rowbtn:hover { border-color:var(--accent); }
+  .rowbtn.stop { color:var(--bad); }
+  .rowbtn.resume { color:var(--ok); }
+</style>
+</head>
+<body>
+<div class="vs-page">
+  <h2>Power Tools</h2>
+  <p class="lead">Jobs (persistent — they survive restarts), spend ledger, system utilities.</p>
+
+  <div class="vs-panel">
+    <h3>⚙️ Jobs</h3>
+    <table class="vs-table" id="jobs">
+      <thead><tr><th>Job</th><th>Status</th><th>Progress</th><th>Started</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <div id="nojobs" style="color:var(--dim); padding:14px 4px; display:none">
+      No jobs yet — they'll appear here (and survive restarts).</div>
+  </div>
+
+  <div class="vs-panel">
+    <h3>💰 fal.ai spend</h3>
+    <div class="vs-chips"><div class="vs-chip"><b id="spendtotal">$0.00</b><span>total tracked</span></div></div>
+    <table class="vs-table" id="spendruns"><tbody></tbody></table>
+  </div>
+
+  <div class="vs-panel">
+    <h3>🧰 Coming next</h3>
+    <div style="color:var(--dim)">Self-test (ffmpeg / venvs / GPU / disk), trash &amp; restore, and GPU status
+      land here in Phase 3–5. The old tools keep working meanwhile:
+      <a href="http://localhost:5170" target="_blank">dashboard</a> ·
+      <a href="http://localhost:5180" target="_blank">subtitle-studio</a>.</div>
+  </div>
+</div>
+<script>
+function fmtTime(ts) {
+  if (!ts) return "—";
+  const d = new Date(ts * 1000);
+  return d.toLocaleDateString([], {month:"short", day:"numeric"}) + " " +
+         d.toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"});
+}
+
+async function act(id, verb, btn) {
+  btn.disabled = true;
+  try {
+    const r = await fetch(`/api/job/${id}/${verb}`, {method:"POST"});
+    if (!r.ok) alert(await r.text());
+  } finally { refresh(); }
+}
+
+async function refresh() {
+  const js = await (await fetch("/api/jobs")).json();
+  js.sort((a, b) => (b.started || 0) - (a.started || 0));
+  const tb = document.querySelector("#jobs tbody");
+  tb.innerHTML = "";
+  document.getElementById("nojobs").style.display = js.length ? "none" : "block";
+  for (const j of js.slice(0, 40)) {
+    const tr = document.createElement("tr");
+    const pct = j.progress && j.progress.pct != null ? j.progress.pct : null;
+    let actions = "";
+    if (j.status === "running")
+      actions = `<button class="rowbtn stop" onclick="act('${j.id}','stop',this)">⏹ Stop</button>`;
+    else if (["interrupted","failed","stopped"].includes(j.status) && j.cmd)
+      actions = `<button class="rowbtn resume" onclick="act('${j.id}','resume',this)">▶ Resume</button>`;
+    tr.innerHTML =
+      `<td>${j.label || j.action}</td>
+       <td><span class="vs-status ${j.status}">${j.status}</span></td>
+       <td>${pct != null ? `<div class="vs-bar"><i style="width:${pct}%"></i></div>` :
+             (j.line_count ? j.line_count + " lines" : "—")}</td>
+       <td style="color:var(--dim)">${fmtTime(j.started)}</td>
+       <td>${actions}</td>`;
+    tb.appendChild(tr);
+  }
+  const s = await (await fetch("/api/spend")).json();
+  document.getElementById("spendtotal").textContent = "$" + (s.total ?? 0).toFixed(2);
+  const sb = document.querySelector("#spendruns tbody");
+  sb.innerHTML = "";
+  for (const r of (s.runs || []).slice(0, 8)) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td style="color:var(--dim)">${fmtTime(r.ts)}</td><td>${r.stem || ""}</td>
+                    <td>${r.summary || ""}</td><td style="text-align:right">$${(r.cost ?? 0).toFixed(3)}</td>`;
+    sb.appendChild(tr);
+  }
+}
+refresh();
+setInterval(refresh, 4000);
+</script>
+</body>
+</html>

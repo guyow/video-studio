@@ -1,0 +1,339 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Clone Winner — Video Studio</title>
+<style>
+  :root {
+    --bg:#0b0e14; --panel:#141926; --panel2:#1b2231; --line:#28324a;
+    --text:#eef2fb; --dim:#8b96ab; --accent:#7c5cff; --accent2:#4cc9f0;
+    --ok:#3ddc84; --bad:#ff5c72; --warn:#ffb454;
+    --radius:14px; --mono:ui-monospace,'Cascadia Code',Consolas,monospace;
+  }
+  * { box-sizing:border-box; margin:0; }
+  body { background:radial-gradient(1200px 600px at 70% -10%, #1a2036 0%, var(--bg) 55%); color:var(--text);
+         font:15px/1.55 'Segoe UI',system-ui,sans-serif; min-height:100vh; }
+  a { color:var(--accent2); text-decoration:none; }
+  header { display:flex; align-items:center; gap:14px; padding:16px 26px; border-bottom:1px solid var(--line);
+           position:sticky; top:0; background:rgba(11,14,20,.9); backdrop-filter:blur(8px); z-index:20; }
+  header h1 { font-size:18px; letter-spacing:.3px; }
+  header h1 b { color:var(--accent); }
+  header .sub { color:var(--dim); font-size:12.5px; }
+  main { display:grid; grid-template-columns:360px 1fr; gap:20px; padding:20px 26px; max-width:1500px; margin:0 auto; align-items:start; }
+  @media (max-width:1050px){ main { grid-template-columns:1fr; } }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:var(--radius); padding:18px; margin-bottom:18px; }
+  .card h2 { font-size:12px; text-transform:uppercase; letter-spacing:1.3px; color:var(--dim); margin-bottom:14px; }
+  .row { display:flex; align-items:center; gap:9px; padding:9px 11px; border:1px solid var(--line); border-radius:11px;
+         background:var(--panel2); margin-bottom:7px; cursor:pointer; font-size:13px; transition:.12s; }
+  .row:hover { border-color:var(--accent); transform:translateX(2px); }
+  .row.sel { border-color:var(--accent); background:rgba(124,92,255,.14); box-shadow:0 0 0 1px var(--accent) inset; }
+  .row .nm { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:600; }
+  .row .mt { color:var(--dim); font-size:10.5px; flex:none; }
+  .row img { width:42px; height:56px; object-fit:cover; border-radius:7px; flex:none; background:#000; }
+  .badge { font-size:10px; padding:2px 8px; border-radius:10px; background:rgba(124,92,255,.18); color:#b9a8ff; flex:none; }
+  .badge.ok { background:rgba(61,220,132,.15); color:var(--ok); }
+  .badge.run { background:rgba(255,180,84,.15); color:var(--warn); animation:pulse 1.2s infinite; }
+  .badge.bad { background:rgba(255,92,114,.15); color:var(--bad); }
+  @keyframes pulse { 50%{opacity:.4;} }
+
+  .stage { position:relative; background:#000; border-radius:12px; overflow:hidden; min-height:200px;
+           display:flex; align-items:center; justify-content:center; }
+  .stage video { max-width:100%; max-height:36vh; width:auto; display:block; background:#000; }
+  .stage .empty { color:var(--dim); font-size:14px; padding:50px 20px; text-align:center; }
+
+  .step { border:1px solid var(--line); border-radius:12px; padding:16px; margin-top:14px; background:var(--panel2); opacity:.5; transition:.2s; }
+  .step.active { opacity:1; border-color:var(--accent); }
+  .step.done { opacity:1; border-color:rgba(61,220,132,.4); }
+  .step .head { display:flex; align-items:center; gap:10px; font-weight:700; font-size:14px; }
+  .step .num { width:24px; height:24px; border-radius:50%; background:var(--line); color:var(--text); display:flex;
+               align-items:center; justify-content:center; font-size:12px; flex:none; }
+  .step.active .num { background:var(--accent); color:#fff; }
+  .step.done .num { background:var(--ok); color:#08110a; }
+  .step .body { font-size:13px; color:var(--dim); margin-top:10px; }
+
+  .winscript { background:#080b11; border:1px solid var(--line); border-radius:10px; padding:11px 13px;
+               font-size:13px; line-height:1.6; color:var(--text); max-height:130px; overflow:auto; white-space:pre-wrap; }
+  textarea#newscript { width:100%; height:170px; background:#080b11; color:var(--text); border:1px solid var(--line);
+    border-radius:10px; padding:11px 13px; font:13.5px/1.6 'Segoe UI',sans-serif; resize:vertical; margin-top:8px; }
+  input[type=text] { background:#080b11; color:var(--text); border:1px solid var(--line); border-radius:9px;
+    padding:9px 12px; font:inherit; font-size:13px; width:100%; }
+  select, button.ghost { background:var(--panel); color:var(--text); border:1px solid var(--line); border-radius:9px;
+    padding:9px 12px; font:inherit; font-size:13px; cursor:pointer; }
+  select:hover, button.ghost:hover { border-color:var(--accent); }
+  button.ghost:disabled { opacity:.4; cursor:not-allowed; }
+  .btnrow { display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-top:10px; }
+  .hint { color:var(--dim); font-size:12px; }
+  .free { color:var(--ok); font-weight:700; font-size:11px; }
+  .paid { color:var(--warn); font-weight:700; font-size:11px; }
+
+  .actorgrid { display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:8px; margin-top:10px;
+               max-height:280px; overflow:auto; }
+  .actor { border:1px solid var(--line); border-radius:10px; overflow:hidden; cursor:pointer; background:var(--panel);
+           transition:.12s; }
+  .actor:hover { border-color:var(--accent); }
+  .actor.sel { border-color:var(--accent); box-shadow:0 0 0 2px var(--accent); }
+  .actor img { width:100%; height:110px; object-fit:cover; display:block; background:#000; }
+  .actor .cap { font-size:10.5px; padding:5px 8px; color:var(--dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+  .fixopt { display:flex; gap:10px; align-items:flex-start; padding:11px 13px; border:1px solid var(--line);
+            border-radius:11px; margin-top:8px; cursor:pointer; background:var(--panel); }
+  .fixopt:hover { border-color:var(--accent); }
+  .fixopt input { margin-top:3px; }
+
+  .bigbtn { background:linear-gradient(135deg,var(--accent),#5b8cff); color:#fff; border:none; border-radius:13px;
+            padding:14px 28px; font:700 16px 'Segoe UI',sans-serif; cursor:pointer; box-shadow:0 8px 24px rgba(124,92,255,.38);
+            transition:.15s; display:inline-flex; align-items:center; gap:9px; margin-top:14px; }
+  .bigbtn:hover { transform:translateY(-2px); box-shadow:0 12px 30px rgba(124,92,255,.5); }
+  .bigbtn:disabled { opacity:.4; cursor:not-allowed; transform:none; box-shadow:none; }
+
+  #joblog { background:#080b11; border:1px solid var(--line); border-radius:10px; padding:11px 13px; margin-top:12px;
+            font:11.5px/1.55 var(--mono); color:#b9c3d8; max-height:230px; overflow:auto; white-space:pre-wrap; display:none; }
+  .clone-item video { width:100%; max-height:300px; background:#000; border-radius:10px; margin-top:8px; }
+</style>
+<link rel="stylesheet" href="/static/vs.css"><script src="/static/vs-nav.js" defer></script></head>
+<body>
+<header>
+  <h1>🏆 Clone <b>Winner</b></h1>
+  <div class="sub">take a proven ad → same winning script pattern, fresh words → new video with the same actor or a new one. Clones land in DubSync/Captions/Exports like any dub.</div>
+</header>
+<main>
+  <div><!-- left column -->
+    <div class="card">
+      <h2>1 · Pick the winning video</h2>
+      <div id="winners"><div class="hint">loading…</div></div>
+    </div>
+    <div class="card">
+      <h2>Your clones</h2>
+      <div id="clones"><div class="hint">none yet — make your first one →</div></div>
+    </div>
+  </div>
+
+  <div><!-- right column -->
+    <div class="card">
+      <div class="stage" id="stage"><div class="empty">← pick the winner you want to multiply</div></div>
+      <div class="step done" id="st-script" style="display:none">
+        <div class="head"><span class="num">✓</span> The winning script</div>
+        <div class="body"><div class="winscript" id="winscript"></div>
+          <div class="hint" id="winmeta" style="margin-top:6px"></div></div>
+      </div>
+
+      <div class="step" id="st-actor">
+        <div class="head"><span class="num">2</span> Who plays it?</div>
+        <div class="body">
+          <label class="fixopt"><input type="radio" name="actor" value="same" checked>
+            <span><b>Same actor</b> — reuse the winner's original footage; only the words change.
+              <span class="free">fastest · voice already cloned</span></span></label>
+          <label class="fixopt"><input type="radio" name="actor" value="new">
+            <span><b>New actor</b> — pick another video from your library; their voice is cloned
+              and they deliver the new script.</span></label>
+          <div class="actorgrid" id="actors" style="display:none"></div>
+        </div>
+      </div>
+
+      <div class="step" id="st-gen">
+        <div class="head"><span class="num">3</span> Similar winning script</div>
+        <div class="body">
+          <input type="text" id="steer" placeholder="optional direction — e.g. “different hook, more urgency”, “focus on sleep benefit”">
+          <div class="btnrow">
+            <button class="ghost" id="btn-gen">✨ Generate similar script</button>
+            <span class="hint" id="genmeta"></span>
+          </div>
+          <textarea id="newscript" placeholder="the new script appears here — edit anything before you run"></textarea>
+        </div>
+      </div>
+
+      <div class="step" id="st-engine">
+        <div class="head"><span class="num">4</span> Engine</div>
+        <div class="body">
+          <label class="fixopt"><input type="radio" name="engine" value="local" checked>
+            <span><b>Local</b> — XTTS voice clone + Wav2Lip HD lip-sync on your GPU.
+              <span class="free">FREE</span> · ~10-20 min
+              <select id="lipsync" style="margin-left:8px">
+                <option value="wav2lip-hd" selected>Wav2Lip HD (GFPGAN sharpened)</option>
+                <option value="wav2lip">Wav2Lip (faster, softer mouth)</option>
+                <option value="none">voice only, no lip-sync</option>
+              </select></span></label>
+          <label class="fixopt"><input type="radio" name="engine" value="fal">
+            <span><b>fal.ai cloud</b> — the pipeline that made the original winner.
+              <span class="paid">COSTS $</span>
+              <select id="tier" style="margin-left:8px">
+                <option value="standard" selected>sync v2 standard (~$3/min)</option>
+                <option value="pro">sync v2 pro (best, $$)</option>
+                <option value="veed">veed (~$0.40/min)</option>
+                <option value="latentsync">latentsync (cheapest)</option>
+              </select>
+              <select id="tts">
+                <option value="hd" selected>MiniMax HD voice</option>
+                <option value="turbo">MiniMax turbo</option>
+                <option value="f5">F5 zero-shot (no clone fee)</option>
+              </select>
+              <label style="display:inline-flex;gap:5px;align-items:center;margin-left:8px;font-size:12px">
+                <input type="checkbox" id="confirm-cost"> I approve the cost</label></span></label>
+        </div>
+      </div>
+
+      <button class="bigbtn" id="btn-run" disabled>🚀 Create the clone</button>
+      <span class="hint" id="runnote" style="margin-left:12px"></span>
+      <div id="joblog"></div>
+    </div>
+  </div>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const api = async (url, opts) => {
+  const r = await fetch(url, opts);
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+};
+let WINNERS = [], SEL = null, ACTOR = "same", GENERATED = false;
+
+function fmtDate(t){ return new Date(t*1000).toLocaleDateString(undefined,{month:"short",day:"numeric"}); }
+
+async function loadWinners(){
+  const d = await api("/api/clone/winners");
+  WINNERS = d.winners;
+  const box = $("winners");
+  box.innerHTML = WINNERS.length ? "" : '<div class="hint">no finished dubs yet — make one in Dubbing & Lip Sync first</div>';
+  WINNERS.forEach(w => {
+    const el = document.createElement("div");
+    el.className = "row";
+    el.innerHTML = `<span class="nm">🎬 ${w.stem}</span>` +
+      (w.is_clone ? '<span class="badge">clone</span>' : "") +
+      `<span class="mt">${w.words}w · ${fmtDate(w.mtime)}</span>`;
+    el.onclick = () => select(w, el);
+    box.appendChild(el);
+  });
+}
+
+function select(w, el){
+  SEL = w; GENERATED = false;
+  document.querySelectorAll("#winners .row").forEach(e => e.classList.remove("sel"));
+  el.classList.add("sel");
+  $("stage").innerHTML = `<video controls src="/media/output/script-swap/${encodeURIComponent(w.stem)}/final.mp4"></video>`;
+  $("st-script").style.display = "";
+  $("winscript").textContent = w.script;
+  $("winmeta").textContent = `${w.words} words · this exact script is what the winner speaks`;
+  $("st-actor").classList.add("active");
+  $("st-gen").classList.add("active");
+  $("st-engine").classList.add("active");
+  $("newscript").value = "";
+  $("genmeta").textContent = "";
+  updateRun();
+}
+
+// actor choice
+document.querySelectorAll('input[name="actor"]').forEach(r => r.onchange = async () => {
+  const v = document.querySelector('input[name="actor"]:checked').value;
+  if (v === "same") { ACTOR = "same"; $("actors").style.display = "none"; }
+  else {
+    $("actors").style.display = "";
+    if (!$("actors").children.length) {
+      const d = await api("/api/clone/actors");
+      d.actors.forEach(a => {
+        const el = document.createElement("div");
+        el.className = "actor";
+        el.innerHTML = `<img loading="lazy" src="/api/thumb/${encodeURIComponent(a.name)}"><div class="cap">${a.name}</div>`;
+        el.onclick = () => {
+          document.querySelectorAll(".actor").forEach(x => x.classList.remove("sel"));
+          el.classList.add("sel"); ACTOR = a.name; GENERATED = false; updateRun();
+        };
+        $("actors").appendChild(el);
+      });
+    }
+    ACTOR = null;   // must pick one
+  }
+  updateRun();
+});
+
+$("btn-gen").onclick = async () => {
+  if (!SEL) return;
+  if (ACTOR === null) { $("genmeta").textContent = "❌ pick the new actor first"; return; }
+  $("btn-gen").disabled = true;
+  $("genmeta").textContent = "🪄 writing a fresh script with the same winning pattern… (~30s)";
+  try {
+    const d = await api("/api/clone/script", {method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({winner: SEL.stem, actor: ACTOR, steer: $("steer").value.trim()})});
+    $("newscript").value = d.script;
+    GENERATED = true;
+    $("genmeta").textContent = `✓ ${d.words} words for ${d.seconds}s of footage (~${d.rate} w/s) — edit freely, or generate again for another take`;
+  } catch (e) { $("genmeta").textContent = "❌ " + e.message; }
+  $("btn-gen").disabled = false;
+  updateRun();
+};
+$("newscript").addEventListener("input", updateRun);
+
+function updateRun(){
+  const ok = SEL && ACTOR !== null && $("newscript").value.trim().split(/\s+/).filter(Boolean).length >= 8;
+  $("btn-run").disabled = !ok;
+}
+
+$("btn-run").onclick = async () => {
+  const engine = document.querySelector('input[name="engine"]:checked').value;
+  if (engine === "fal" && !$("confirm-cost").checked) {
+    $("runnote").textContent = "❌ tick “I approve the cost” for the fal.ai engine";
+    return;
+  }
+  $("btn-run").disabled = true;
+  $("runnote").textContent = "⏳ starting…";
+  try {
+    const d = await api("/api/clone/run", {method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({
+        winner: SEL.stem, actor: ACTOR, script: $("newscript").value.trim(),
+        engine, lipsync: $("lipsync").value, tier: $("tier").value, tts: $("tts").value,
+        confirm_cost: $("confirm-cost").checked})});
+    $("runnote").textContent = `🎬 cloning as “${d.stem}” — watch the log below; it lands in “Your clones” when done`;
+    watchJob(d.job_id);
+    loadClones();
+  } catch (e) {
+    $("runnote").textContent = "❌ " + e.message;
+    $("btn-run").disabled = false;
+  }
+};
+
+async function watchJob(id){
+  const log = $("joblog");
+  log.style.display = "block";
+  for (;;) {
+    let j;
+    try { j = await api("/api/job/" + id); } catch { break; }
+    log.textContent = (j.lines || []).slice(-40).join("\n");
+    log.scrollTop = log.scrollHeight;
+    if (j.status !== "running") {
+      $("runnote").textContent = j.status === "done"
+        ? "✅ clone finished — it's in “Your clones” and every other tab"
+        : `❌ clone ${j.status} — see the log`;
+      $("btn-run").disabled = false;
+      loadClones(); loadWinners();
+      break;
+    }
+    await new Promise(r => setTimeout(r, 3000));
+  }
+}
+
+async function loadClones(){
+  const d = await api("/api/clone/list");
+  const box = $("clones");
+  if (!d.clones.length) return;
+  box.innerHTML = "";
+  d.clones.forEach(c => {
+    const el = document.createElement("div");
+    el.className = "clone-item";
+    let badge = c.ready ? '<span class="badge ok">ready</span>'
+      : (c.job && c.job.status === "running" ? '<span class="badge run">rendering…</span>'
+         : '<span class="badge bad">failed</span>');
+    el.innerHTML = `<div class="row" style="cursor:default"><span class="nm">🧬 ${c.stem}</span>${badge}</div>` +
+      (c.ready ? `<video controls preload="none" src="/media/output/script-swap/${encodeURIComponent(c.stem)}/final.mp4?v=${c.final_mtime}"></video>
+        <div class="hint" style="margin:4px 0 12px">from ${c.winner} · actor: ${c.actor} ·
+        <a href="/dubsync">repair</a> · <a href="/captions">captions</a> · <a href="/exports">export</a></div>` : "");
+    box.appendChild(el);
+  });
+}
+
+loadWinners(); loadClones();
+setInterval(loadClones, 15000);
+</script>
+</body>
+</html>

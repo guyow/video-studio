@@ -1,0 +1,569 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Subtitle Studio — local &amp; free</title>
+<style>
+  :root {
+    --bg:#0b0e14; --panel:#121722; --panel2:#0e1320; --line:#232b3d;
+    --text:#dbe2f0; --dim:#7b87a0; --accent:#38bdf8; --ok:#34d399; --bad:#f87171;
+  }
+  * { box-sizing:border-box; margin:0; }
+  body { background:var(--bg); color:var(--text); font:14px/1.5 'Segoe UI',system-ui,sans-serif; min-height:100vh; }
+  header { padding:18px 26px; border-bottom:1px solid var(--line); display:flex; align-items:baseline; gap:14px; flex-wrap:wrap; }
+  header h1 { font-size:19px; }
+  header .free { font-size:12px; color:var(--ok); border:1px solid var(--ok); border-radius:20px; padding:2px 10px; }
+  main { max-width:1100px; margin:0 auto; padding:22px 26px; display:flex; flex-direction:column; gap:18px; }
+  #drop { border:2px dashed var(--line); border-radius:14px; padding:34px; text-align:center; color:var(--dim); cursor:pointer; transition:.15s; }
+  #drop.over { border-color:var(--accent); color:var(--accent); background:var(--panel2); }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:14px 16px; display:flex; flex-direction:column; gap:10px; }
+  .card .title { display:flex; gap:10px; align-items:baseline; flex-wrap:wrap; }
+  .card .title b { font-size:14.5px; word-break:break-all; }
+  .card .title span { color:var(--dim); font-size:12px; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  button { background:var(--panel2); color:var(--text); border:1px solid var(--line); border-radius:9px; padding:7px 13px; font:13px 'Segoe UI',sans-serif; cursor:pointer; }
+  button:hover { border-color:var(--accent); }
+  button.primary { background:var(--accent); color:#04121c; border-color:var(--accent); font-weight:600; }
+  button.danger:hover { border-color:var(--bad); color:var(--bad); }
+  button:disabled { opacity:.45; cursor:default; }
+  .pill { font-size:11.5px; border-radius:20px; padding:2px 9px; border:1px solid var(--line); color:var(--dim); }
+  .pill.ok { color:var(--ok); border-color:var(--ok); }
+  #log { background:#080b11; border:1px solid var(--line); border-radius:12px; padding:12px 14px; font:12px/1.55 Consolas,monospace; color:#9fb0cc; max-height:260px; overflow:auto; white-space:pre-wrap; display:none; }
+  /* modal */
+  #modal { position:fixed; inset:0; background:rgba(4,6,10,.78); display:none; align-items:flex-start; justify-content:center; padding:30px 16px; overflow:auto; z-index:50; }
+  #modal.open { display:flex; }
+  #modalcard { background:var(--panel); border:1px solid var(--line); border-radius:16px; padding:20px 22px; max-width:760px; width:100%; }
+  #modalcard h2 { font-size:16px; margin-bottom:10px; }
+  video { background:#000; border-radius:10px; display:block; }
+  #wrap { position:relative; width:300px; cursor:crosshair; }
+  #canvas { position:absolute; inset:0; width:100%; height:100%; }
+  label.mode { cursor:pointer; font-size:12.5px; display:block; margin:3px 0; }
+  label.mode span { color:var(--dim); }
+  input[type=range] { accent-color:var(--accent); }
+  input[type=radio] { accent-color:var(--accent); }
+  .hint { font-size:12px; color:var(--dim); }
+  #toast { position:fixed; bottom:18px; left:50%; transform:translateX(-50%); background:#18202f;
+    border:1px solid var(--accent); color:var(--text); padding:10px 18px; border-radius:10px;
+    display:none; z-index:99; max-width:82%; font-size:13px; }
+  #pmodal { position:fixed; inset:0; background:rgba(4,6,10,.85); display:none;
+    align-items:center; justify-content:center; z-index:60; padding:20px; }
+  #pmodal.open { display:flex; }
+  #pmodal video { max-width:92vw; max-height:88vh; border-radius:12px; }
+  #emodal { position:fixed; inset:0; background:rgba(4,6,10,.85); display:none; align-items:flex-start; justify-content:center; padding:30px 16px; overflow:auto; z-index:60; }
+  #emodal.open { display:flex; }
+  #ecard { background:var(--panel); border:1px solid var(--line); border-radius:16px; padding:20px 22px; max-width:640px; width:100%; }
+  .erow { display:flex; gap:8px; align-items:center; }
+  .erow .ts { font:11px Consolas,monospace; color:var(--dim); white-space:nowrap; min-width:96px; }
+  .erow input { flex:1; background:#0a0d13; color:var(--text); border:1px solid var(--line); border-radius:7px; padding:6px 9px; font:13px 'Segoe UI',sans-serif; }
+  .erow input:focus { border-color:var(--accent); outline:none; }
+  .search { background:#0a0d13; color:var(--text); border:1px solid var(--line); border-radius:20px; padding:7px 14px; font:13px 'Segoe UI',sans-serif; width:220px; }
+  .search:focus { border-color:var(--accent); outline:none; }
+  .thumb { width:74px; height:120px; object-fit:cover; border-radius:9px; background:#000; flex:none; }
+  .tagsin { background:transparent; color:var(--dim); border:1px dashed var(--line); border-radius:7px; padding:3px 8px; font:12px 'Segoe UI',sans-serif; width:250px; }
+  .tagsin:focus { border-color:var(--accent); color:var(--text); outline:none; }
+  .rnin { background:#0a0d13; color:var(--text); border:1px solid var(--accent); border-radius:7px; padding:3px 8px; font:14px 'Segoe UI',sans-serif; width:220px; }
+  details.more summary { cursor:pointer; font-size:12px; color:var(--dim); user-select:none; }
+  details.more summary:hover { color:var(--accent); }
+</style>
+</head>
+<body>
+<header>
+  <h1>🎬 Subtitle Studio</h1>
+  <span class="free">100% local &amp; free — no fal.ai, no API keys, nothing can charge you</span>
+  <span style="flex:1"></span>
+  <input id="search" class="search" placeholder="🔎 search name or tag…" oninput="filterCards()">
+  <button onclick="selfTest(this)" title="Check that every part of the system works (ffmpeg, GPU, AI engines, disk)">🧪 Self-test</button>
+</header>
+<main>
+  <div id="drop">⬆ Drop videos here (multi-select works) — each one runs automatically:<br>
+    <span style="font-size:12px">1️⃣ find the old subtitles &nbsp; 2️⃣ cover them &nbsp; 3️⃣ burn fresh audio-synced captions &nbsp;·&nbsp; ~1 min per video, result on your Desktop</span></div>
+  <input type="file" id="fileinput" accept="video/*" multiple style="display:none">
+  <div id="cards"></div>
+  <pre id="log"></pre>
+</main>
+
+<div id="toast"></div>
+<div id="pmodal" onclick="closePlay()"><video id="pvid" controls playsinline onclick="event.stopPropagation()"></video></div>
+
+<div id="emodal"><div id="ecard">
+  <h2 style="font-size:16px;margin-bottom:6px">✏️ Edit subtitles</h2>
+  <p class="hint" style="margin-bottom:10px">Fix wrong words line-by-line below, OR paste your whole text to replace everything. Then re-burn (fast — no re-transcription).</p>
+
+  <details id="epastebox" style="border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:12px">
+    <summary style="cursor:pointer;font-size:13px;color:var(--accent)">📋 Paste my own text (replace all subtitles)</summary>
+    <p class="hint" style="margin:8px 0">Paste your full script/text. It's split into short caption lines and spread evenly across the speech, then you can still fine-tune each line below.</p>
+    <textarea id="epaste" placeholder="Paste the full text here…" style="width:100%;height:120px;background:#0a0d13;color:var(--text);border:1px solid var(--line);border-radius:8px;padding:9px;font:13px 'Segoe UI',sans-serif;resize:vertical"></textarea>
+    <div class="row" style="margin-top:8px">
+      <span class="hint">words per line</span>
+      <input id="epasteWPL" type="number" min="1" max="8" value="3" style="width:56px;background:#0a0d13;color:var(--text);border:1px solid var(--line);border-radius:7px;padding:5px 7px">
+      <button id="epasteapply">↧ Load into lines below</button>
+    </div>
+  </details>
+
+  <div id="erows" style="max-height:46vh;overflow:auto;display:flex;flex-direction:column;gap:6px"></div>
+  <div class="row" style="margin-top:14px">
+    <button class="primary" id="esave">💾 Save &amp; re-burn</button>
+    <button id="eaifix" title="AI proofreads every line in context and fixes speech-to-text misspellings — you review before burning. Free, local.">🤖 AI fix spelling</button>
+    <button onclick="closeEdit()">cancel</button>
+    <span class="hint" id="ehint"></span>
+  </div>
+</div></div>
+
+<div id="modal"><div id="modalcard">
+  <h2 id="mtitle"></h2>
+  <p class="hint" style="margin-bottom:10px">
+    <b>1.</b> Drag a box over the subtitles &nbsp;·&nbsp; <b>2.</b> pick a method + <b>Preview</b> &nbsp;·&nbsp;
+    <b>3.</b> Apply. The original is always backed up (one-click restore).
+  </p>
+  <div style="display:flex;gap:16px;flex-wrap:wrap">
+    <div>
+      <div id="wrap">
+        <video id="vid" muted playsinline style="width:100%"></video>
+        <canvas id="canvas"></canvas>
+      </div>
+      <div style="width:300px;margin-top:6px;display:flex;gap:8px;align-items:center">
+        <span class="hint">scrub</span>
+        <input type="range" id="seek" min="0" max="100" value="0" style="flex:1">
+      </div>
+    </div>
+    <div style="flex:1;min-width:280px;display:flex;flex-direction:column;gap:10px">
+      <div id="previewbox" style="min-height:180px;border:1px dashed var(--line);border-radius:10px;display:flex;align-items:center;justify-content:center;color:var(--dim);font-size:12px">preview appears here</div>
+      <div>
+        <label class="mode"><input type="radio" name="mode" value="erase" checked> ✨ <b>AI erase</b> <span>— rebuilds the real background behind the letters (ProPainter, GPU). Best quality; takes a few minutes. Preview is approximate.</span></label>
+        <label class="mode"><input type="radio" name="mode" value="smart"> 🧠 Smart fill <span>— fast spatial inpaint of the whole box</span></label>
+        <label class="mode"><input type="radio" name="mode" value="blur"> 🌫 Blur <span>— dissolve the box area</span></label>
+        <label class="mode"><input type="radio" name="mode" value="bar"> 🖤 Caption bar <span>— dark backdrop (new subtitles cover it)</span></label>
+      </div>
+    </div>
+  </div>
+  <div class="row" style="margin-top:14px">
+    <button id="previewbtn" disabled>👁 Preview this frame</button>
+    <button id="applybtn" class="primary" disabled>✅ Apply to whole video</button>
+    <button onclick="box=null;draw()">clear box</button>
+    <button onclick="closeModal()">close</button>
+    <span class="hint" id="mhint">draw a box first</span>
+  </div>
+</div></div>
+
+<script>
+const $ = s => document.querySelector(s);
+let state = null, box = null, modalFile = null, watching = new Set();
+
+async function api(url, opts) {
+  const r = await fetch(url, opts);
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+// ---- upload ----
+const drop = $('#drop'), fi = $('#fileinput');
+drop.onclick = () => fi.click();
+fi.onchange = () => uploadAll(fi.files);
+drop.ondragover = e => { e.preventDefault(); drop.classList.add('over'); };
+drop.ondragleave = () => drop.classList.remove('over');
+drop.ondrop = e => { e.preventDefault(); drop.classList.remove('over'); uploadAll(e.dataTransfer.files); };
+async function uploadAll(list) {
+  const files = [...list].filter(f => f && f.name);
+  for (let i = 0; i < files.length; i++) {
+    drop.textContent = `⏳ uploading ${files[i].name} (${i + 1}/${files.length})…`;
+    await upload(files[i]);
+  }
+  drop.textContent = '⬆ Drop videos here (or click, multi-select works) — each runs the whole pipeline automatically';
+  refresh();
+}
+async function upload(file) {
+  const fd = new FormData(); fd.append('file', file);
+  try {
+    const r = await api('/api/upload', {method:'POST', body:fd});
+    // default = the FAST flow (~1 min): detect old subs → frosted cover → new captions.
+    // (the slow hours-long AI erase is opt-in under "more tools", never automatic)
+    boxCaption(r.name, 'blur', true);
+  } catch (e) { toast('Upload failed: ' + e.message.replace(/<[^>]*>/g,' ').slice(0,140)); }
+}
+
+async function boxCaption(name, style, captions) {
+  try {
+    const r = await api('/api/boxcaption', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({file:name, style: style||'blur', captions: captions !== false})});
+    watchJob(r.job_id);
+  } catch (e) { toast('Error: ' + e.message.replace(/<[^>]*>/g,' ').slice(0,140)); }
+}
+
+async function autoRun(name) {
+  try {
+    const r = await api('/api/auto', {method:'POST',
+      headers:{'Content-Type':'application/json'}, body:JSON.stringify({file:name})});
+    watchJob(r.job_id);
+  } catch (e) { toast('Error: ' + e.message.replace(/<[^>]*>/g,' ').slice(0,140)); }
+}
+
+// ---- cards ----
+function stage(tail) {
+  if (!tail) return 'starting…';
+  if (tail.includes('waiting for the GPU') || tail.includes('GPU is busy')) return 'queued — waiting for the GPU';
+  if (/step 1/.test(tail) || tail.includes('word timing') || tail.includes('whisper')) return '1/3 transcribing audio';
+  if (/scan \d/.test(tail) || tail.includes('scan done') || /step 2/.test(tail)) return '2/3 finding subtitles';
+  if (tail.includes('detecting where')) return 'detecting old subtitles';
+  if (tail.includes('Subtitle Removing') || tail.includes('magic erase') || /Processing: \d+/.test(tail)) {
+    const m = tail.match(/(\d+)%/); return '✨ magic erase' + (m ? ` (${m[1]}%)` : '…');
+  }
+  if (tail.includes('cover box') || tail.includes('covering that band')) return 'covering + captioning';
+  if (tail.includes('chunk') || tail.includes('pp:') || tail.includes('ProPainter')) return '2/3 AI-erasing (' + tail.replace(/^\s+/, '').slice(0, 40) + ')';
+  if (/encode \d/.test(tail)) return '2/3 encoding (' + tail.trim().slice(0, 30) + ')';
+  if (/step 3/.test(tail) || tail.includes('captions')) return 'burning new subtitles';
+  return tail.trim().slice(0, 50);
+}
+
+function card(f) {
+  const j = state && state.jobs.find(x => x.status === 'running' && x.file === f.name);
+  const tags = f.tags || [];
+  const dis = j ? 'disabled' : '';
+  return `<div class="card" data-search="${(f.name + ' ' + tags.join(' ')).toLowerCase().replace(/"/g,'')}">
+    <div style="display:flex;gap:14px">
+      <img class="thumb" loading="lazy" src="/api/thumb/${encodeURIComponent(f.stem)}" onerror="this.style.visibility='hidden'">
+      <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:8px">
+        <div class="title">
+          <b>${f.name}</b>
+          <button style="padding:2px 8px;font-size:12px" onclick="startRename('${f.name}', this)" title="Rename — e.g. the character/person name">✎</button>
+          <span>${f.size_mb} MB</span>
+          ${j ? `<span class="pill" style="color:var(--accent);border-color:var(--accent)">⏳ ${stage(j.tail)}</span>` : ''}
+          ${f.captioned && !f.captioned_stale ? '<span class="pill ok">done ✓</span>' : ''}
+          ${f.captioned_stale ? '<span class="pill">outdated ↻</span>' : ''}
+        </div>
+        <input class="tagsin" value="${tags.join(', ').replace(/"/g,'&quot;')}" placeholder="🏷 add tags, comma separated (e.g. paulina, gummies, hook-2)" onchange="saveTags('${f.name}', this)">
+        <div class="row">
+          ${j ? `<button class="danger" onclick="stopJob('${j.id}', this)">⏹ Stop</button>` : ''}
+          <button class="primary" ${dis} onclick="boxCaption('${f.name}','magic',true)" title="TRUE invisible removal: the AI rebuilds the real background behind the old subtitles pixel-by-pixel (no box, no blur — like nothing was there), then burns fresh audio-synced captions. ~1 min per 10 sec of video.">✨ Magic erase + captions</button>
+          <button ${dis} onclick="boxCaption('${f.name}','magic',false)" title="Same invisible removal, but adds NO new captions — just the clean video.">🪄 Magic erase only</button>
+          ${f.editable ? `<button ${dis} onclick="editCaptions('${f.name}')" title="Edit the caption text, paste your own script, or run the AI spell-fixer">✏️ Edit subtitles</button>` : ''}
+          ${f.captioned ? `<button onclick="play('${f.captioned}')">▶ result</button>` : ''}
+        </div>
+        <details class="more"><summary>⚙ more tools</summary>
+          <div class="row" style="margin-top:8px">
+            <button onclick="play('files/${f.name}')">▶ play source</button>
+            <button ${dis} onclick="boxCaption('${f.name}','blur',true)" title="Fastest option (~1 min total): frosted cover over the old subs + new captions">⚡ fast cover + captions</button>
+            <button ${dis} onclick="boxCaption('${f.name}','blur',false)" title="Frosted cover only, no captions (~30 sec)">⚡ fast cover only</button>
+            <button ${dis} onclick="boxCaption('${f.name}','box',true)" title="Solid black bar + new captions">📦 black bar + captions</button>
+            <button ${dis} onclick="recaption('${f.name}')" title="Video already clean? Just transcribe the audio and add captions — video untouched">📝 captions only</button>
+            <button ${dis} onclick="openClean('${f.name}')" title="Draw the subtitle box yourself + pick the method">🎯 manual box</button>
+            ${f.cleaned ? `<button class="danger" onclick="restore('${f.name}', this)">↩ restore original</button>` : ''}
+            <button class="danger" onclick="del('${f.name}', this)" title="Move to trash (recoverable)">🗑 delete</button>
+          </div>
+        </details>
+      </div>
+    </div>
+  </div>`;
+}
+
+function filterCards() {
+  const q = ($('#search').value || '').toLowerCase().trim();
+  document.querySelectorAll('#cards .card').forEach(c => {
+    c.style.display = !q || (c.dataset.search || '').includes(q) ? '' : 'none';
+  });
+}
+
+function startRename(name, btn) {
+  const b = btn.previousElementSibling;                      // the <b> with the filename
+  const stem = name.replace(/\.[^.]+$/, '');
+  b.innerHTML = `<input class="rnin" id="rnin" value="${stem}">`;
+  const inp = document.getElementById('rnin');
+  inp.focus(); inp.select();
+  btn.textContent = '✓';
+  btn.onclick = async () => {
+    const v = inp.value.trim();
+    if (!v || v === stem) { refresh(); return; }
+    try {
+      const r = await api('/api/rename', {method:'POST',
+        headers:{'Content-Type':'application/json'}, body:JSON.stringify({file:name, new:v})});
+      toast('Renamed to ' + r.name);
+      refresh();
+    } catch (e) { toast('Rename failed: ' + e.message.replace(/<[^>]*>/g,' ').slice(0,120)); refresh(); }
+  };
+  inp.onkeydown = e => { if (e.key === 'Enter') btn.onclick(); if (e.key === 'Escape') refresh(); };
+}
+
+async function saveTags(name, inp) {
+  try {
+    const r = await api('/api/tags', {method:'POST',
+      headers:{'Content-Type':'application/json'}, body:JSON.stringify({file:name, tags: inp.value})});
+    toast(r.tags.length ? '🏷 tags saved: ' + r.tags.join(', ') : '🏷 tags cleared');
+  } catch (e) { toast('Tags failed: ' + e.message.slice(0,100)); }
+}
+
+async function selfTest(btn) {
+  btn.disabled = true; const old = btn.textContent; btn.textContent = '🧪 testing… (~1 min)';
+  try {
+    const r = await api('/api/selftest');
+    const log = $('#log'); log.style.display = 'block';
+    log.textContent = `🧪 SELF-TEST — ${r.ok ? 'ALL SYSTEMS GO ✅' : 'PROBLEMS FOUND ⚠'}\n\n` +
+      r.checks.map(c => `${c.ok ? '✅' : '❌'} ${c.name}${c.info ? '  —  ' + c.info : ''}`).join('\n');
+    log.scrollIntoView({behavior:'smooth'});
+  } catch (e) { toast('Self-test failed to run: ' + e.message.slice(0,120)); }
+  btn.disabled = false; btn.textContent = old;
+}
+
+async function refresh() {
+  try { state = await api('/api/state'); } catch { return; }
+  // never clobber the user mid-typing (tags / rename / search) — try again next poll
+  const ae = document.activeElement;
+  if (ae && (ae.classList.contains('tagsin') || ae.classList.contains('rnin') || ae.id === 'search')) {
+    state.jobs.filter(j => j.status === 'running').forEach(j => watchJob(j.id));
+    return;
+  }
+  const open = [...document.querySelectorAll('#cards details[open]')]
+    .map(d => d.closest('.card')?.dataset.search);
+  $('#cards').innerHTML = state.files.map(card).join('') ||
+    '<p class="hint">No videos yet — drop one above.</p>';
+  document.querySelectorAll('#cards .card').forEach(c => {
+    if (open.includes(c.dataset.search)) { const d = c.querySelector('details'); if (d) d.open = true; }
+  });
+  filterCards();
+  state.jobs.filter(j => j.status === 'running').forEach(j => watchJob(j.id));
+}
+
+// ---- jobs (several can run at once — render every watched job's tail) ----
+const jobLogs = new Map();
+async function watchJob(id) {
+  if (jobLogs.has(id)) return;
+  jobLogs.set(id, null);
+  $('#log').style.display = 'block';
+  const timer = setInterval(async () => {
+    let j; try { j = await api('/api/job/' + id); } catch { return; }
+    jobLogs.set(id, j);
+    renderLogs();
+    if (j.status !== 'running') { clearInterval(timer); refresh(); }
+  }, 1500);
+}
+function renderLogs() {
+  const parts = [];
+  for (const j of jobLogs.values()) {
+    if (j) parts.push(`[${j.label}] ${j.status}\n` + j.lines.slice(-10).join('\n'));
+  }
+  const log = $('#log');
+  const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
+  log.textContent = parts.join('\n\n────────────────\n\n');
+  if (atBottom) log.scrollTop = log.scrollHeight;
+}
+
+// ---- toast (popups like alert/confirm are blocked in embedded browsers) ----
+let toastTimer = null;
+function toast(msg) {
+  const t = $('#toast');
+  t.textContent = msg; t.style.display = 'block';
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.style.display = 'none', 4500);
+}
+
+// ---- play (inline overlay — window.open is blocked in embedded browsers) ----
+function play(rel) {
+  $('#pvid').src = '/media/' + rel;
+  $('#pmodal').classList.add('open');
+  $('#pvid').play().catch(() => {});
+}
+function closePlay() {
+  $('#pvid').pause(); $('#pvid').src = '';
+  $('#pmodal').classList.remove('open');
+}
+
+// ---- clean modal ----
+function openClean(name) {
+  modalFile = name; box = null;
+  $('#mtitle').textContent = '🧹 Remove subtitles — ' + name;
+  $('#vid').src = '/media/files/' + name;
+  $('#previewbox').textContent = 'preview appears here';
+  $('#previewbtn').disabled = $('#applybtn').disabled = true;
+  $('#mhint').textContent = 'draw a box first';
+  $('#modal').classList.add('open');
+}
+function closeModal() { $('#modal').classList.remove('open'); $('#vid').src = ''; }
+
+const vid = $('#vid'), canvas = $('#canvas');
+vid.addEventListener('loadedmetadata', () => {
+  vid.currentTime = Math.min(1, vid.duration / 2);
+  canvas.width = canvas.clientWidth; canvas.height = canvas.clientHeight; draw();
+});
+$('#seek').oninput = e => { if (vid.duration) vid.currentTime = e.target.value / 100 * vid.duration; };
+let drag = null;
+const pos = e => { const r = canvas.getBoundingClientRect(); return {x:e.clientX-r.left, y:e.clientY-r.top}; };
+canvas.onmousedown = e => { drag = pos(e); e.preventDefault(); };
+canvas.onmousemove = e => {
+  if (!drag) return;
+  const p = pos(e);
+  box = {x:Math.min(drag.x,p.x), y:Math.min(drag.y,p.y), w:Math.abs(p.x-drag.x), h:Math.abs(p.y-drag.y)};
+  draw();
+};
+canvas.onmouseup = () => {
+  drag = null;
+  if (box && box.w > 6 && box.h > 6) {
+    $('#previewbtn').disabled = $('#applybtn').disabled = false;
+    $('#mhint').textContent = 'box locked — preview a method, scrub to check coverage';
+  }
+};
+function draw() {
+  const g = canvas.getContext('2d');
+  g.clearRect(0,0,canvas.width,canvas.height);
+  if (!box) return;
+  g.fillStyle = 'rgba(56,189,248,.25)'; g.strokeStyle = '#38bdf8'; g.lineWidth = 2;
+  g.fillRect(box.x,box.y,box.w,box.h); g.strokeRect(box.x,box.y,box.w,box.h);
+}
+function payload() {
+  const sx = vid.videoWidth / canvas.clientWidth, sy = vid.videoHeight / canvas.clientHeight;
+  return {file: modalFile,
+    x:Math.round(box.x*sx), y:Math.round(box.y*sy), w:Math.round(box.w*sx), h:Math.round(box.h*sy),
+    mode:(document.querySelector('input[name=mode]:checked')||{}).value || 'erase',
+    t: vid.currentTime || 1};
+}
+$('#previewbtn').onclick = async () => {
+  if (!box) return;
+  const pb = $('#previewbox');
+  pb.textContent = 'rendering preview…';
+  try {
+    const r = await fetch('/api/clean-preview', {method:'POST',
+      headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload())});
+    if (!r.ok) throw new Error(await r.text());
+    pb.innerHTML = `<img src="${URL.createObjectURL(await r.blob())}" style="width:100%;border-radius:10px;display:block">`;
+    $('#mhint').textContent = 'happy? Apply — or switch method and preview again';
+  } catch (e) { pb.textContent = 'preview failed: ' + e.message.replace(/<[^>]*>/g,' ').slice(0,120); }
+};
+$('#applybtn').onclick = async () => {
+  if (!box || !vid.videoWidth) return;
+  try {
+    const r = await api('/api/clean', {method:'POST',
+      headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload())});
+    closeModal(); watchJob(r.job_id);
+  } catch (e) { toast('Error: ' + e.message.replace(/<[^>]*>/g,' ').slice(0,140)); }
+};
+
+// ---- actions ----
+// ---- edit subtitles ----
+let editStem = null, editLines = [];
+function fmtTs(s) { const m = Math.floor(s/60), sec = (s%60).toFixed(1).padStart(4,'0'); return `${m}:${sec}`; }
+function renderEditRows() {
+  $('#erows').innerHTML = editLines.map((ln, i) =>
+    `<div class="erow"><span class="ts">${fmtTs(ln.start)}–${fmtTs(ln.end)}</span>
+     <input data-i="${i}" value="${(ln.text||'').replace(/"/g,'&quot;')}"></div>`).join('');
+  $('#ehint').textContent = `${editLines.length} lines`;
+}
+async function editCaptions(name) {
+  editStem = name.replace(/\.[^.]+$/, '');
+  try {
+    const r = await api('/api/captions/' + encodeURIComponent(editStem));
+    editLines = r.lines;
+  } catch (e) { toast('Cannot load subtitles: ' + e.message.replace(/<[^>]*>/g,' ').slice(0,120)); return; }
+  // pre-fill the paste box with the current subtitles so you can select-all, edit, re-load
+  $('#epaste').value = editLines.map(l => l.text).join(' ');
+  $('#epastebox').open = false;
+  renderEditRows();
+  $('#emodal').classList.add('open');
+}
+function closeEdit() { $('#emodal').classList.remove('open'); }
+
+// paste-my-own-text: split into short lines, spread across the existing speech time span
+function collectRowEdits() {
+  document.querySelectorAll('#erows input').forEach(inp => { editLines[+inp.dataset.i].text = inp.value; });
+}
+document.addEventListener('click', e => {
+  if (e.target.id === 'esave') saveEdit();
+  if (e.target.id === 'epasteapply') applyPastedText();
+  if (e.target.id === 'eaifix') aiFixLines(e.target);
+});
+
+async function aiFixLines(btn) {
+  collectRowEdits();                      // fix what's on screen, including your manual edits
+  btn.disabled = true;
+  $('#ehint').textContent = '🤖 AI is proofreading all lines… (~30s)';
+  try {
+    const r = await api('/api/aifix/' + encodeURIComponent(editStem), {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({lines: editLines})});
+    editLines = r.lines;
+    renderEditRows();
+    $('#ehint').textContent = r.changed
+      ? `🤖 fixed ${r.changed} line${r.changed === 1 ? '' : 's'} — review them, then 💾 Save & re-burn`
+      : '🤖 no spelling errors found — captions look clean';
+  } catch (e) {
+    $('#ehint').textContent = 'AI fix failed: ' + e.message.replace(/<[^>]*>/g,' ').slice(0,110);
+  }
+  btn.disabled = false;
+}
+function applyPastedText() {
+  const raw = ($('#epaste').value || '').trim();
+  if (!raw) { toast('Paste some text first.'); return; }
+  const wpl = Math.max(1, Math.min(8, parseInt($('#epasteWPL').value) || 3));
+  const words = raw.split(/\s+/).filter(Boolean);
+  // time span = the current speech window (first line start → last line end), else whole clip
+  const t0 = editLines.length ? editLines[0].start : 0;
+  const t1 = editLines.length ? editLines[editLines.length - 1].end : Math.max(2, words.length * 0.4);
+  const groups = [];
+  for (let i = 0; i < words.length; i += wpl) groups.push(words.slice(i, i + wpl));
+  const span = Math.max(0.5, t1 - t0), total = words.length;
+  let used = 0;
+  editLines = groups.map(g => {
+    const s = t0 + span * (used / total);
+    used += g.length;
+    const e = t0 + span * (used / total);
+    return { start: +s.toFixed(3), end: +e.toFixed(3), text: g.join(' ').toUpperCase() };
+  });
+  renderEditRows();
+  toast(`Loaded ${groups.length} lines from your text — tweak any line, then Save & re-burn.`);
+}
+
+async function saveEdit() {
+  collectRowEdits();
+  $('#ehint').textContent = 're-burning…';
+  try {
+    const r = await api('/api/captions/' + encodeURIComponent(editStem), {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({lines: editLines})});
+    closeEdit(); watchJob(r.job_id);
+    toast('Re-burning your edited subtitles — takes under a minute.');
+  } catch (e) { $('#ehint').textContent = 'error: ' + e.message.replace(/<[^>]*>/g,' ').slice(0,100); }
+}
+
+async function stopJob(id, btn) {
+  if (!armed(btn, '⏹ click again to stop')) return;
+  try {
+    await api('/api/job/' + id + '/stop', {method:'POST'});
+    toast('Stopping — the video itself is untouched (it is only replaced at the very end of a successful run).');
+    setTimeout(refresh, 1500);
+  } catch (e) { toast('Cannot stop: ' + e.message.replace(/<[^>]*>/g,' ').slice(0,140)); }
+}
+
+async function recaption(name) {
+  try {
+    const r = await api('/api/recaption', {method:'POST',
+      headers:{'Content-Type':'application/json'}, body:JSON.stringify({file:name})});
+    watchJob(r.job_id);
+  } catch (e) { toast('Error: ' + e.message.replace(/<[^>]*>/g,' ').slice(0,140)); }
+}
+function armed(btn, label) {
+  // two-step confirm that works everywhere (confirm() dialogs are blocked in embedded browsers)
+  if (btn.dataset.armed) { btn.dataset.armed = ''; return true; }
+  btn.dataset.armed = '1';
+  const old = btn.textContent; btn.textContent = label;
+  setTimeout(() => { btn.dataset.armed = ''; btn.textContent = old; }, 3500);
+  return false;
+}
+async function restore(name, btn) {
+  if (!armed(btn, '↩ click again to confirm')) return;
+  try {
+    await api('/api/restore', {method:'POST',
+      headers:{'Content-Type':'application/json'}, body:JSON.stringify({file:name})});
+    toast('Original (subtitled) video restored.'); refresh();
+  } catch (e) { toast('Cannot restore: ' + e.message.replace(/<[^>]*>/g,' ').slice(0,140)); }
+}
+async function del(name, btn) {
+  if (!armed(btn, '🗑 sure?')) return;
+  try {
+    await api('/api/file?file=' + encodeURIComponent(name), {method:'DELETE'});
+    toast(name + ' moved to .trash (recoverable).'); refresh();
+  } catch (e) { toast('Cannot delete: ' + e.message.replace(/<[^>]*>/g,' ').slice(0,140)); }
+}
+
+refresh();
+setInterval(refresh, 5000);
+</script>
+</body>
+</html>

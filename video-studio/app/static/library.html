@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Library — Video Studio</title>
+<link rel="stylesheet" href="/static/vs.css">
+<script src="/static/vs-nav.js" defer></script>
+<style>
+  * { box-sizing:border-box; margin:0; }
+  body { background:radial-gradient(1100px 500px at 75% -10%, #1a2036 0%, var(--bg) 55%);
+         color:var(--text); min-height:100vh; }
+  a { color:var(--accent2); text-decoration:none; }
+  #search { width:100%; max-width:420px; background:var(--panel2); border:1px solid var(--line);
+            border-radius:12px; padding:10px 14px; color:var(--text); font-size:14px; margin-bottom:18px; }
+  .stageslabel { display:flex; justify-content:space-between; color:var(--dim); font-size:9.5px;
+                 margin-top:3px; text-transform:uppercase; letter-spacing:.3px; }
+</style>
+</head>
+<body>
+<div class="vs-page">
+  <h2>Library</h2>
+  <p class="lead">Every video in the pipeline — upload → transcript → clean → script → dub.</p>
+  <div class="vs-chips" id="chips"></div>
+  <input id="search" type="search" placeholder="🔎 Filter by name, character, tag…">
+  <div class="vs-grid" id="grid"></div>
+  <div class="vs-soon" id="empty" style="display:none">
+    <div class="big">🎬</div>
+    <b>No videos yet.</b><br>Start with <a href="/new">New Project</a> to upload one.
+  </div>
+</div>
+<script>
+let VIDEOS = [];
+
+function card(v) {
+  const stages = [
+    ["up", true], ["script", !!v.transcript], ["clean", !!(v.cleaned || v.no_subs)],
+    ["rewrite", !!v.script], ["dub", !!v.dub],
+  ];
+  const done = stages.filter(s => s[1]).length;
+  const el = document.createElement("div");
+  el.className = "vs-card";
+  el.innerHTML =
+    `<a href="/media/uploads/${encodeURIComponent(v.name)}" target="_blank">
+       <img loading="lazy" src="/api/thumb/${encodeURIComponent(v.name)}" onerror="this.style.display='none'">
+     </a>
+     <div class="body">
+       <div class="name">${v.title || v.stem}</div>
+       <div class="meta">${v.character ? "👤 " + v.character + " · " : ""}${(v.size/1048576).toFixed(1)} MB</div>
+       <div class="vs-stage">${stages.map(s => `<i class="${s[1] ? "on" : ""}"></i>`).join("")}</div>
+       <div class="stageslabel"><span>upload</span><span>transcript</span><span>clean</span><span>script</span><span>dub</span></div>
+       <div>${(v.tags || []).map(t => `<span class="vs-badge"># ${t}</span>`).join("")}
+            ${v.dub ? `<a class="vs-badge" style="color:var(--ok)" href="/media/${v.dub}" target="_blank">▶ dubbed</a>` : ""}</div>
+     </div>`;
+  return el;
+}
+
+function render(filter) {
+  const q = (filter || "").toLowerCase();
+  const grid = document.getElementById("grid");
+  grid.innerHTML = "";
+  const vis = VIDEOS.filter(v =>
+    !q || (v.name + " " + (v.title||"") + " " + (v.character||"") + " " + (v.tags||[]).join(" ")).toLowerCase().includes(q));
+  vis.forEach(v => grid.appendChild(card(v)));
+  document.getElementById("empty").style.display = vis.length ? "none" : "block";
+}
+
+async function load() {
+  const d = await (await fetch("/api/creator/library")).json();
+  VIDEOS = d.videos || [];
+  const dubbed = VIDEOS.filter(v => v.dub).length;
+  const cleaned = VIDEOS.filter(v => v.cleaned || v.no_subs).length;
+  document.getElementById("chips").innerHTML =
+    `<div class="vs-chip"><b>${VIDEOS.length}</b><span>videos</span></div>
+     <div class="vs-chip"><b>${cleaned}</b><span>cleaned</span></div>
+     <div class="vs-chip"><b>${dubbed}</b><span>dubbed</span></div>
+     <div class="vs-chip"><b>${(d.characters||[]).length}</b><span>characters</span></div>
+     <div class="vs-chip"><b>$${(d.fal_spend ?? 0).toFixed(2)}</b><span>fal.ai spent</span></div>`;
+  render();
+}
+document.getElementById("search").addEventListener("input", e => render(e.target.value));
+load();
+</script>
+</body>
+</html>

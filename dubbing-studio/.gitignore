@@ -1,0 +1,24 @@
+# Virtual environment
+venv/
+.venv/
+
+# Python
+__pycache__/
+*.pyc
+
+# Generated outputs (dubbed audio + video)
+outputs/
+*.wav
+*.mp4
+*.mov
+
+# Model cache (XTTS v2 downloads here on first run; ~1.9 GB).
+# By default coqui-tts caches models under:
+#   Windows: C:\Users\<you>\AppData\Local\tts\
+# We also set TTS_HOME to ./models (see app.py) so models cache INSIDE the
+# project folder. Either way, do not commit the weights.
+models/
+
+# OS junk
+Thumbs.db
+.DS_Store
