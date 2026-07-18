@@ -17,6 +17,10 @@ A small command-line entry point is included too (`python app.py --cli ...`).
 """
 
 import os
+# torch >= 2.6 defaults torch.load to weights_only=True, which rejects the
+# pickled config classes inside the (trusted, locally downloaded) XTTS v2
+# checkpoint — restore the old behavior for this process only.
+os.environ.setdefault("TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD", "1")
 import sys
 import re
 import gc

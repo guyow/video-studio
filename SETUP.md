@@ -16,17 +16,31 @@ python -m venv .venv
 pip install -r requirements-cv.txt
 
 # Whisper/transcription venv
+# NOTE: the nvidia-* packages are REQUIRED for CUDA transcription — without them
+# faster-whisper fails with "Library cublas64_12.dll is not found"
 cd ..\course_pipeline
 python -m venv .venv
 .venv\Scripts\activate
-pip install -r requirements-whisper.txt
+pip install faster-whisper pydub nvidia-cublas-cu12 nvidia-cudnn-cu12
 
 # Dubbing (XTTS, Wav2Lip) venv — CUDA-heavy, watch the logs
+# NOTE: torch MUST stay pinned — newer torch wheels (2.13+) fail to install on
+# Windows with "WinError 206: filename too long" (their license tree exceeds MAX_PATH)
 cd ..\dubbing-studio
 python -m venv venv
 venv\Scripts\activate
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu126
-pip install -r requirements-dub.txt
+pip install torch==2.7.1 torchvision==0.22.1 torchaudio==2.7.1 --index-url https://download.pytorch.org/whl/cu126
+pip install TTS librosa numba tqdm gfpgan resemblyzer
+# TTS 0.22 breaks on transformers>=4.43 ("cannot import BeamSearchScorer") — pin it:
+pip install transformers==4.40.2
+# torch>=2.6 also rejects XTTS checkpoints (weights_only default). dubbing-studio/app.py
+# already sets TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1 at the top — keep that line if you
+# ever update the file.
+# then patch basicsr for modern torchvision (functional_tensor was removed):
+# in venv\Lib\site-packages\basicsr\data\degradations.py replace
+#   from torchvision.transforms.functional_tensor import rgb_to_grayscale
+# with
+#   from torchvision.transforms.functional import rgb_to_grayscale
 
 # VSR (optional, Power Tools)
 cd ..\tools\vsr
