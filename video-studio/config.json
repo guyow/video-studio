@@ -29,5 +29,9 @@
   "brand_out": "C:/Users/guyas/Claude/Projects/Video AI editing/autoVSL/output/brand-content",
   "remote_pin": "196941",
   "secret_key": "f82797f0f3a864b4db0bd0f3974712e953b20257359eaa14b09e3389a5e1b30b",
-  "lan_access": true
+  "lan_access": true,
+  "auto_cleanup": {
+    "enabled": true,
+    "delay_hours": 24.0
+  }
 }

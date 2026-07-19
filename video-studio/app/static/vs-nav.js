@@ -1,31 +1,23 @@
-/* Video Studio shell nav — injected at the top of every tab page. */
+/* Video Studio shell nav — injected at the top of every tab page.
+   One-page era: the Creator at "/" IS the workflow; everything else is a studio. */
 (function () {
   var TABS = [
-    ["Library", "/library", ["/library"]],
-    ["New Project", "/new", ["/new"]],
-    ["Transcript & Script", "/transcript", ["/transcript"]],
-    ["Subtitle Recovery", "/subtitles", ["/subtitles", "/eraser", "/recovery"]],
-    ["Dubbing & Lip Sync", "/dubbing", ["/dubbing"]],
-    ["Clone Winner", "/clone", ["/clone"]],
-    ["DubSync Repair", "/dubsync", ["/dubsync"]],
-    ["Captions", "/captions", ["/captions"]],
-    ["QA Review", "/qc", ["/qc"]],
-    ["Exports", "/exports", ["/exports"]],
+    ["🎬 Creator", "/", ["/"]],
     ["Brand Studio", "/brand-studio", ["/brand-studio"]],
-    ["Ads Factory", "/creator", ["/creator", "/", "/mission", "/studio"]],
-    ["Power Tools", "/tools", ["/tools"]],
+    ["Ads Factory", "/creator", ["/creator", "/mission", "/studio"]],
+    ["Power Tools", "/tools", ["/tools", "/exports", "/qc-lab", "/dubsync-lab",
+                               "/clone-lab", "/subtitles-lab", "/dubbing-lab", "/transcript-lab"]],
+    ["Settings", "/settings", ["/settings"]],
   ];
-  var SOON = {};
 
   var path = location.pathname.replace(/\/+$/, "") || "/";
   var bar = document.createElement("nav");
   bar.id = "vs-shell";
-  var html = '<a class="vs-logo" href="/library"><span class="dot">▶</span>Video <b>Studio</b></a>';
+  var html = '<a class="vs-logo" href="/"><span class="dot">▶</span>Video <b>Studio</b></a>';
   for (var i = 0; i < TABS.length; i++) {
     var t = TABS[i];
     var on = t[2].indexOf(path) >= 0 ? " on" : "";
-    var soon = SOON[t[1]] ? '<span class="soon">soon</span>' : "";
-    html += '<a class="vs-tab' + on + '" href="' + t[1] + '">' + t[0] + soon + "</a>";
+    html += '<a class="vs-tab' + on + '" href="' + t[1] + '">' + t[0] + "</a>";
   }
   bar.innerHTML = html;
 

@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Creator — Video Studio</title>
+<link rel="stylesheet" href="/static/vs-creator.css">
+<link rel="stylesheet" href="/static/vs.css">
+<script src="/static/vs-nav.js" defer></script>
+</head>
+<body>
+<header class="vs-head">
+  <h1>🎬 <b>Creator</b></h1>
+  <div class="sub">your whole workflow in one place — upload, script, dub, fix, caption, deliver</div>
+</header>
+
+<div class="vs-wrap">
+  <div class="vs-topbar">
+    <div id="vs-drop">
+      <input type="file" id="vs-file" accept="video/*,audio/*,.mp4,.mov,.mkv,.webm,.m4v,.mp3,.m4a,.wav" multiple style="display:none">
+      <span id="vs-dropmsg">⬆ Drop a video here or click to upload</span>
+    </div>
+    <input id="vs-search" type="text" placeholder="🔍 search title, character, tag…">
+    <div id="vs-chips"></div>
+  </div>
+  <div id="vs-grid"><div class="vs-empty">loading your library…</div></div>
+</div>
+
+<!-- full-screen editing modal -->
+<div id="vs-modal">
+  <div class="vs-mhead">
+    <button id="vs-mclose" title="back to library (Esc)">← Library</button>
+    <label>title<input id="vs-mtitle" placeholder=""></label>
+    <label>character<input id="vs-mchar" list="vs-mchars-dl" placeholder="who's in it"></label>
+    <datalist id="vs-mchars-dl"></datalist>
+    <label>tags<input id="vs-mtags" placeholder="comma, separated"></label>
+  </div>
+  <div class="vs-mbody">
+    <nav id="vs-rail"></nav>
+    <main id="vs-stepbody"></main>
+  </div>
+</div>
+
+<!-- job console drawer -->
+<div id="vs-drawer">
+  <div class="vs-dstrip" id="vs-dstrip">
+    <span id="vs-dspin">⏳</span>
+    <span class="lbl" id="vs-dlbl">…</span>
+    <div class="vs-dbar"><i id="vs-dfill"></i></div>
+    <span class="vs-hint" id="vs-dpct"></span>
+    <button class="vs-dstop" id="vs-dstop" title="stop this job">⏹ stop</button>
+    <span class="vs-hint" id="vs-dtoggle">▲ log</span>
+  </div>
+  <div id="vs-dlog"></div>
+</div>
+
+<script src="/static/js/vs-core.js"></script>
+<script src="/static/js/vs-jobdrawer.js"></script>
+<script src="/static/js/vs-step-source.js"></script>
+<script src="/static/js/vs-step-script.js"></script>
+<script src="/static/js/vs-step-dub.js"></script>
+<script src="/static/js/vs-step-fix.js"></script>
+<script src="/static/js/vs-step-captions.js"></script>
+<script src="/static/js/vs-step-deliver.js"></script>
+<script src="/static/js/vs-library.js"></script>
+<script src="/static/js/vs-modal.js"></script>
+<script>
+(async () => {
+  VS.library.init();
+  VS.drawer.init();
+  await VS.start();
+  VS.modalInit();
+})();
+</script>
+</body>
+</html>

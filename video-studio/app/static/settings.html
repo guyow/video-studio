@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Settings — Video Studio</title>
+<link rel="stylesheet" href="/static/vs-creator.css">
+<link rel="stylesheet" href="/static/vs.css">
+<script src="/static/vs-nav.js" defer></script>
+</head>
+<body>
+<header class="vs-head">
+  <h1>⚙️ <b>Settings</b></h1>
+  <div class="sub">auto-cleanup, export folder, system</div>
+</header>
+
+<div class="vs-wrap" style="max-width:760px">
+  <div class="vs-panel">
+    <h3>🧹 Auto-cleanup <span class="r vs-hint">keeps the disk light after you export</span></h3>
+    <div class="vs-hint">After a video is sent to Desktop, its heavy workspace (voice files, takes,
+      renders) can clean itself up automatically. Everything goes to the recoverable trash —
+      never permanently deleted — and only after the exported copy is confirmed on Desktop.</div>
+    <div class="vs-row">
+      <label class="vs-hint" style="display:flex;gap:7px;align-items:center">
+        <input type="checkbox" id="ac-on"> enable auto-cleanup</label>
+      <label class="vs-hint">wait
+        <select class="vs-sel" id="ac-delay">
+          <option value="1">1 hour</option>
+          <option value="24" selected>24 hours (recommended)</option>
+          <option value="72">3 days</option>
+          <option value="168">7 days</option>
+        </select></label>
+    </div>
+    <div id="ac-queue" style="margin-top:12px"></div>
+  </div>
+
+  <div class="vs-panel">
+    <h3>📤 Export folder</h3>
+    <div class="vs-hint">Finished videos are copied here when you hit “Send to Desktop”.</div>
+    <div class="vs-row">
+      <input class="vs-in" id="ex-dir" style="flex:1;min-width:280px">
+    </div>
+  </div>
+
+  <div class="vs-panel">
+    <h3>🔐 Remote access</h3>
+    <div class="vs-hint" id="ra-info">…</div>
+  </div>
+
+  <div class="vs-panel">
+    <h3>🖥 System</h3>
+    <div class="vs-hint">GPU: one dub at a time (the 4&nbsp;GB card can't run two).
+      Jobs & advanced labs live in <a href="/tools">Power Tools</a>.
+      All deliverables: <a href="/exports">Exports</a>.</div>
+  </div>
+
+  <div class="vs-row">
+    <button class="vs-btn primary" id="save">💾 Save settings</button>
+    <span class="vs-hint" id="msg"></span>
+  </div>
+</div>
+
+<script src="/static/js/vs-core.js"></script>
+<script>
+(async () => {
+  const $ = s => document.querySelector(s);
+  let cfg;
+  try { cfg = await VS.api("/api/settings"); } catch (e) { VS.toast("load failed: " + e.message); return; }
+  $("#ac-on").checked = cfg.auto_cleanup.enabled;
+  $("#ac-delay").value = String(Math.round(cfg.auto_cleanup.delay_hours));
+  $("#ex-dir").value = cfg.exports_dir;
+  $("#ra-info").innerHTML =
+    `PIN: <b>${cfg.remote_pin_set ? "configured" : "not set"}</b> · LAN access: <b>${cfg.lan_access ? "on" : "off"}</b>
+     · port ${cfg.port}<br>change these in <code>video-studio/config.json</code> and restart.`;
+
+  async function queue() {
+    try {
+      const q = await VS.api("/api/cleanup/queue");
+      const box = $("#ac-queue");
+      if (!(q.items || []).length) { box.innerHTML = '<span class="vs-hint">nothing queued for cleanup</span>'; return; }
+      box.innerHTML = q.items.map(i => {
+        const h = Math.floor(i.seconds_left / 3600), m = Math.floor(i.seconds_left % 3600 / 60);
+        return `<div class="vs-row" style="margin-top:5px">
+          <span class="vs-hint" style="font-family:var(--mono)">🧹 ${VS.esc(i.stem)}</span>
+          <span class="vs-hint">${i.status === "pending" ? `in ${h}h ${m}m` : VS.esc(i.status)}</span>
+          <button class="vs-btn" data-s="${VS.esc(i.stem)}" style="padding:3px 10px;font-size:11px">keep it</button>
+        </div>`;
+      }).join("");
+      box.querySelectorAll("button").forEach(b => b.onclick = async () => {
+        await VS.post("/api/cleanup/cancel", {stem: b.dataset.s});
+        queue();
+      });
+    } catch (e) { /* ignore */ }
+  }
+  queue();
+  setInterval(queue, 30000);
+
+  $("#save").onclick = async () => {
+    try {
+      await VS.post("/api/settings", {
+        auto_cleanup: {enabled: $("#ac-on").checked, delay_hours: parseFloat($("#ac-delay").value)},
+        exports_dir: $("#ex-dir").value.trim(),
+      });
+      $("#msg").textContent = "✅ saved";
+      setTimeout(() => $("#msg").textContent = "", 3000);
+    } catch (e) { VS.toast("Save failed: " + e.message); }
+  };
+})();
+</script>
+</body>
+</html>

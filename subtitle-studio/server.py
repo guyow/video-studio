@@ -607,17 +607,18 @@ def api_boxcaption():
     No ProPainter — finishes in ~1 minute."""
     body = request.get_json(force=True)
     name = Path(body.get("file") or "").name
-    style = body.get("style") if body.get("style") in ("blur", "box", "magic") else "magic"
+    style = body.get("style") if body.get("style") in ("blur", "box", "magic", "sttn") else "magic"
     want_caps = body.get("captions", True)
     src = FILES / name
     if not name or not src.is_file():
         abort(404, "file not found")
     if not WHISPER_PY.is_file():
         abort(500, f"whisper venv missing at {WHISPER_PY}")
-    if style == "magic" and not VSR_PY.is_file():
-        abort(500, "magic erase engine (VSR) not installed")
-    guard_busy(name, "erase" if style == "magic" else "")
-    label = ("Magic erase" if style == "magic" else f"Cover ({style})") + \
+    if style == "sttn" and not VSR_PY.is_file():
+        abort(500, "STTN engine (VSR) not installed")
+    guard_busy(name, "erase" if style in ("magic", "sttn") else "")
+    label = ("Magic erase" if style == "magic" else
+             "STTN erase" if style == "sttn" else f"Cover ({style})") + \
             (" + new captions" if want_caps else " only")
     job = new_job("boxcaption", f"{label} — {name}", name)
 
@@ -631,9 +632,11 @@ def api_boxcaption():
             if rc != 0:
                 raise RuntimeError("detection failed — see log above")
 
-            if style == "magic":
-                # TRUE pixel recovery: VSR STTN rebuilds the real background behind the text
-                # from reference frames — invisible removal, ~5 fps on this GPU
+            if style in ("magic", "sttn"):
+                # magic = OUR LAMA eraser: GENERATES the fill per frame — works even when
+                #   captions cover the area on every frame (static talking-heads).
+                # sttn  = VSR temporal engine: copies real background from other frames —
+                #   fastest + literal, but ghosts when the background is never revealed.
                 box = json.loads(box_json.read_text(encoding="utf-8"))
                 if box.get("none"):
                     log_line(job, "no burned-in subtitles found — skipping erase")
@@ -642,16 +645,23 @@ def api_boxcaption():
                     ymin = max(0, box["y"] - pad); ymax = min(box["vh"], box["y"] + box["h"] + pad)
                     xmin = max(0, box["x"] - pad); xmax = min(box["vw"], box["x"] + box["w"] + pad)
                     tmp = FILES / f"{src.stem}.cleaning{src.suffix}"
-                    log_line(job, f"=== step 2/{'3' if want_caps else '2'} — magic erase "
-                                  f"(recovering the real background, band y{ymin}-{ymax})")
+                    log_line(job, f"=== step 2/{'3' if want_caps else '2'} — {style} erase "
+                                  f"(band y{ymin}-{ymax})")
+                    if style == "magic":
+                        cmd = [str(CV_PY), "-u", str(ROOT / "lama_erase.py"), str(src), str(tmp),
+                               "--x", str(xmin), "--y", str(ymin),
+                               "--w", str(xmax - xmin), "--h", str(ymax - ymin)]
+                        cmd_cwd = None
+                    else:
+                        cmd = [str(VSR_PY), "-u", "backend/main.py",
+                               "-i", str(src), "-o", str(tmp),
+                               "--inpaint-mode", "sttn-auto",
+                               "-c", str(ymin), str(ymax), str(xmin), str(xmax)]
+                        cmd_cwd = VSR_DIR
                     acquire_gpu(job)
                     try:
                         wait_for_gpu(job)
-                        rc = stream_cmd(job, [str(VSR_PY), "-u", "backend/main.py",
-                                              "-i", str(src), "-o", str(tmp),
-                                              "--inpaint-mode", "sttn-auto",
-                                              "-c", str(ymin), str(ymax), str(xmin), str(xmax)],
-                                        cwd=VSR_DIR)
+                        rc = stream_cmd(job, cmd, cwd=cmd_cwd)
                     finally:
                         GPU_LOCK.release()
                     if rc != 0 or not tmp.is_file():

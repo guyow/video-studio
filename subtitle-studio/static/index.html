@@ -235,7 +235,7 @@ function card(f) {
         <input class="tagsin" value="${tags.join(', ').replace(/"/g,'&quot;')}" placeholder="🏷 add tags, comma separated (e.g. paulina, gummies, hook-2)" onchange="saveTags('${f.name}', this)">
         <div class="row">
           ${j ? `<button class="danger" onclick="stopJob('${j.id}', this)">⏹ Stop</button>` : ''}
-          <button class="primary" ${dis} onclick="boxCaption('${f.name}','magic',true)" title="TRUE invisible removal: the AI rebuilds the real background behind the old subtitles pixel-by-pixel (no box, no blur — like nothing was there), then burns fresh audio-synced captions. ~1 min per 10 sec of video.">✨ Magic erase + captions</button>
+          <button class="primary" ${dis} onclick="boxCaption('${f.name}','magic',true)" title="Invisible removal that works even when captions are on-screen the whole video: the AI generates the background fill pixel-by-pixel, then burns fresh audio-synced captions. ~2-3 min per 10 sec of video.">✨ Magic erase + captions</button>
           <button ${dis} onclick="boxCaption('${f.name}','magic',false)" title="Same invisible removal, but adds NO new captions — just the clean video.">🪄 Magic erase only</button>
           ${f.editable ? `<button ${dis} onclick="editCaptions('${f.name}')" title="Edit the caption text, paste your own script, or run the AI spell-fixer">✏️ Edit subtitles</button>` : ''}
           ${f.captioned ? `<button onclick="play('${f.captioned}')">▶ result</button>` : ''}
@@ -246,6 +246,7 @@ function card(f) {
             <button ${dis} onclick="boxCaption('${f.name}','blur',true)" title="Fastest option (~1 min total): frosted cover over the old subs + new captions">⚡ fast cover + captions</button>
             <button ${dis} onclick="boxCaption('${f.name}','blur',false)" title="Frosted cover only, no captions (~30 sec)">⚡ fast cover only</button>
             <button ${dis} onclick="boxCaption('${f.name}','box',true)" title="Solid black bar + new captions">📦 black bar + captions</button>
+            <button ${dis} onclick="boxCaption('${f.name}','sttn',true)" title="Alternative erase: copies the REAL background from other frames — fastest and most literal, great when the background moves (hair, walking), but ghosts if captions cover the area in every frame.">🚀 STTN erase + captions</button>
             <button ${dis} onclick="recaption('${f.name}')" title="Video already clean? Just transcribe the audio and add captions — video untouched">📝 captions only</button>
             <button ${dis} onclick="openClean('${f.name}')" title="Draw the subtitle box yourself + pick the method">🎯 manual box</button>
             ${f.cleaned ? `<button class="danger" onclick="restore('${f.name}', this)">↩ restore original</button>` : ''}

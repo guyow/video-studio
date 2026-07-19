@@ -41,6 +41,7 @@ Respond with ONLY the rewritten script text — no preamble, no explanation, no 
 
 from flask import (Flask, abort, jsonify, request, send_file, send_from_directory,
                    redirect, session)
+import cleanup
 from werkzeug.utils import secure_filename
 
 APP_DIR = Path(__file__).resolve().parent          # video-studio/app
@@ -2191,6 +2192,12 @@ def library_meta() -> dict:
     return read_json(LIBRARY_FILE) or {}
 
 
+def qc_verdict_for(rel_path: str) -> str | None:
+    """QC verdict (pass/fail/pending) recorded for a deliverable, if any."""
+    r = (read_json(QC_REVIEWS) or {}).get(rel_path) or {}
+    return r.get("verdict")
+
+
 @app.get("/api/creator/library")
 def api_creator_library():
     """Everything the Creator page needs in one call: videos + pipeline state + tags."""
@@ -2204,6 +2211,8 @@ def api_creator_library():
             final = work / "final.mp4"
             m = meta.get(p.name) or {}
             orig_words = len(transcript_plain_text(stem).split())  # original speaker's word count → pace
+            captioned = ((work / "final-captioned.mp4").is_file()
+                         or (SUBSTUDIO_OUT / stem / "captioned.mp4").is_file())
             vids.append({
                 "name": p.name, "stem": stem, "size": p.stat().st_size, "mtime": p.stat().st_mtime,
                 "orig_words": orig_words,
@@ -2212,6 +2221,10 @@ def api_creator_library():
                 "script": (work / "script-edited.txt").is_file(),
                 "dub": f"output/script-swap/{stem}/final.mp4" if final.is_file() else None,
                 "dub_mtime": final.stat().st_mtime if final.is_file() else None,
+                "captioned": captioned,
+                "exported": (work / ".exported").is_file(),
+                "qc_verdict": qc_verdict_for(f"output/script-swap/{stem}/final.mp4"),
+                "duo": (work / "duo-config.json").is_file(),
                 "title": m.get("title") or "", "character": m.get("character") or "",
                 "tags": m.get("tags") or [], "no_subs": bool(m.get("no_subs")),
                 "approved": m.get("approved") or {},
@@ -3349,7 +3362,108 @@ def api_exports_send():
         dest = EXPORTS_DIR / f"{Path(flat).stem}-{n}.mp4"
         n += 1
     shutil.copy2(src, dest)
-    return jsonify({"saved_to": str(dest)})
+
+    # Creator page extras: mark the workdir as exported (drives the Deliver badge)
+    # and optionally queue the heavy workdir for auto-cleanup once it's safe.
+    stem = Path(body.get("stem") or "").name
+    queued = None
+    if stem and (SWAP_WORK / stem).is_dir():
+        (SWAP_WORK / stem / ".exported").write_text(str(dest), encoding="utf-8")
+        if body.get("auto_cleanup"):
+            delay = float(CONFIG.get("auto_cleanup", {}).get("delay_hours", 24))
+            queued = cleanup.enqueue(stem, delay)
+    return jsonify({"saved_to": str(dest), "cleanup": queued})
+
+
+# ------------------------------------------------ Settings + auto-cleanup
+
+CONFIG_FILE = VS_ROOT / "config.json"
+config_lock = threading.Lock()
+
+
+@app.get("/api/settings")
+def api_settings_get():
+    ac = CONFIG.get("auto_cleanup") or {}
+    return jsonify({
+        "auto_cleanup": {"enabled": bool(ac.get("enabled", False)),
+                         "delay_hours": float(ac.get("delay_hours", 24)),
+                         "min_free_space_gb": float(ac.get("min_free_space_gb", 20))},
+        "exports_dir": str(EXPORTS_DIR),
+        "remote_pin_set": bool(CONFIG.get("remote_pin")),
+        "lan_access": bool(CONFIG.get("lan_access")),
+        "port": CONFIG.get("port"),
+    })
+
+
+@app.post("/api/settings")
+def api_settings_save():
+    global EXPORTS_DIR
+    b = request.get_json(force=True)
+    with config_lock:
+        if isinstance(b.get("auto_cleanup"), dict):
+            ac = CONFIG.setdefault("auto_cleanup", {})
+            src = b["auto_cleanup"]
+            if "enabled" in src:
+                ac["enabled"] = bool(src["enabled"])
+            if "delay_hours" in src:
+                d = float(src["delay_hours"])
+                if not (0 <= d <= 168):
+                    abort(400, "delay_hours must be 0-168")
+                ac["delay_hours"] = d
+            if "min_free_space_gb" in src:
+                ac["min_free_space_gb"] = max(0.0, float(src["min_free_space_gb"]))
+        if b.get("exports_dir"):
+            p = Path(b["exports_dir"]).expanduser()
+            if not p.is_absolute():
+                abort(400, "exports_dir must be an absolute path")
+            p.mkdir(parents=True, exist_ok=True)
+            CONFIG["exports_dir"] = str(p)
+            EXPORTS_DIR = p
+        tmp = CONFIG_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(CONFIG, indent=2), encoding="utf-8")
+        tmp.replace(CONFIG_FILE)
+    return api_settings_get()
+
+
+@app.get("/api/cleanup/queue")
+def api_cleanup_queue_list():
+    return jsonify({"items": cleanup.list_queue()})
+
+
+@app.post("/api/cleanup/queue")
+def api_cleanup_queue_add():
+    b = request.get_json(force=True)
+    stem = Path(b.get("stem") or "").name
+    if not stem or not (SWAP_WORK / stem).is_dir():
+        abort(404, "no workdir for that video")
+    delay = float(b.get("delay_hours", CONFIG.get("auto_cleanup", {}).get("delay_hours", 24)))
+    return jsonify({"queued": cleanup.enqueue(stem, delay)})
+
+
+@app.post("/api/cleanup/cancel")
+def api_cleanup_cancel():
+    b = request.get_json(force=True)
+    stem = Path(b.get("stem") or "").name
+    return jsonify({"cancelled": cleanup.cancel(stem)})
+
+
+def _cleanup_is_busy(stem: str) -> bool:
+    with jobs_lock:
+        return any(j["status"] == "running" and j.get("slug") in (stem, f"{stem}.mp4")
+                   for j in jobs.values())
+
+
+def _cleanup_has_export(stem: str) -> bool:
+    return EXPORTS_DIR.is_dir() and any(EXPORTS_DIR.glob(f"{stem}*.mp4"))
+
+
+def _cleanup_trash(stem: str) -> str:
+    return soft_delete(SWAP_WORK / stem, f"workdir-{stem}")
+
+
+cleanup.init(ROOT / "output" / ".cleanup-queue.json", ROOT / "output" / ".cleanup-log.json")
+cleanup.start_daemon(lambda: CONFIG.get("auto_cleanup") or {},
+                     _cleanup_is_busy, _cleanup_has_export, _cleanup_trash)
 
 
 # ------------------------------------------------ Brand Content Studio (Coffee UI Studio)
@@ -3617,36 +3731,62 @@ def brand_studio_page():
 
 
 # ---------------------------------------------------------------- static
+# The Creator IS the app: one page, the whole workflow. Every old tab route
+# 302s into the Creator modal at the right step (?v= carries the video).
+# The old pages stay reachable as "labs" under Power Tools for edge tooling.
 
 @app.get("/")
 def index():
-    # Library is Video Studio's front door.
-    return send_from_directory(STATIC, "library.html")
+    return send_from_directory(STATIC, "creator-studio.html")
 
 
-@app.get("/library")
-def library_page():
-    return send_from_directory(STATIC, "library.html")
+@app.get("/settings")
+def settings_page():
+    return send_from_directory(STATIC, "settings.html")
 
 
-@app.get("/new")
-def new_project_page():
-    return send_from_directory(STATIC, "new-project.html")
+_LEGACY_STEP = {
+    "/library": None, "/new": "__new__",
+    "/transcript": "script",
+    "/subtitles": "source", "/eraser": "source", "/recovery": "source",
+    "/dubbing": "dub",
+    "/captions": "captions",
+    "/dubsync": "fix", "/qc": "fix",
+    "/clone": "deliver",
+}
 
 
-@app.get("/transcript")
-def transcript_page():
-    return send_from_directory(STATIC, "transcript.html")
+def _legacy_redirect(step):
+    def handler():
+        from urllib.parse import urlencode
+        q = {}
+        v = request.args.get("v") or request.args.get("file")
+        if v:
+            q["v"] = v
+        if step == "__new__":
+            q["new"] = "1"
+        elif step:
+            q["step"] = step
+        return redirect("/" + ("?" + urlencode(q) if q else ""), code=302)
+    return handler
 
 
-@app.get("/captions")
-def captions_page():
-    return send_from_directory(STATIC, "captions.html")
+for _path, _step in _LEGACY_STEP.items():
+    app.add_url_rule(_path, f"legacy_{_path.strip('/')}", _legacy_redirect(_step))
+
+_LABS = {"/qc-lab": "qc.html", "/dubsync-lab": "dubsync.html",
+         "/clone-lab": "clone.html", "/subtitles-lab": "subtitles.html",
+         "/dubbing-lab": "dubbing.html", "/transcript-lab": "transcript.html"}
 
 
-@app.get("/dubsync")
-def dubsync_page():
-    return send_from_directory(STATIC, "dubsync.html")
+def _lab_page(fname):
+    def handler():
+        return send_from_directory(STATIC, fname)
+    return handler
+
+
+for _path, _file in _LABS.items():
+    app.add_url_rule(_path, f"lab_{_path.strip('/')}", _lab_page(_file))
 
 
 @app.get("/exports")
@@ -3671,33 +3811,8 @@ def mission_page():
 
 @app.get("/creator")
 def creator_page():
+    # Ads Factory (the original autoVSL creator flows) — distinct from "/"
     return send_from_directory(STATIC, "creator.html")
-
-
-@app.get("/qc")
-def qc_page():
-    return send_from_directory(STATIC, "qc.html")
-
-
-@app.get("/clone")
-def clone_page():
-    return send_from_directory(STATIC, "clone.html")
-
-
-@app.get("/subtitles")
-def subtitles_page():
-    return send_from_directory(STATIC, "subtitles.html")
-
-
-@app.get("/eraser")
-def eraser_page():
-    # merged into the unified Subtitles Studio
-    return send_from_directory(STATIC, "subtitles.html")
-
-
-@app.get("/dubbing")
-def dubbing_page():
-    return send_from_directory(STATIC, "dubbing.html")
 
 
 @app.get("/static/<path:name>")
