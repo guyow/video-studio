@@ -46,10 +46,20 @@
 
         <div id="dub-single">
           <div class="vs-panel">
-            <h3>Engine</h3>
-            <div class="vs-row">
-              <button class="vs-btn dub-eng on" data-eng="local">💻 Local — free &amp; offline</button>
-              <button class="vs-btn dub-eng" data-eng="fal">☁ fal.ai — cloud, paid</button>
+            <h3>Quality &amp; price — pick your engine</h3>
+            <div class="vs-row" style="align-items:stretch">
+              <label class="vs-radio dub-eng on" data-eng="local" style="flex:1;min-width:230px;display:block">
+                <b>💻 Local — FREE</b><br>
+                <span class="vs-hint">XTTS voice clone + Wav2Lip HD on your GPU.
+                  Good for testing; softer mouth detail.</span><br>
+                <span class="vs-free">$0 · ~15 min</span>
+              </label>
+              <label class="vs-radio dub-eng" data-eng="fal" style="flex:1;min-width:230px;display:block">
+                <b>☁ Premium cloud — PAID</b><br>
+                <span class="vs-hint">MiniMax HD voice + sync.so pro lip-sync — the pipeline
+                  that made your winners. Best for the ad you'll actually run.</span><br>
+                <span class="vs-paid">~$1.50 clone + ~$3/min · ~5 min</span>
+              </label>
             </div>
             <div id="dub-local" class="vs-row">
               <label class="vs-hint">lip-sync
@@ -133,11 +143,20 @@
         if (b.dataset.mode === "duo") loadDuo();
       });
       VS.$$(".dub-eng", el).forEach(b => b.onclick = () => {
-        VS.$$(".dub-eng", el).forEach(x => x.classList.toggle("on", x === b));
+        VS.$$(".dub-eng", el).forEach(x => {
+          const on = x === b;
+          x.classList.toggle("on", on);
+          x.style.borderColor = on ? "var(--accent)" : "";
+          x.style.background = on ? "rgba(124,92,255,.12)" : "";
+        });
         el.querySelector("#dub-local").style.display = b.dataset.eng === "local" ? "" : "none";
         el.querySelector("#dub-fal").style.display = b.dataset.eng === "fal" ? "" : "none";
         updCost();
       });
+      // highlight the default selection
+      const defEng = el.querySelector(".dub-eng.on");
+      defEng.style.borderColor = "var(--accent)";
+      defEng.style.background = "rgba(124,92,255,.12)";
       const updCost = () => {
         const p = plan(el);
         const c = el.querySelector("#dub-cost");
