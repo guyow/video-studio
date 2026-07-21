@@ -535,7 +535,15 @@ def api_run():
                 keepvol = 0.0
             if keepvol:
                 cmd += ["--keep-volume", str(keepvol)]
-            label = (f"Local dub — {fname} (XTTS voice"
+            voice_label = "on-screen voice"
+            vid = Path(str(body.get("voice_id") or "")).name
+            if vid:
+                ref = VOICES_DIR / vid / "ref.wav"
+                if not ref.is_file():
+                    abort(400, "chosen voice not found in the Voice Bank")
+                cmd += ["--voice-ref", str(ref)]
+                voice_label = f"voice:{_voice_meta(vid).get('name') or vid}"
+            label = (f"Local dub — {fname} ({voice_label}"
                      + (", free)" if not paid else f" + {lipsync} lip-sync $)"))
             cost_ctx = {"engine": "local", "tts": "local", "tier": lipsync,
                         "video": str(src), "stem": stem, "paid": paid}
@@ -3377,6 +3385,110 @@ def api_exports_send():
             delay = float(CONFIG.get("auto_cleanup", {}).get("delay_hours", 24))
             queued = cleanup.enqueue(stem, delay)
     return jsonify({"saved_to": str(dest), "cleanup": queued})
+
+
+# ------------------------------------------------ Voice Bank
+# Clone a voice from any library video, save it as a named voice, then reuse
+# it to dub OTHER characters. Extraction is free/local (ffmpeg); the saved
+# reference feeds XTTS on the local dub path (--voice-ref).
+
+VOICES_DIR = ROOT / "output" / "voices"
+VOICE_REF_SECONDS = 20          # a longer clean reference → a richer clone
+
+
+def _voice_meta(vid: str) -> dict:
+    return read_json(VOICES_DIR / vid / "voice.json") or {}
+
+
+@app.get("/api/voices")
+def api_voices():
+    out = []
+    if VOICES_DIR.is_dir():
+        for d in sorted(VOICES_DIR.iterdir(), key=lambda x: x.stat().st_mtime, reverse=True):
+            info = read_json(d / "voice.json")
+            if not d.is_dir() or not info or not (d / "ref.wav").is_file():
+                continue
+            out.append({
+                "id": d.name, "name": info.get("name") or d.name,
+                "source": info.get("source"), "created": info.get("created"),
+                "sample": f"output/voices/{d.name}/sample.mp3" if (d / "sample.mp3").is_file() else None,
+            })
+    return jsonify({"voices": out})
+
+
+@app.post("/api/voices/create")
+def api_voices_create():
+    """Extract a clean voice reference from a library video and save it as a voice."""
+    b = request.get_json(force=True)
+    fname = Path(b.get("file") or "").name
+    src = UPLOADS / fname
+    if not fname or not src.is_file():
+        abort(400, "pick a library video first")
+    name = (b.get("name") or Path(fname).stem).strip()[:40] or Path(fname).stem
+    vid = secure_filename(name).strip(".-_").lower() or "voice"
+    base, n = vid, 2
+    while (VOICES_DIR / vid).exists():
+        vid = f"{base}-{n}"
+        n += 1
+    work = VOICES_DIR / vid
+    work.mkdir(parents=True, exist_ok=True)
+    ref = work / "ref.wav"
+    sample = work / "sample.mp3"
+    env = job_env()
+    # full mono 16k, then take up to VOICE_REF_SECONDS from ~1s in as the clone reference
+    full = work / "_full.wav"
+    r = subprocess.run([ff_tool("ffmpeg"), "-y", "-loglevel", "error", "-i", str(src),
+                        "-vn", "-ac", "1", "-ar", "16000", str(full)], env=env)
+    if r.returncode != 0 or not full.is_file():
+        shutil.rmtree(work, ignore_errors=True)
+        abort(400, "that video has no usable audio to clone from")
+    dur = video_duration(ffprobe_json(full)) or 0.0
+    start = 1.0 if dur > VOICE_REF_SECONDS + 2 else 0.0
+    clip = min(VOICE_REF_SECONDS, max(2.0, dur - start))
+    subprocess.run([ff_tool("ffmpeg"), "-y", "-loglevel", "error", "-ss", str(start), "-t", str(clip),
+                    "-i", str(full), "-af", "highpass=f=60,dynaudnorm",
+                    "-ac", "1", "-ar", "16000", str(ref)], env=env)
+    # short mp3 preview (what the voice actually sounds like)
+    subprocess.run([ff_tool("ffmpeg"), "-y", "-loglevel", "error", "-t", "8", "-i", str(ref),
+                    "-codec:a", "libmp3lame", "-b:a", "128k", str(sample)], env=env)
+    full.unlink(missing_ok=True)
+    if not ref.is_file() or ref.stat().st_size == 0:
+        shutil.rmtree(work, ignore_errors=True)
+        abort(400, "could not build a voice reference (need a couple of seconds of clear speech)")
+    (work / "voice.json").write_text(json.dumps(
+        {"name": name, "source": fname, "created": time.time(),
+         "ref_seconds": round(clip, 1)}, indent=2), encoding="utf-8")
+    return jsonify({"id": vid, "name": name,
+                    "sample": f"output/voices/{vid}/sample.mp3"})
+
+
+@app.post("/api/voices/rename")
+def api_voices_rename():
+    b = request.get_json(force=True)
+    vid = Path(b.get("id") or "").name
+    name = (b.get("name") or "").strip()[:40]
+    vf = VOICES_DIR / vid / "voice.json"
+    if not name or not vf.is_file():
+        abort(404, "voice not found")
+    info = read_json(vf)
+    info["name"] = name
+    vf.write_text(json.dumps(info, indent=2), encoding="utf-8")
+    return jsonify({"id": vid, "name": name})
+
+
+@app.post("/api/voices/delete")
+def api_voices_delete():
+    vid = Path(request.get_json(force=True).get("id") or "").name
+    d = VOICES_DIR / vid
+    if not d.is_dir():
+        abort(404, "voice not found")
+    label = soft_delete(d, f"voice-{vid}")
+    return jsonify({"deleted": vid, "trash": label})
+
+
+@app.get("/voices")
+def voices_page():
+    return send_from_directory(STATIC, "voices.html")
 
 
 # ------------------------------------------------ Image -> Video (fal.ai)

@@ -62,6 +62,10 @@
               </label>
             </div>
             <div id="dub-local" class="vs-row">
+              <label class="vs-hint">voice
+                <select class="vs-sel" id="dub-voice">
+                  <option value="">🎤 On-screen speaker (clone from this video)</option>
+                </select></label>
               <label class="vs-hint">lip-sync
                 <select class="vs-sel" id="dub-llip">
                   <option value="wav2lip-hd" selected>Wav2Lip HD (GFPGAN, free)</option>
@@ -174,6 +178,8 @@
         if (p.engine === "local") {
           body.lipsync = el.querySelector("#dub-llip").value;
           body.language = el.querySelector("#dub-lang").value;
+          const vsel = el.querySelector("#dub-voice");
+          if (vsel && vsel.value) body.voice_id = vsel.value;
         } else {
           body.tts = el.querySelector("#dub-tts").value;
           body.tier = el.querySelector("#dub-tier").value;
@@ -297,6 +303,18 @@
           VS.toast("🎙 Interview dub started — cloning both voices");
         } catch (e) { VS.toast("Error: " + e.message); }
       };
+
+      // populate the Voice Bank picker (local path)
+      VS.api("/api/voices").then(d => {
+        const sel = el.querySelector("#dub-voice");
+        if (!sel || !d.voices || !d.voices.length) return;
+        d.voices.forEach(vo => {
+          const o = document.createElement("option");
+          o.value = vo.id;
+          o.textContent = "🎙 " + vo.name;
+          sel.appendChild(o);
+        });
+      }).catch(() => {});
 
       if (v.duo) loadDuo();
       this.sync(ctx);

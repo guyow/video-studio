@@ -253,6 +253,14 @@ the migration is additive and path-based, nothing in the source projects ever ch
   compliant copy (no banned words/claims, names Fairy Flame, "supports" framing), correct brand type +
   gold CTA (never white-on-gold) + wordmark. Raw ComfyUI stays at `/studio` (advanced). Phase 1 = Meta
   1:1; P2/P3 (4:5, 9:16, carousels, web scraper-refresh) pending.
+- [x] **Voice Bank** *(2026-07-22)* — new tab `/voices`: clone the voice from any library
+  video, save it as a named voice (with an audio preview), and reuse it to dub OTHER characters.
+  Extraction is free/local (ffmpeg — a clean ~20s reference, no GPU). In the Dub step's local
+  engine, a "Voice" picker lets you choose the on-screen speaker (default) or any saved voice;
+  the saved reference feeds XTTS via `local_dub.py --voice-ref` → `dubbing-studio --reference`.
+  Endpoints `/api/voices`, `/api/voices/{create,rename,delete}`; voices live in
+  `output/voices/<id>/`. (Local single-dub for now; per-speaker banked voices in interview mode
+  is a follow-up.)
 - [x] **Image → Video** *(2026-07-19)* — new tab `/image-to-video`: upload a picture + a
   motion/scene prompt → a ~30s clip via fal.ai. fal image-to-video models only render 5-10s,
   so `engines/i2v_gen.py` chains segments (each segment's last frame seeds the next) and

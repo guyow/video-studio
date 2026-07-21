@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Voice Bank — Video Studio</title>
+<link rel="stylesheet" href="/static/vs-creator.css">
+<link rel="stylesheet" href="/static/vs.css">
+<script src="/static/vs-nav.js" defer></script>
+<style>
+  main.vb { max-width:1100px; margin:0 auto; padding:20px 26px;
+            display:grid; grid-template-columns:380px 1fr; gap:20px; align-items:start; }
+  @media (max-width:960px){ main.vb { grid-template-columns:1fr; } }
+  .vrow { display:flex; align-items:center; gap:10px; padding:10px 12px; border:1px solid var(--line);
+          border-radius:11px; background:var(--panel2); margin-bottom:8px; cursor:pointer; font-size:13px; }
+  .vrow:hover { border-color:var(--accent); } .vrow.sel { border-color:var(--accent); background:rgba(124,92,255,.14); }
+  .vrow .nm { flex:1; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .voicecard { border:1px solid var(--line); border-radius:12px; background:var(--panel); padding:14px 16px; margin-bottom:10px; }
+  .voicecard .top { display:flex; align-items:center; gap:10px; }
+  .voicecard .top b { flex:1; font-size:14px; }
+  .voicecard audio { width:100%; margin-top:10px; }
+  .voicecard .src { color:var(--dim); font-size:11.5px; margin-top:6px; }
+  .iconbtn { background:none; border:1px solid var(--line); color:var(--dim); border-radius:8px;
+             padding:4px 10px; font-size:12px; cursor:pointer; }
+  .iconbtn:hover { border-color:var(--accent); color:var(--text); }
+  .iconbtn.del:hover { border-color:var(--bad); color:var(--bad); }
+</style>
+</head>
+<body>
+<header class="vs-head">
+  <h1>🎙 Voice <b>Bank</b></h1>
+  <div class="sub">clone a voice from any video you've made, save it, and reuse it to dub other characters</div>
+</header>
+
+<main class="vb">
+  <section>
+    <div class="vs-panel">
+      <h3>Add a voice from a video</h3>
+      <div class="vs-hint">Pick a library video with clear speech — its voice gets cloned and saved
+        (free, on your machine). Then choose it as the voice in the Dub step of any other video.</div>
+      <div style="margin-top:10px">
+        <input class="vs-in" id="vname" style="width:100%" placeholder="name this voice — e.g. “Deep Narrator”, “Goldy”">
+      </div>
+      <div id="picklist" style="margin-top:10px;max-height:360px;overflow:auto">
+        <span class="vs-hint">loading your videos…</span>
+      </div>
+      <div class="vs-row">
+        <button class="vs-btn primary" id="create" disabled>➕ Clone &amp; save this voice</button>
+        <span class="vs-hint" id="cmsg"></span>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="vs-panel">
+      <h3>Saved voices <span class="r vs-hint">use these in Dubbing → “Voice”</span></h3>
+      <div id="bank"><span class="vs-hint">no voices yet — add one from the left</span></div>
+    </div>
+  </section>
+</main>
+
+<script src="/static/js/vs-core.js"></script>
+<script>
+(async () => {
+  const $ = s => document.querySelector(s);
+  let picked = null;
+
+  async function loadPicklist() {
+    try {
+      const d = await VS.api("/api/creator/library");
+      const box = $("#picklist");
+      const vids = d.videos || [];
+      if (!vids.length) { box.innerHTML = '<span class="vs-hint">no videos in the library yet</span>'; return; }
+      box.innerHTML = "";
+      vids.forEach(v => {
+        const el = document.createElement("div");
+        el.className = "vrow";
+        el.innerHTML = `<span class="nm">🎬 ${VS.esc(v.title || v.name)}</span>
+          <span class="vs-hint">${v.transcript ? "has speech" : ""}</span>`;
+        el.onclick = () => {
+          picked = v.name;
+          document.querySelectorAll("#picklist .vrow").forEach(x => x.classList.remove("sel"));
+          el.classList.add("sel");
+          if (!$("#vname").value.trim()) $("#vname").value = (v.character || v.title || v.name.replace(/\.[^.]+$/, ""));
+          refresh();
+        };
+        box.appendChild(el);
+      });
+    } catch (e) { VS.toast("could not load videos: " + e.message); }
+  }
+
+  function refresh() { $("#create").disabled = !picked; }
+  $("#vname").oninput = refresh;
+
+  $("#create").onclick = async () => {
+    if (!picked) return;
+    $("#create").disabled = true;
+    $("#cmsg").textContent = "🎧 extracting & cloning… (a few seconds)";
+    try {
+      await VS.post("/api/voices/create", {file: picked, name: $("#vname").value.trim()});
+      $("#cmsg").textContent = "✓ saved";
+      $("#vname").value = ""; picked = null;
+      document.querySelectorAll("#picklist .vrow").forEach(x => x.classList.remove("sel"));
+      loadBank();
+      setTimeout(() => $("#cmsg").textContent = "", 2500);
+    } catch (e) { $("#cmsg").textContent = ""; VS.toast("Error: " + e.message); }
+    refresh();
+  };
+
+  async function loadBank() {
+    try {
+      const d = await VS.api("/api/voices");
+      const box = $("#bank");
+      if (!d.voices.length) { box.innerHTML = '<span class="vs-hint">no voices yet — add one from the left</span>'; return; }
+      box.innerHTML = "";
+      d.voices.forEach(v => {
+        const el = document.createElement("div");
+        el.className = "voicecard";
+        el.innerHTML = `
+          <div class="top">
+            <span>🎙</span><b>${VS.esc(v.name)}</b>
+            <button class="iconbtn" data-act="rename">rename</button>
+            <button class="iconbtn del" data-act="delete">delete</button>
+          </div>
+          ${v.sample ? `<audio controls preload="none" src="/media/${v.sample}"></audio>` : ""}
+          <div class="src">cloned from ${VS.esc(v.source || "?")}</div>`;
+        el.querySelector('[data-act="rename"]').onclick = async () => {
+          const name = prompt("Rename voice:", v.name);
+          if (!name) return;
+          try { await VS.post("/api/voices/rename", {id: v.id, name}); loadBank(); }
+          catch (e) { VS.toast("Error: " + e.message); }
+        };
+        el.querySelector('[data-act="delete"]').onclick = async () => {
+          if (!confirm(`Delete voice “${v.name}”? (recoverable from trash)`)) return;
+          try { await VS.post("/api/voices/delete", {id: v.id}); loadBank(); }
+          catch (e) { VS.toast("Error: " + e.message); }
+        };
+        box.appendChild(el);
+      });
+    } catch (e) { /* ignore */ }
+  }
+
+  loadPicklist();
+  loadBank();
+})();
+</script>
+</body>
+</html>
