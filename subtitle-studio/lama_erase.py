@@ -90,6 +90,34 @@ class Eraser:
             m[y0:y1, x0:x1] = 255
         return m
 
+    def restore_detail(self, band_out, m):
+        """The LAMA fill is smooth — it lacks the surrounding footage's fine texture/grain,
+        so the erased patch looks lower-resolution. Recover apparent resolution by adding
+        back high-frequency detail: an unsharp boost + film grain matched to the grain
+        level of the untouched pixels around it. Applied only to the filled area."""
+        mf = m > 0
+        if not mf.any():
+            return band_out
+        vis = ~mf
+        # unsharp: restore mid/high-frequency crispness
+        blur = cv2.GaussianBlur(band_out, (0, 0), 2.0)
+        sharp = cv2.addWeighted(band_out, 1.45, blur, -0.45, 0)
+        # match grain: estimate the surrounding footage's high-freq noise level
+        hp = band_out - cv2.GaussianBlur(band_out, (0, 0), 1.0)
+        sigma = float(np.clip(np.std(hp[vis]) if vis.any() else 2.0, 1.0, 6.0))
+        grain = self._grain(band_out.shape, sigma)
+        enhanced = sharp + grain
+        a = cv2.GaussianBlur(m.astype(np.float32) / 255.0, (9, 9), 0)[:, :, None]
+        return a * enhanced + (1 - a) * band_out
+
+    def _grain(self, shape, sigma):
+        """Deterministic per-pixel grain (seeded) so it's stable frame-to-frame and does
+        not reintroduce shimmer, but still gives the patch real high-frequency texture."""
+        if getattr(self, "_grain_cache", None) is None or self._grain_cache.shape != shape:
+            rng = np.random.default_rng(1234)
+            self._grain_cache = rng.standard_normal(shape).astype(np.float32)
+        return self._grain_cache * sigma
+
     def lama_fill(self, crops, masks):
         h, w = crops[0].shape[:2]
         imgs = np.stack([pad_to_modulo(cv2.cvtColor(c, cv2.COLOR_BGR2RGB)).transpose(2, 0, 1)
@@ -203,6 +231,7 @@ class Eraser:
                     band_out = ra * rfill + (1 - ra) * band_out
                 if prev is not None and mf.any():
                     flick_sum += float(np.mean(np.abs(band_out[mf] - prev[mf]))); flick_n += 1
+                band_out = self.restore_detail(band_out, m)   # sharpen + match grain
                 write_band(f, band_out)
                 inpainted += 1
             pend_f.clear(); pend_m.clear()
