@@ -128,6 +128,17 @@ class Eraser:
             prev = band_out
             enc.stdin.write(f.tobytes())
 
+        def temporal(fillf, mf, roi):
+            """Motion-gated blend of a fresh fill toward the previous cleaned band."""
+            if prev is None:
+                return fillf
+            vis = ~mf
+            motion = float(np.mean(np.abs(roi[vis] - prev[vis]))) if vis.any() else 99.0
+            # low motion (static bg) -> lean on previous fill = stable, no jump;
+            # high motion (hand/scene moving) -> trust the fresh fill so it tracks
+            a = float(np.clip(motion / 10.0, 0.4, 0.9))
+            return a * fillf + (1.0 - a) * prev
+
         def flush():
             nonlocal inpainted, prev, flick_sum, flick_n
             if not pend_f:
@@ -136,17 +147,23 @@ class Eraser:
             fills = self.lama_fill(crops, pend_m)
             for f, m, fill in zip(pend_f, pend_m, fills):
                 roi = f[cy0:cy1].astype(np.float32)
-                fillf = fill.astype(np.float32)
                 mf = m > 0
-                if prev is not None:
-                    vis = ~mf
-                    motion = float(np.mean(np.abs(roi[vis] - prev[vis]))) if vis.any() else 99.0
-                    # low motion (static bg) -> lean on the previous fill = stable, no jump;
-                    # high motion (hand/scene moving) -> trust the fresh fill so it tracks
-                    a = float(np.clip(motion / 10.0, 0.4, 0.9))
-                    fillf = a * fillf + (1.0 - a) * prev
+                fillf = temporal(fill.astype(np.float32), mf, roi)
                 alpha = cv2.GaussianBlur(m.astype(np.float32) / 255.0, (9, 9), 0)[:, :, None]
                 band_out = alpha * fillf + (1 - alpha) * roi
+                # INLINE REPAIR: re-check THIS frame and re-erase any remnant on the spot,
+                # so it exits fully clean in one temporally-continuous pass (no global
+                # re-pass that would reintroduce flicker on already-clean frames)
+                for _ in range(2):
+                    bo_u8 = band_out.astype(np.uint8)
+                    rm = self.band_mask(bo_u8)
+                    if rm is None:
+                        break
+                    rm = cv2.dilate(rm, self.kernel)     # grow: catch the stubborn edge
+                    rfill = temporal(self.lama_fill([bo_u8], [rm])[0].astype(np.float32),
+                                     rm > 0, band_out)
+                    ra = cv2.GaussianBlur(rm.astype(np.float32) / 255.0, (9, 9), 0)[:, :, None]
+                    band_out = ra * rfill + (1 - ra) * band_out
                 if prev is not None and mf.any():
                     flick_sum += float(np.mean(np.abs(band_out[mf] - prev[mf]))); flick_n += 1
                 write_band(f, band_out)
