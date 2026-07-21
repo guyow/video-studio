@@ -105,9 +105,41 @@ class Eraser:
             res.append(cv2.cvtColor(o, cv2.COLOR_RGB2BGR))
         return res
 
-    def erase(self, src, out, cy0, cy1, W, H, fps, label="erase"):
-        """One full pass: per-frame detection + LAMA fill, with TEMPORAL SMOOTHING so the
-        reconstructed patch doesn't shimmer/jump frame-to-frame. Returns frames inpainted.
+    def build_plate(self, src, cy0, cy1, samples=48):
+        """Build ONE clean background plate for the band = per-pixel MEDIAN of the
+        best-restored frames. LAMA's shimmer/artifacts vary frame-to-frame, so the median
+        keeps the consistent, correct background and discards the noise — this is the
+        'find the perfectly restored parts and apply them to the whole video' idea.
+        Returns a float32 band-sized plate (masked area filled, real area = median fabric)."""
+        cap = cv2.VideoCapture(src)
+        total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or samples
+        n = min(samples, max(8, total))
+        stack = []
+        for k in range(n):
+            cap.set(cv2.CAP_PROP_POS_FRAMES, int(total * (k + 0.5) / n))
+            ok, f = cap.read()
+            if not ok:
+                continue
+            band = f[cy0:cy1]
+            m = self.band_mask(band)
+            if m is None:
+                cleaned = band.astype(np.float32)
+            else:
+                fill = self.lama_fill([band], [m])[0].astype(np.float32)
+                alpha = cv2.GaussianBlur(m.astype(np.float32) / 255.0, (9, 9), 0)[:, :, None]
+                cleaned = alpha * fill + (1 - alpha) * band.astype(np.float32)
+            stack.append(cleaned)
+        cap.release()
+        if not stack:
+            return None
+        plate = np.median(np.stack(stack, axis=0), axis=0).astype(np.float32)
+        print(f"background plate built from {len(stack)} frames (per-pixel median)", flush=True)
+        return plate
+
+    def erase(self, src, out, cy0, cy1, W, H, fps, label="erase", plate=None):
+        """One full pass: per-frame detection + LAMA fill. Anchors the fill to a stable
+        background PLATE (per-pixel median) where the scene is static -> zero flicker there;
+        only real motion opens the gate to the fresh per-frame fill. Returns frames inpainted.
         Sets self.flicker = mean frame-to-frame change of the filled pixels (lower=smoother)."""
         cap = cv2.VideoCapture(src)
         enc = subprocess.Popen(
@@ -129,17 +161,18 @@ class Eraser:
             enc.stdin.write(f.tobytes())
 
         def temporal(fillf, mf, roi):
-            """Motion-gated blend of a fresh fill toward the previous cleaned band.
-            On a STATIC background almost the entire fill is carried over from the last
-            frame (a≈0.10) so the patch is rock-steady — LAMA's per-frame variation was
-            the shimmer. Only real motion in the visible surroundings opens the gate so
-            the fill can track a moving hand/scene."""
-            if prev is None:
+            """Blend a fresh fill toward the stable background PLATE (per-pixel median).
+            Where the scene is static the plate is used almost entirely (a≈0.08) so the
+            patch is IDENTICAL every frame = zero shimmer; only real motion in the visible
+            surroundings opens the gate to the fresh fill so a moving hand still tracks.
+            Falls back to the previous cleaned frame if no plate was built."""
+            anchor = plate if plate is not None else prev
+            if anchor is None:
                 return fillf
             vis = ~mf
-            motion = float(np.mean(np.abs(roi[vis] - prev[vis]))) if vis.any() else 99.0
-            a = float(np.clip((motion - 2.0) / 12.0, 0.10, 0.85))
-            return a * fillf + (1.0 - a) * prev
+            motion = float(np.mean(np.abs(roi[vis] - anchor[vis]))) if vis.any() else 99.0
+            a = float(np.clip((motion - 2.0) / 12.0, 0.08, 0.85))
+            return a * fillf + (1.0 - a) * anchor
 
         def flush():
             nonlocal inpainted, prev, flick_sum, flick_n
@@ -260,12 +293,13 @@ def main():
     print(f"scan zone y[{cy0}..{cy1}] ({100*(cy1-cy0)/H:.0f}% of height)", flush=True)
 
     er = Eraser()
+    plate = er.build_plate(src, cy0, cy1)     # stable background from the best-restored frames
     cur = src
     tmp_dir = Path(out).parent
     for p in range(1, MAX_PASSES + 1):
         target = out if p == MAX_PASSES else str(tmp_dir / f".lama-pass{p}-{Path(out).name}")
         label = "erase" if p == 1 else f"repair-{p - 1}"
-        er.erase(cur, target, cy0, cy1, W, H, fps, label=label)
+        er.erase(cur, target, cy0, cy1, W, H, fps, label=label, plate=plate)
         if cur != src:
             Path(cur).unlink(missing_ok=True)
         dirty = er.verify(target, cy0, cy1)
