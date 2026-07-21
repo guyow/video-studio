@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Image → Video — Video Studio</title>
+<link rel="stylesheet" href="/static/vs-creator.css">
+<link rel="stylesheet" href="/static/vs.css">
+<script src="/static/vs-nav.js" defer></script>
+<style>
+  main.i2v { max-width:1180px; margin:0 auto; padding:20px 26px;
+             display:grid; grid-template-columns:390px 1fr; gap:20px; align-items:start; }
+  @media (max-width:1000px){ main.i2v { grid-template-columns:1fr; } }
+  .drop-img { border:2px dashed var(--line); border-radius:12px; min-height:190px; display:flex;
+    align-items:center; justify-content:center; text-align:center; color:var(--dim); cursor:pointer;
+    overflow:hidden; transition:.15s; }
+  .drop-img:hover,.drop-img.drag { border-color:var(--accent); color:var(--accent2); background:rgba(124,92,255,.06); }
+  .drop-img img { width:100%; height:100%; max-height:340px; object-fit:contain; display:block; }
+  .aspbtns, .lenbtns { display:flex; gap:8px; flex-wrap:wrap; }
+  .chipbtn { background:var(--panel2); border:1px solid var(--line); color:var(--text);
+    border-radius:9px; padding:8px 14px; font-size:13px; cursor:pointer; }
+  .chipbtn.on { border-color:var(--accent); background:rgba(124,92,255,.16); }
+  .clipcard { background:var(--panel); border:1px solid var(--line); border-radius:12px; overflow:hidden; }
+  .clipcard video { width:100%; display:block; background:#000; max-height:420px; }
+  .clipcard .meta { padding:9px 12px; font-size:12px; color:var(--dim); }
+  .gallery { display:grid; grid-template-columns:repeat(auto-fill,minmax(220px,1fr)); gap:12px; }
+  .est { font-size:13px; color:var(--warn); font-weight:600; }
+</style>
+</head>
+<body>
+<header class="vs-head">
+  <h1>🎞 Image → <b>Video</b></h1>
+  <div class="sub">upload a picture + describe the motion → a ~30s clip via fal.ai (chained segments)</div>
+</header>
+
+<main class="i2v">
+  <section>
+    <div class="vs-panel">
+      <h3>1 · Your picture</h3>
+      <label class="drop-img" id="drop">
+        <input type="file" id="file" accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp" style="display:none">
+        <span id="dropmsg">⬆ Drop an image or click to upload<br><span class="vs-hint">jpg · png · webp</span></span>
+      </label>
+    </div>
+
+    <div class="vs-panel">
+      <h3>2 · Describe the shot</h3>
+      <textarea class="vs-ta" id="prompt" rows="4"
+        placeholder="e.g. slow cinematic push-in, gentle camera drift, warm light, subtle steam rising"></textarea>
+      <div class="vs-hint" style="margin-top:6px">Tip: describe camera motion + mood. The picture stays the subject.</div>
+    </div>
+
+    <div class="vs-panel">
+      <h3>3 · Look &amp; length</h3>
+      <div class="vs-hint">Aspect</div>
+      <div class="aspbtns" id="asp">
+        <button class="chipbtn on" data-a="9:16">9:16 vertical</button>
+        <button class="chipbtn" data-a="1:1">1:1 square</button>
+        <button class="chipbtn" data-a="16:9">16:9 wide</button>
+      </div>
+      <div class="vs-hint" style="margin-top:12px">Length</div>
+      <div class="lenbtns" id="len">
+        <button class="chipbtn" data-s="10">10s</button>
+        <button class="chipbtn" data-s="20">20s</button>
+        <button class="chipbtn on" data-s="30">30s</button>
+      </div>
+      <div class="vs-hint" style="margin-top:12px">Engine (quality vs price)</div>
+      <select class="vs-sel" id="model" style="width:100%;margin-top:5px"></select>
+    </div>
+
+    <div class="vs-panel">
+      <div class="est" id="est">estimated cost: —</div>
+      <div class="vs-row">
+        <button class="vs-btn primary" id="gen" disabled>🎬 Generate clip</button>
+        <span class="vs-hint" id="genmsg"></span>
+      </div>
+      <div id="prog" style="display:none;margin-top:10px">
+        <div class="vs-hint" id="proglbl">starting…</div>
+        <div id="log" style="background:#080b11;border:1px solid var(--line);border-radius:9px;
+          padding:9px 11px;margin-top:6px;font:11px/1.5 var(--mono);color:#b9c3d8;max-height:200px;
+          overflow:auto;white-space:pre-wrap"></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="vs-panel">
+      <h3>Your clips <span class="r vs-hint" id="falspend"></span></h3>
+      <div class="gallery" id="gallery"><div class="vs-hint">no clips yet — make your first one →</div></div>
+    </div>
+  </section>
+</main>
+
+<script src="/static/js/vs-core.js"></script>
+<script>
+(async () => {
+  const $ = s => document.querySelector(s);
+  let uploaded = null, model = "kling-2.1", aspect = "9:16", seconds = 30, busy = false;
+
+  // models
+  try {
+    const d = await VS.api("/api/i2v/models");
+    $("#model").innerHTML = d.models.map(m =>
+      `<option value="${m.key}">${VS.esc(m.label)}</option>`).join("");
+  } catch (e) { VS.toast("could not load models: " + e.message); }
+
+  async function estimate() {
+    try {
+      const e = await VS.post("/api/i2v/estimate", {model, seconds});
+      $("#est").textContent = `estimated cost: ~$${e.this_run.toFixed(2)}  ·  ${e.summary}`;
+    } catch (e) { /* ignore */ }
+  }
+  estimate();
+
+  // pickers
+  $("#asp").onclick = e => { if (e.target.dataset.a) { aspect = e.target.dataset.a;
+    document.querySelectorAll("#asp .chipbtn").forEach(b => b.classList.toggle("on", b === e.target)); } };
+  $("#len").onclick = e => { if (e.target.dataset.s) { seconds = +e.target.dataset.s;
+    document.querySelectorAll("#len .chipbtn").forEach(b => b.classList.toggle("on", b === e.target)); estimate(); } };
+  $("#model").onchange = e => { model = e.target.value; estimate(); };
+  $("#prompt").oninput = () => refreshGen();
+
+  function refreshGen() { $("#gen").disabled = busy || !uploaded || $("#prompt").value.trim().length < 3; }
+
+  // image upload
+  const drop = $("#drop"), file = $("#file");
+  drop.onclick = () => file.click();
+  file.onchange = e => { if (e.target.files[0]) upload(e.target.files[0]); };
+  drop.addEventListener("dragover", e => { e.preventDefault(); drop.classList.add("drag"); });
+  drop.addEventListener("dragleave", () => drop.classList.remove("drag"));
+  drop.addEventListener("drop", e => { e.preventDefault(); drop.classList.remove("drag");
+    if (e.dataTransfer.files[0]) upload(e.dataTransfer.files[0]); });
+
+  async function upload(f) {
+    $("#dropmsg").textContent = "uploading…";
+    const fd = new FormData(); fd.append("file", f);
+    try {
+      const r = await fetch("/api/i2v/upload", {method: "POST", body: fd});
+      if (!r.ok) throw new Error((await r.text()).slice(0, 120));
+      const d = await r.json();
+      uploaded = d.image;
+      drop.innerHTML = `<img src="/media/${d.image}" alt="">`;
+      refreshGen();
+    } catch (e) { $("#dropmsg").textContent = "⬆ Drop an image or click"; VS.toast("Upload failed: " + e.message); }
+  }
+
+  // generate (402 cost gate)
+  $("#gen").onclick = async () => {
+    const prompt = $("#prompt").value.trim();
+    const body = {image: uploaded, prompt, model, aspect, seconds};
+    let est = null;
+    try {
+      const r = await fetch("/api/i2v/run", {method: "POST",
+        headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+      if (r.status === 402) { est = (await r.json()).estimate; }
+      else if (!r.ok) throw new Error((await r.text()).slice(0, 160));
+      else { started(await r.json()); return; }
+    } catch (e) { VS.toast("Error: " + e.message); return; }
+    if (!confirm(`⚠ This spends money on fal.ai:\n\n${est.summary}\n\n≈ $${est.this_run.toFixed(2)}\n\nApprove and generate? (Cancel = nothing charged)`)) {
+      VS.toast("Cancelled — nothing charged");
+      return;
+    }
+    try {
+      const r = await VS.post("/api/i2v/run", Object.assign({confirm_cost: true}, body));
+      started(r);
+    } catch (e) { VS.toast("Error: " + e.message); }
+  };
+
+  function started(r) {
+    busy = true; refreshGen();
+    $("#prog").style.display = "";
+    $("#log").textContent = "";
+    $("#genmsg").textContent = "";
+    VS.toast("🎬 Generating — chaining segments, ~1-2 min each");
+    watch(r.job_id);
+    loadClips();
+  }
+
+  async function watch(jobId) {
+    let off = 0, status = "running";
+    while (status === "running") {
+      await new Promise(r => setTimeout(r, 2000));
+      let j; try { j = await VS.api(`/api/job/${jobId}?offset=${off}`); } catch (e) { continue; }
+      for (const line of (j.lines || [])) {
+        const d = document.createElement("div");
+        d.textContent = line;
+        if (/error|failed|traceback/i.test(line)) d.style.color = "var(--bad)";
+        $("#log").appendChild(d);
+      }
+      $("#log").scrollTop = $("#log").scrollHeight;
+      const stage = [...(j.lines || [])].reverse().find(l => /stage:/i.test(l));
+      if (stage) $("#proglbl").textContent = stage.replace(/=+/g, "").trim();
+      off = j.next_offset != null ? j.next_offset : off + (j.lines || []).length;
+      status = j.status;
+    }
+    busy = false; refreshGen();
+    if (status === "done") { $("#proglbl").textContent = "✅ done"; VS.toast("✅ Clip ready"); }
+    else { $("#proglbl").textContent = "❌ " + status; VS.toast("Generation " + status + " — see log"); }
+    loadClips();
+  }
+
+  async function loadClips() {
+    try {
+      const d = await VS.api("/api/i2v/list");
+      const g = $("#gallery");
+      if (!d.items.length) { g.innerHTML = '<div class="vs-hint">no clips yet — make your first one →</div>'; return; }
+      g.innerHTML = "";
+      d.items.forEach(c => {
+        const el = document.createElement("div");
+        el.className = "clipcard";
+        const running = c.job && c.job.status === "running";
+        el.innerHTML = (c.ready
+            ? `<video controls preload="none" src="/media/${c.clip}?v=${c.clip_mtime}"></video>`
+            : `<div style="padding:40px;text-align:center;color:var(--dim)">${running ? "⏳ rendering…" : "❌ failed"}</div>`)
+          + `<div class="meta">${VS.esc((c.prompt || "").slice(0, 70))}<br>
+             ${VS.esc(c.model_label || "")} · ${c.aspect || ""} · ${c.seconds || "?"}s · ~$${(c.est_cost || 0).toFixed(2)}
+             ${c.ready ? `· <a href="#" data-send="${VS.esc(c.clip)}">send to Desktop</a>
+               · <a href="/media/${c.clip}" download>download</a>` : ""}</div>`;
+        const send = el.querySelector("[data-send]");
+        if (send) send.onclick = async ev => {
+          ev.preventDefault();
+          try { const r = await VS.post("/api/exports/send", {path: send.dataset.send});
+            VS.toast("📤 Saved to " + r.saved_to); } catch (e) { VS.toast("Error: " + e.message); }
+        };
+        g.appendChild(el);
+      });
+    } catch (e) { /* ignore */ }
+  }
+  loadClips();
+  setInterval(loadClips, 12000);
+
+  try { const s = await VS.api("/api/spend"); $("#falspend").textContent = `fal spend $${s.total.toFixed(2)}`; }
+  catch (e) { /* ignore */ }
+})();
+</script>
+</body>
+</html>

@@ -3334,6 +3334,10 @@ def api_exports():
             if (d / "captioned.mp4").is_file():
                 items.append(_export_item(d / "captioned.mp4", "captioned",
                                           f"{d.name} (subtitle studio)"))
+    if I2V_OUT.is_dir():
+        for d in sorted(I2V_OUT.iterdir()):
+            if d.is_dir() and d.name != "_uploads" and (d / "clip.mp4").is_file():
+                items.append(_export_item(d / "clip.mp4", "i2v", f"{d.name} (image→video)"))
     items.sort(key=lambda x: x["mtime"], reverse=True)
     return jsonify({"items": items, "exports_dir": str(EXPORTS_DIR)})
 
@@ -3373,6 +3377,149 @@ def api_exports_send():
             delay = float(CONFIG.get("auto_cleanup", {}).get("delay_hours", 24))
             queued = cleanup.enqueue(stem, delay)
     return jsonify({"saved_to": str(dest), "cleanup": queued})
+
+
+# ------------------------------------------------ Image -> Video (fal.ai)
+# Upload a still + a prompt → a ~30s clip. fal models cap at 5-10s, so the
+# engine chains segments (last frame → next seed). Cost-gated like dubbing.
+
+I2V_ENGINE = APP_DIR / "engines" / "i2v_gen.py"
+I2V_OUT = ROOT / "output" / "i2v"
+I2V_UPLOADS = I2V_OUT / "_uploads"
+I2V_IMG_EXTS = {".jpg", ".jpeg", ".png", ".webp"}
+FAL_ENV_FILE = ROOT / ".env"
+
+# mirror of the engine's MODELS (label + rough per-segment $ for the estimate)
+I2V_MODELS = {
+    "kling-2.1":     {"label": "Kling 2.1 Standard — balanced (recommended)", "seg": 10, "cost_per_seg": 0.45},
+    "kling-2.1-pro": {"label": "Kling 2.1 Pro — best quality (pricey)",        "seg": 10, "cost_per_seg": 0.95},
+    "hailuo-02":     {"label": "MiniMax Hailuo 02 — great motion",             "seg": 10, "cost_per_seg": 0.48},
+    "wan-2.2":       {"label": "Wan 2.2 — budget",                             "seg": 5,  "cost_per_seg": 0.20},
+}
+
+
+def _i2v_estimate(model_key: str, seconds: int) -> dict:
+    m = I2V_MODELS.get(model_key) or I2V_MODELS["kling-2.1"]
+    n = max(1, round(seconds / m["seg"]))
+    total = round(n * m["cost_per_seg"], 2)
+    real = n * m["seg"]
+    return {"this_run": total, "segments": n, "seg_len": m["seg"], "seconds": real,
+            "engine": "fal-i2v", "model": model_key,
+            "summary": f"{n} × {m['seg']}s on {m['label'].split(' — ')[0]} ≈ ${total:.2f} (~{real}s clip)"}
+
+
+@app.get("/api/i2v/models")
+def api_i2v_models():
+    return jsonify({"models": [{"key": k, **v} for k, v in I2V_MODELS.items()]})
+
+
+@app.post("/api/i2v/upload")
+def api_i2v_upload():
+    f = request.files.get("file")
+    if not f or not f.filename:
+        abort(400, "no image")
+    ext = Path(f.filename).suffix.lower()
+    if ext not in I2V_IMG_EXTS:
+        abort(400, f"image must be one of: {', '.join(sorted(I2V_IMG_EXTS))}")
+    I2V_UPLOADS.mkdir(parents=True, exist_ok=True)
+    base = secure_filename(Path(f.filename).stem).strip(".-_") or "img"
+    name = f"{base}-{time.strftime('%H%M%S')}{ext}"
+    f.save(I2V_UPLOADS / name)
+    return jsonify({"image": f"output/i2v/_uploads/{name}", "name": name})
+
+
+@app.post("/api/i2v/estimate")
+def api_i2v_estimate():
+    b = request.get_json(force=True)
+    return jsonify(_i2v_estimate(b.get("model", "kling-2.1"), int(b.get("seconds", 30))))
+
+
+def run_i2v_job(job_id: str, cmd: list[str], slug: str, est: dict) -> None:
+    run_job(job_id, cmd)
+    job = jobs[job_id]
+    if job["status"] != "done":
+        return
+    try:
+        res = record_spend(slug, est)
+        with jobs_lock:
+            job["lines"].append("")
+            job["lines"].append(f"💰 This clip cost ~${res['this_run']:.2f} on fal.ai  ({est['summary']})")
+            job["lines"].append(f"🧾 Total spent on fal.ai so far: ${res['total']:.2f}")
+        job["cost"] = {"this_run": res["this_run"], "total": res["total"], "summary": est["summary"]}
+    except Exception as exc:                      # noqa: BLE001
+        with jobs_lock:
+            job["lines"].append(f"(cost tracking skipped: {exc})")
+
+
+@app.post("/api/i2v/run")
+def api_i2v_run():
+    b = request.get_json(force=True)
+    rel = (b.get("image") or "").replace("\\", "/")
+    prompt = (b.get("prompt") or "").strip()
+    model = b.get("model", "kling-2.1")
+    aspect = b.get("aspect", "9:16")
+    seconds = int(b.get("seconds", 30))
+    if model not in I2V_MODELS:
+        abort(400, "unknown model")
+    if aspect not in ("9:16", "16:9", "1:1"):
+        abort(400, "bad aspect")
+    if not (5 <= seconds <= 60):
+        abort(400, "seconds must be 5-60")
+    if len(prompt) < 3:
+        abort(400, "write a prompt describing the motion / scene")
+    img = (ROOT / rel).resolve()
+    if not str(img).startswith(str(I2V_UPLOADS.resolve())) or not img.is_file():
+        abort(400, "upload an image first")
+
+    est = _i2v_estimate(model, seconds)
+    if not b.get("confirm_cost"):
+        return jsonify({"needs_confirm": True, "estimate": est}), 402
+
+    slug = f"{img.stem}-{time.strftime('%H%M%S')}"
+    work = I2V_OUT / slug
+    work.mkdir(parents=True, exist_ok=True)
+    cv_py = Path(CONFIG["venvs"]["cv"])
+    cmd = [str(cv_py), str(I2V_ENGINE), "--image", str(img), "--prompt", prompt,
+           "--out", str(work), "--name", slug, "--model", model,
+           "--aspect", aspect, "--seconds", str(seconds), "--env-file", str(FAL_ENV_FILE)]
+    job_id = uuid.uuid4().hex[:8]
+    jobs[job_id] = {
+        "id": job_id, "action": "i2v", "slug": slug,
+        "label": f"Image→Video — {slug} [{model}]",
+        "status": "running", "lines": [], "returncode": None,
+        "started": time.time(), "ended": None,
+    }
+    threading.Thread(target=run_i2v_job, args=(job_id, cmd, slug, est), daemon=True).start()
+    return jsonify({"job_id": job_id, "slug": slug, "estimate": est})
+
+
+@app.get("/api/i2v/list")
+def api_i2v_list():
+    items = []
+    if I2V_OUT.is_dir():
+        for d in sorted(I2V_OUT.iterdir(), key=lambda x: x.stat().st_mtime, reverse=True):
+            if not d.is_dir() or d.name == "_uploads":
+                continue
+            info = read_json(d / "i2v.json") or {}
+            clip = d / "clip.mp4"
+            with jobs_lock:
+                cand = [j for j in jobs.values() if j["slug"] == d.name and j["action"] == "i2v"]
+                job = max(cand, key=lambda j: j["started"]) if cand else None
+            items.append({
+                "slug": d.name, "prompt": info.get("prompt"), "model_label": info.get("model_label"),
+                "aspect": info.get("aspect"), "seconds": info.get("seconds"),
+                "est_cost": info.get("est_cost"),
+                "ready": clip.is_file() and clip.stat().st_size > 0,
+                "clip": f"output/i2v/{d.name}/clip.mp4" if clip.is_file() else None,
+                "clip_mtime": clip.stat().st_mtime if clip.is_file() else None,
+                "job": {"id": job["id"], "status": job["status"]} if job else None,
+            })
+    return jsonify({"items": items})
+
+
+@app.get("/image-to-video")
+def image_to_video_page():
+    return send_from_directory(STATIC, "image-to-video.html")
 
 
 # ------------------------------------------------ Settings + auto-cleanup

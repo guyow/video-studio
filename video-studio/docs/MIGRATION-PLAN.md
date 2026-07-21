@@ -253,6 +253,14 @@ the migration is additive and path-based, nothing in the source projects ever ch
   compliant copy (no banned words/claims, names Fairy Flame, "supports" framing), correct brand type +
   gold CTA (never white-on-gold) + wordmark. Raw ComfyUI stays at `/studio` (advanced). Phase 1 = Meta
   1:1; P2/P3 (4:5, 9:16, carousels, web scraper-refresh) pending.
+- [x] **Image → Video** *(2026-07-19)* — new tab `/image-to-video`: upload a picture + a
+  motion/scene prompt → a ~30s clip via fal.ai. fal image-to-video models only render 5-10s,
+  so `engines/i2v_gen.py` chains segments (each segment's last frame seeds the next) and
+  concatenates to the target length, staying continuous from the one uploaded still. Model
+  registry (Kling 2.1 / Kling 2.1 Pro / Hailuo 02 / Wan 2.2) with aspect (9:16/1:1/16:9) and
+  length (10/20/30s) choices, a live cost estimate, and a `confirm_cost` gate before any spend
+  (recorded in the shared fal.ai ledger). Clips land in `output/i2v/<slug>/clip.mp4` and appear
+  in Exports. Endpoints: `/api/i2v/{models,upload,estimate,run,list}`.
 - [x] **Interview mode — two-speaker dubbing** *(2026-07-18)* — for interviewer + guest videos:
   "Detect speakers" (dubbing.html step 🎤) diarizes locally for free (`dashboard/diarize.py`:
   whisper transcript → voice embeddings (resemblyzer, MFCC fallback) → 2-means → labeled turns +

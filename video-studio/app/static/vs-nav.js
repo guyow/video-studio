@@ -3,6 +3,7 @@
 (function () {
   var TABS = [
     ["🎬 Creator", "/", ["/"]],
+    ["Image → Video", "/image-to-video", ["/image-to-video"]],
     ["Brand Studio", "/brand-studio", ["/brand-studio"]],
     ["Ads Factory", "/creator", ["/creator", "/mission", "/studio"]],
     ["Power Tools", "/tools", ["/tools", "/exports", "/qc-lab", "/dubsync-lab",
