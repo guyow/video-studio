@@ -543,6 +543,13 @@ def api_run():
                     abort(400, "chosen voice not found in the Voice Bank")
                 cmd += ["--voice-ref", str(ref)]
                 voice_label = f"voice:{_voice_meta(vid).get('name') or vid}"
+            elif not has_audio_stream(src):
+                # e.g. a silent Image→Video clip — there's no on-screen voice to clone
+                have = (VOICES_DIR.is_dir()
+                        and any((d / "ref.wav").is_file() for d in VOICES_DIR.iterdir() if d.is_dir()))
+                abort(400, "This video has no audio to clone a voice from"
+                           + (" — pick a saved voice in the “Voice” dropdown."
+                              if have else ". Add a voice in the Voices tab first, then pick it here."))
             label = (f"Local dub — {fname} ({voice_label}"
                      + (", free)" if not paid else f" + {lipsync} lip-sync $)"))
             cost_ctx = {"engine": "local", "tts": "local", "tier": lipsync,
@@ -1849,6 +1856,11 @@ def video_duration(probe: dict) -> float:
         return float((probe.get("format") or {}).get("duration") or 0)
     except (TypeError, ValueError):
         return 0.0
+
+
+def has_audio_stream(path: Path) -> bool:
+    """True if the file carries an audio track (silent i2v clips have none)."""
+    return any((s.get("codec_type") == "audio") for s in (ffprobe_json(path).get("streams") or []))
 
 
 def qc_cache_dir(src: Path, tag: str) -> Path:

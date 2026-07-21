@@ -65,7 +65,8 @@
               <label class="vs-hint">voice
                 <select class="vs-sel" id="dub-voice">
                   <option value="">🎤 On-screen speaker (clone from this video)</option>
-                </select></label>
+                </select>
+                <a href="/voices" target="_blank" class="vs-hint" style="margin-left:6px">manage ↗</a></label>
               <label class="vs-hint">lip-sync
                 <select class="vs-sel" id="dub-llip">
                   <option value="wav2lip-hd" selected>Wav2Lip HD (GFPGAN, free)</option>
@@ -307,7 +308,14 @@
       // populate the Voice Bank picker (local path)
       VS.api("/api/voices").then(d => {
         const sel = el.querySelector("#dub-voice");
-        if (!sel || !d.voices || !d.voices.length) return;
+        if (!sel) return;
+        if (!d.voices || !d.voices.length) {
+          const o = document.createElement("option");
+          o.value = ""; o.disabled = true;
+          o.textContent = "— no saved voices yet (add in Voices tab) —";
+          sel.appendChild(o);
+          return;
+        }
         d.voices.forEach(vo => {
           const o = document.createElement("option");
           o.value = vo.id;
