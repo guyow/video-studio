@@ -129,14 +129,16 @@ class Eraser:
             enc.stdin.write(f.tobytes())
 
         def temporal(fillf, mf, roi):
-            """Motion-gated blend of a fresh fill toward the previous cleaned band."""
+            """Motion-gated blend of a fresh fill toward the previous cleaned band.
+            On a STATIC background almost the entire fill is carried over from the last
+            frame (a≈0.10) so the patch is rock-steady — LAMA's per-frame variation was
+            the shimmer. Only real motion in the visible surroundings opens the gate so
+            the fill can track a moving hand/scene."""
             if prev is None:
                 return fillf
             vis = ~mf
             motion = float(np.mean(np.abs(roi[vis] - prev[vis]))) if vis.any() else 99.0
-            # low motion (static bg) -> lean on previous fill = stable, no jump;
-            # high motion (hand/scene moving) -> trust the fresh fill so it tracks
-            a = float(np.clip(motion / 10.0, 0.4, 0.9))
+            a = float(np.clip((motion - 2.0) / 12.0, 0.10, 0.85))
             return a * fillf + (1.0 - a) * prev
 
         def flush():
