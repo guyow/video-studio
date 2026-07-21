@@ -80,3 +80,12 @@ temp/
 # OS
 Thumbs.db
 .DS_Store
+
+# Throwaway curl/test JSON scratch files at repo root
+/bm.json
+/fin.json
+/j.json
+/mj.json
+/mv2.json
+/st.json
+/vfy.json

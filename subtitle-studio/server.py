@@ -831,6 +831,8 @@ if __name__ == "__main__":
     OUTPUT.mkdir(exist_ok=True)
     _kill_engines()
     threading.Thread(target=_awake_keeper, daemon=True).start()
-    port = int(os.environ.get("PORT", 5180))
+    # 5181 is Subtitle Studio's OWN port — 5180 kept getting taken by other sessions'
+    # servers, which silently killed running jobs and served 404s in our UI
+    port = int(os.environ.get("PORT", 5181))
     print(f"Subtitle Studio -> http://localhost:{port}  (local & free — no API keys, no fal.ai)")
     app.run(host="127.0.0.1", port=port, debug=False)
