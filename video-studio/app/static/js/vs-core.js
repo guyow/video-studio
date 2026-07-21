@@ -32,7 +32,12 @@
     const r = await fetch(path, opts);
     if (!r.ok) {
       const t = await r.text();
-      const err = new Error(t.slice(0, 300));
+      // Flask abort() returns an HTML page — surface just the human message
+      let msg = t;
+      const m = t.match(/<p>([\s\S]*?)<\/p>/i);
+      if (m) msg = m[1].replace(/<[^>]+>/g, "").trim();
+      else if (/^\s*</.test(t)) msg = `request failed (${r.status})`;
+      const err = new Error(msg.slice(0, 300));
       err.status = r.status;
       try { err.body = JSON.parse(t); } catch (e) { /* not json */ }
       throw err;

@@ -555,6 +555,12 @@ def api_run():
             cost_ctx = {"engine": "local", "tts": "local", "tier": lipsync,
                         "video": str(src), "stem": stem, "paid": paid}
         else:
+            # cloud pipeline clones the ON-SCREEN voice from the video's audio, so a silent
+            # clip (e.g. an Image→Video result) can't be dubbed here — steer to local + bank
+            if not has_audio_stream(src):
+                abort(400, "This clip has no audio, and the cloud engine clones the on-screen "
+                           "voice. To voice a silent clip, switch to the Local engine and pick a "
+                           "saved voice from the Voice Bank.")
             # cloud pipeline: always costs money
             if not body.get("confirm_cost"):
                 abort(400, "FAL.AI dub spends money (voice-clone + TTS + lip-sync) — needs cost approval (confirm_cost)")

@@ -195,9 +195,11 @@
           VS.drawer.watch(r.job_id);
           VS.toast(p.paid ? "🎙 Cloud dub started" : "🎙 Free local dub started");
         } catch (e) {
-          if (e.status === 409) el.querySelector("#dub-busy").textContent =
-            "⏳ another dub is already running — one at a time keeps the GPU alive. It'll free up soon.";
-          else VS.toast("Error: " + e.message);
+          el.querySelector("#dub-busy").textContent =
+            e.status === 409
+              ? "⏳ another dub is already running — one at a time keeps the GPU alive. It'll free up soon."
+              : "⚠ " + e.message;
+          if (e.status !== 409) VS.toast("Couldn't start: " + e.message);
         }
       };
 
