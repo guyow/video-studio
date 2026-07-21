@@ -151,7 +151,10 @@ class Eraser:
             stdin=subprocess.PIPE)
         i = inpainted = 0
         pend_f, pend_m = [], []
-        prev = None                 # previous OUTPUT band (float32) — temporal anchor
+        # seed the temporal anchor with the stable median plate (good stable start on
+        # static shots) then let it track frame-to-frame so drifting/moving content stays
+        # accurate — a global plate alone mismatches shots that move, adding flicker
+        prev = plate.copy() if plate is not None else None
         flick_sum = flick_n = 0
 
         def write_band(f, band_out):
@@ -161,18 +164,17 @@ class Eraser:
             enc.stdin.write(f.tobytes())
 
         def temporal(fillf, mf, roi):
-            """Blend a fresh fill toward the stable background PLATE (per-pixel median).
-            Where the scene is static the plate is used almost entirely (a≈0.08) so the
-            patch is IDENTICAL every frame = zero shimmer; only real motion in the visible
-            surroundings opens the gate to the fresh fill so a moving hand still tracks.
-            Falls back to the previous cleaned frame if no plate was built."""
-            anchor = plate if plate is not None else prev
-            if anchor is None:
+            """Blend a fresh fill toward the running anchor (previous cleaned band, seeded
+            from the median plate). Static scene -> almost all anchor (a≈0.08) = the patch
+            is near-identical every frame, no shimmer. Even under motion the anchor keeps a
+            floor share (ceiling 0.65) so the fresh fill can't shimmer freely — it tracks
+            the movement but stays temporally damped."""
+            if prev is None:
                 return fillf
             vis = ~mf
-            motion = float(np.mean(np.abs(roi[vis] - anchor[vis]))) if vis.any() else 99.0
-            a = float(np.clip((motion - 2.0) / 12.0, 0.08, 0.85))
-            return a * fillf + (1.0 - a) * anchor
+            motion = float(np.mean(np.abs(roi[vis] - prev[vis]))) if vis.any() else 99.0
+            a = float(np.clip((motion - 2.0) / 12.0, 0.08, 0.65))
+            return a * fillf + (1.0 - a) * prev
 
         def flush():
             nonlocal inpainted, prev, flick_sum, flick_n
