@@ -2295,7 +2295,7 @@ def api_thumb(name):
 
 # ------------------------------------------------ captions (subtitle-studio engine)
 
-CAPTION_VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".webm", ".m4v", ".avi"}
+CAPTION_VIDEO_EXTS = QC_VIDEO_EXTS   # same accepted video types as QC
 
 
 @app.post("/api/recaption")
