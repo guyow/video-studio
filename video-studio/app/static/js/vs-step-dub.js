@@ -259,9 +259,10 @@
         try {
           const r = await VS.post("/api/duo/diarize", {file: v.name});
           VS.drawer.watch(r.job_id);
-          const off = VS.on("drawer-finished", async j => {
+          if (ctx._duoOff) ctx._duoOff();   // don't stack subscriptions on repeat detects
+          ctx._duoOff = VS.on("drawer-finished", async j => {
             if (j.id !== r.job_id) return;
-            off();
+            if (ctx._duoOff) { ctx._duoOff(); ctx._duoOff = null; }
             el.querySelector("#duo-detect").disabled = false;
             if (j.status === "done") { await loadDuo(); VS.toast("Speakers detected — review the turns"); }
             else el.querySelector("#duo-hint").textContent = "❌ failed — see the log";
@@ -346,6 +347,10 @@
       el.querySelector("#dub-run").disabled = !!run || !v.script;
       el.querySelector("#duo-run").disabled = !!run;
       if (!run && busy) busy.textContent = v.script ? "" : "save a script first — the Dub needs words to speak";
+    },
+
+    unmount(ctx) {   // drop the diarize subscription so it can't fire on a torn-down DOM
+      if (ctx._duoOff) { ctx._duoOff(); ctx._duoOff = null; }
     },
   });
 })();

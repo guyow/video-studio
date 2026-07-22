@@ -125,7 +125,11 @@
       if (!o) return;
       renderRail();
       const m = mounted[o.stepId];
-      if (m && m.step.sync) { try { m.step.sync(m.ctx); } catch (e) { /* ignore */ } }
+      if (m) {
+        m.ctx.video = o.video;   // the poller swaps in a fresh video object each tick —
+                                 // keep the mounted step's ctx current so sync() isn't stale
+        if (m.step.sync) { try { m.step.sync(m.ctx); } catch (e) { /* ignore */ } }
+      }
     },
   };
 

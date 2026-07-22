@@ -52,6 +52,16 @@ def duration(path: Path) -> float:
         die(f"could not read duration of {path.name}")
 
 
+def guard_len(out: Path, expected: float, tol: float = 0.5) -> None:
+    """The dub's video length must be preserved. If the muxed output drifts from the
+    source duration by more than `tol`, something truncated it — delete the take
+    rather than deliver a short video (the project's -shortest ban, applied here)."""
+    got = duration(out)
+    if abs(got - expected) > tol:
+        out.unlink(missing_ok=True)
+        die(f"output {got:.2f}s != source {expected:.2f}s — take deleted, not delivered truncated")
+
+
 def atempo_chain(factor: float) -> str:
     """ffmpeg atempo accepts 0.5–100 per stage; chain stages for slow-downs."""
     parts = []
@@ -92,10 +102,16 @@ def main() -> None:
             die("source video not found (source.txt missing or stale) — re-dub instead")
 
     if a.action == "remux":
-        print(f"re-muxing {vo.name} onto {source.name} (video untouched)", flush=True)
+        dv = duration(source)
+        print(f"re-muxing {vo.name} onto {source.name} (video untouched, {dv:.2f}s)", flush=True)
+        # NO -shortest: it would truncate the video down to a shorter voice. Instead pad
+        # the audio with trailing silence (apad) and cap the whole output to the video's
+        # own duration (-t dv) so the full video is always preserved.
         run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(source), "-i", str(vo),
              "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy",
-             "-c:a", "aac", "-b:a", "192k", "-shortest", str(out)], "remux")
+             "-filter:a", "apad", "-c:a", "aac", "-b:a", "192k",
+             "-t", f"{dv:.3f}", str(out)], "remux")
+        guard_len(out, dv)
 
     elif a.action == "refit":
         dv, da = duration(source), duration(vo)
@@ -106,9 +122,12 @@ def main() -> None:
         run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(vo),
              "-filter:a", atempo_chain(factor), "-c:a", "aac", "-b:a", "192k",
              str(fitted)], "time-stretch voice")
+        # fitted voice is ~video length; cap to the video's duration (never -shortest,
+        # which could still shave the video) and verify the length was preserved.
         run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(source), "-i", str(fitted),
              "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy", "-c:a", "copy",
-             "-shortest", str(out)], "remux fitted voice")
+             "-t", f"{dv:.3f}", str(out)], "remux fitted voice")
+        guard_len(out, dv)
 
     elif a.action == "renorm":
         if not final.is_file():

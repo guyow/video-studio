@@ -96,7 +96,19 @@ FFMPEG_BIN = (
 )
 
 app = Flask(__name__, static_folder=None)
-app.secret_key = CONFIG.get("secret_key", "dev-only-change-me")
+app.secret_key = CONFIG.get("secret_key") or ""
+if not app.secret_key or app.secret_key == "dev-only-change-me":
+    # A remote PIN is only real if session cookies can't be forged, and cookies are
+    # only signed by secret_key. With none configured, use a random per-process key
+    # so the publicly-known default can't be used to forge a logged-in session.
+    # (Sessions won't survive a restart — set a stable "secret_key" in config.json
+    # to keep logins across restarts.)
+    import secrets as _secrets
+    app.secret_key = _secrets.token_hex(32)
+    if CONFIG.get("remote_pin"):
+        print("WARNING: remote_pin is set but no secret_key in config.json — using a "
+              "random per-process key so logins can't be forged. Set a stable "
+              "'secret_key' to keep sessions across restarts.", flush=True)
 
 # ---------------------------------------------------------------- remote access lock
 # The app spends money (fal.ai) and deletes files, so once it's reachable beyond this
@@ -376,10 +388,21 @@ def api_job_resume(job_id):
     cmd = job.get("cmd")
     if not cmd:
         abort(400, "this job predates resume support (no command recorded)")
-    # money stays gated: cloud dubs re-charge on every run, so they must go
-    # back through the Dubbing tab's cost-confirmation flow
-    if any(part.endswith("dub.py") and not part.endswith("local_dub.py") for part in cmd):
-        abort(400, "cloud dubs can't be blind-resumed — re-run from the Dubbing tab so the cost is confirmed")
+    # money stays gated: these engines spend fal.ai credits on every run and blind
+    # resume would both silently re-charge AND skip the spend ledger (resume goes
+    # through run_job, not the run_*_job wrappers). Send them back through their own
+    # tab's cost-confirmation flow instead. (local_dub.py is free — allowed.)
+    cmd_str = " ".join(str(c) for c in cmd)
+    is_paid_cloud = (
+        ("dub.py" in cmd_str and "local_dub.py" not in cmd_str)  # fal dub
+        or "duo_run.py" in cmd_str                                # fal interview dub
+        or "i2v_gen.py" in cmd_str                                # fal image→video
+        or "generate-video" in cmd_str                            # fal text→video
+    )
+    if is_paid_cloud:
+        abort(400, "this job spends money on fal.ai — re-run it from its own tab so the "
+                   "cost is confirmed, rather than blind-resuming (which would re-charge "
+                   "and skip the spend ledger)")
     new_id = jobs_create(job.get("action"), job.get("slug"),
                          f"{job.get('label') or job.get('action') or 'job'} (resumed)",
                          resumed_from=job_id, lines=[f"▶ resuming job {job_id}"])
@@ -763,6 +786,7 @@ def clean_subs_worker(job_id: str, fname: str, box: dict, mode: str) -> None:
         with jobs_lock:
             job["lines"].append(line)
 
+    got_gpu = False
     try:
         src = UPLOADS / fname
         probe = subprocess.run(
@@ -795,6 +819,14 @@ def clean_subs_worker(job_id: str, fname: str, box: dict, mode: str) -> None:
             log(f"Cleaning {w}x{h} region at ({x},{y}) of {vw}x{vh} — mode: {mode} (audio untouched)")
             cmd = [str(venv_py), str(ENGINES / "subclean.py"), str(src),
                    "--box", str(x), str(y), str(w), str(h), "--mode", mode, "--out", str(tmp)]
+        # The AI erase (ProPainter) runs on the GPU. Take the SAME lock every other
+        # GPU job uses, so an erase can't launch on top of a running dub/caption/i2v
+        # and OOM the 4 GB card (the "everything got stuck" gridlock). The CPU-only
+        # smart/blur/bar cleaner doesn't need it.
+        if box is None or mode == "erase":
+            wait_for_gpu(job)    # yield to a foreign erase (subtitle-studio / old dashboard)
+            acquire_gpu(job)     # one Video Studio GPU job at a time
+            got_gpu = True
         proc = subprocess.Popen(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, encoding="utf-8", errors="replace", env=job_env(), bufsize=1)
@@ -838,6 +870,8 @@ def clean_subs_worker(job_id: str, fname: str, box: dict, mode: str) -> None:
             job["status"] = "failed"
         (UPLOADS / f"{Path(fname).stem}.cleaning{Path(fname).suffix}").unlink(missing_ok=True)
     finally:
+        if got_gpu:
+            GPU_LOCK.release()
         job["ended"] = time.time()
 
 
@@ -1820,8 +1854,14 @@ def video_duration(probe: dict) -> float:
 
 
 def has_audio_stream(path: Path) -> bool:
-    """True if the file carries an audio track (silent i2v clips have none)."""
-    return any((s.get("codec_type") == "audio") for s in (ffprobe_json(path).get("streams") or []))
+    """True if the file carries an audio track. A silent clip (e.g. an Image→Video
+    result) still has a video stream but no audio → False. A probe FAILURE returns
+    no streams at all → treat as unknown (True) so a transient ffprobe hiccup can't
+    wrongly block a normal video from being dubbed."""
+    streams = ffprobe_json(path).get("streams")
+    if not streams:
+        return True
+    return any(s.get("codec_type") == "audio" for s in streams)
 
 
 def qc_cache_dir(src: Path, tag: str) -> Path:
