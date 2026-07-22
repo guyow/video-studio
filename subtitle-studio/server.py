@@ -10,6 +10,7 @@ Run:  autoVSL/.venv/Scripts/python.exe subtitle-studio/server.py
 """
 from __future__ import annotations
 
+import glob
 import json
 import os
 import re
@@ -55,6 +56,64 @@ def load_tags() -> dict:
 
 def save_tags(t: dict) -> None:
     TAGS_FILE.write_text(json.dumps(t, indent=1), encoding="utf-8")
+
+
+def _busy_stems() -> set:
+    """Stems that currently have a running job — their temp must NOT be touched."""
+    with jobs_lock:
+        return {Path(j.get("file") or "").stem for j in jobs.values()
+                if j.get("status") == "running" and j.get("file")}
+
+
+def _temp_paths(stem: str | None = None):
+    """Erase scratch files that are always safe to delete (never the source, backup, or
+    deliverable): <stem>.cleaning.*, .lama-pass*-<stem>.*, .preview-<stem>.jpg, erase-* dirs.
+    Pass a stem to target one video, or None for every leftover in files/."""
+    if not FILES.is_dir():
+        return []
+    s = glob.escape(stem) if stem else "*"
+    pats = [f"{s}.cleaning*", f".lama-pass*-{s}.*", f".lama-pass*-{s}.cleaning*",
+            f".preview-{s}.jpg", "erase-*"]
+    out, seen = [], set()
+    for pat in pats:
+        for p in FILES.glob(pat):
+            if p not in seen:
+                seen.add(p); out.append(p)
+    return out
+
+
+def clean_temp(stem: str | None = None, skip_busy: bool = True) -> int:
+    """Delete erase intermediates; returns bytes freed. Skips temp for a running job."""
+    busy = _busy_stems() if skip_busy else set()
+    now = time.time()
+    freed = 0
+    for p in _temp_paths(stem):
+        # a temp file's name embeds its video stem; skip if that video is mid-job
+        if skip_busy and any(b and b in p.name for b in busy):
+            continue
+        try:
+            # never delete something being actively written (guards orphaned engine
+            # processes not tracked in the jobs dict, e.g. after a server restart)
+            if now - p.stat().st_mtime < 90:
+                continue
+        except Exception:
+            pass
+        try:
+            if p.is_dir():
+                freed += sum(f.stat().st_size for f in p.rglob("*") if f.is_file())
+                shutil.rmtree(p, ignore_errors=True)
+            elif p.is_file():
+                freed += p.stat().st_size
+                p.unlink()
+        except Exception:
+            pass
+    return freed
+
+
+def _dir_size(path: Path) -> int:
+    if not path.exists():
+        return 0
+    return sum(f.stat().st_size for f in path.rglob("*") if f.is_file())
 
 app = Flask(__name__, static_folder=None)
 jobs: dict[str, dict] = {}
@@ -234,11 +293,11 @@ def api_job_stop(job_id):
     if pid:
         subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True)
     _kill_engines()  # the tracked pid's launcher can respawn a worker — sweep them all
-    # half-written temp output is useless — remove it (the source video is untouched;
-    # it is only swapped at the very END of a successful run)
+    # half-written temp output is useless — remove ALL of it (.cleaning + .lama-pass*);
+    # the source video is untouched, it is only swapped at the very END of a successful run
     name = job.get("file") or ""
     if name:
-        (FILES / f"{Path(name).stem}.cleaning{Path(name).suffix}").unlink(missing_ok=True)
+        clean_temp(Path(name).stem, skip_busy=False)
     return jsonify({"stopping": job_id})
 
 
@@ -288,6 +347,55 @@ def api_delete():
         if piece.exists():
             shutil.move(str(piece), str(bundle / piece.name))
     return jsonify({"trashed": bundle.name})
+
+
+# ---------------------------------------------------------------- storage / cleanup
+
+@app.get("/api/storage")
+def api_storage():
+    """Report where disk is going so the user can decide what to reclaim. MB per category."""
+    temp = 0
+    for p in _temp_paths():
+        if p.is_dir():
+            temp += _dir_size(p)
+        elif p.is_file():
+            temp += p.stat().st_size
+    files_total = _dir_size(FILES)
+    originals = _dir_size(ORIGINALS)
+    thumbs = _dir_size(THUMBS)
+    mb = lambda b: round(b / 1e6, 1)
+    try:
+        free_gb = round(shutil.disk_usage(ROOT).free / 1e9, 1)
+    except Exception:
+        free_gb = None
+    return jsonify({
+        "sources_mb": mb(max(0, files_total - originals - temp)),  # files/ minus backups & temp
+        "originals_mb": mb(originals),
+        "output_mb": mb(max(0, _dir_size(OUTPUT) - thumbs)),
+        "thumbs_mb": mb(thumbs),
+        "trash_mb": mb(_dir_size(TRASH)),
+        "temp_mb": mb(temp),                       # reclaimable scratch (safe to delete)
+        "free_gb": free_gb,
+    })
+
+
+@app.post("/api/cleanup")
+def api_cleanup():
+    """Reclaim disk. Always removes leaked temp (safe); empties .trash only if asked.
+    NEVER touches source videos, .originals backups, or output/ deliverables."""
+    want_trash = bool((request.get_json(silent=True) or {}).get("trash"))
+    temp_freed = clean_temp(None, skip_busy=True)   # skip any video mid-job
+    trash_freed = 0
+    if want_trash and TRASH.is_dir():
+        trash_freed = _dir_size(TRASH)
+        for item in TRASH.iterdir():
+            try:
+                shutil.rmtree(item, ignore_errors=True) if item.is_dir() else item.unlink()
+            except Exception:
+                pass
+    return jsonify({"temp_mb": round(temp_freed / 1e6, 1),
+                    "trash_mb": round(trash_freed / 1e6, 1),
+                    "total_mb": round((temp_freed + trash_freed) / 1e6, 1)})
 
 
 # ---------------------------------------------------------------- subtitle removal
@@ -361,6 +469,8 @@ def api_clean():
             finish(job, True, f"Done — original backed up to files/.originals/{name}")
         except Exception as exc:
             finish(job, False, f"FAILED: {exc}")
+        finally:
+            clean_temp(src.stem, skip_busy=False)   # never leave erase scratch behind
 
     threading.Thread(target=worker, daemon=True).start()
     return jsonify({"job_id": job["id"]})
@@ -696,6 +806,8 @@ def api_boxcaption():
             finish(job, rc == 0)
         except Exception as exc:
             finish(job, False, f"FAILED: {exc}")
+        finally:
+            clean_temp(src.stem, skip_busy=False)   # never leave erase scratch behind
 
     threading.Thread(target=worker, daemon=True).start()
     return jsonify({"job_id": job["id"]})
@@ -802,6 +914,8 @@ def api_auto():
             finish(job, True, "✔ pipeline complete — play the result or grab it from Desktop/Subtitle Studio")
         except Exception as exc:
             finish(job, False, f"PIPELINE FAILED: {exc}")
+        finally:
+            clean_temp(src.stem, skip_busy=False)   # never leave erase scratch behind
 
     threading.Thread(target=worker, daemon=True).start()
     return jsonify({"job_id": job["id"]})
@@ -819,6 +933,7 @@ def _kill_engines() -> None:
             ["powershell", "-NoProfile", "-Command",
              "Get-CimInstance Win32_Process | Where-Object { $_.Name -match 'python' -and "
              "($_.CommandLine -match 'subtitle-studio.erase_subs' -or "
+             "$_.CommandLine -match 'subtitle-studio.lama_erase' -or "
              "($_.CommandLine -match 'inference_propainter' -and $_.CommandLine -match 'subtitle-studio')) } "
              "| ForEach-Object { Stop-Process -Id $_.ProcessId -Force }"],
             capture_output=True, timeout=30)
@@ -830,6 +945,9 @@ if __name__ == "__main__":
     FILES.mkdir(exist_ok=True)
     OUTPUT.mkdir(exist_ok=True)
     _kill_engines()
+    freed = clean_temp(None, skip_busy=False)   # sweep scratch left by a prior crash/kill
+    if freed:
+        print(f"startup: reclaimed {freed/1e6:.0f} MB of leftover erase scratch")
     threading.Thread(target=_awake_keeper, daemon=True).start()
     # 5181 is Subtitle Studio's OWN port — 5180 kept getting taken by other sessions'
     # servers, which silently killed running jobs and served 404s in our UI

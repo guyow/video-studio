@@ -73,6 +73,7 @@
   <span class="free">100% local &amp; free — no fal.ai, no API keys, nothing can charge you</span>
   <span style="flex:1"></span>
   <input id="search" class="search" placeholder="🔎 search name or tag…" oninput="filterCards()">
+  <button id="cleanupbtn" onclick="cleanup(this)" title="Show where disk is used and reclaim space (removes leftover temp files; emptying trash is a separate confirm). Your videos, backups and finished results are never touched.">🧹 Clean up</button>
   <button onclick="selfTest(this)" title="Check that every part of the system works (ffmpeg, GPU, AI engines, disk)">🧪 Self-test</button>
 </header>
 <main>
@@ -303,6 +304,50 @@ async function selfTest(btn) {
     log.scrollIntoView({behavior:'smooth'});
   } catch (e) { toast('Self-test failed to run: ' + e.message.slice(0,120)); }
   btn.disabled = false; btn.textContent = old;
+}
+
+async function cleanup(btn) {
+  // second click while armed = actually empty the trash (permanent)
+  if (btn.dataset.trash) {
+    btn.dataset.trash = ''; clearTimeout(btn._t);
+    btn.textContent = '🧹 Clean up';
+    try {
+      const r = await api('/api/cleanup', {method:'POST',
+        headers:{'Content-Type':'application/json'}, body:JSON.stringify({trash:true})});
+      toast(`Emptied trash — freed ${r.trash_mb} MB.`);
+    } catch (e) { toast('Empty trash failed: ' + e.message.replace(/<[^>]*>/g,' ').slice(0,120)); }
+    refresh();
+    return;
+  }
+  const log = $('#log'); log.style.display = 'block';
+  log.textContent = '🧹 checking storage…';
+  let s;
+  try { s = await api('/api/storage'); }
+  catch (e) { toast('Storage check failed: ' + e.message.slice(0,120)); return; }
+  log.textContent =
+`💾 STORAGE — Subtitle Studio
+  source videos      ${s.sources_mb} MB
+  erase backups      ${s.originals_mb} MB   (kept — needed for ↩ restore)
+  finished results   ${s.output_mb} MB   (kept — needed for ▶ result / ✏️ edit)
+  thumbnails         ${s.thumbs_mb} MB
+  trash (deleted)    ${s.trash_mb} MB
+  reclaimable temp   ${s.temp_mb} MB
+  free disk          ${s.free_gb} GB`;
+  log.scrollIntoView({behavior:'smooth'});
+  // reclaim leftover temp immediately — always safe, never your videos/results
+  try {
+    const r = await api('/api/cleanup', {method:'POST',
+      headers:{'Content-Type':'application/json'}, body:JSON.stringify({trash:false})});
+    toast(r.temp_mb > 0 ? `Reclaimed ${r.temp_mb} MB of leftover temp files.`
+                        : 'No leftover temp — already clean.');
+  } catch (e) { toast('Cleanup failed: ' + e.message.replace(/<[^>]*>/g,' ').slice(0,120)); }
+  // offer the (permanent) trash purge as a two-click confirm
+  if (s.trash_mb > 0) {
+    btn.dataset.trash = '1';
+    btn.textContent = `🗑 empty ${s.trash_mb} MB trash?`;
+    btn._t = setTimeout(() => { btn.dataset.trash = ''; btn.textContent = '🧹 Clean up'; }, 6000);
+  }
+  refresh();
 }
 
 async function refresh() {
