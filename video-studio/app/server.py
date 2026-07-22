@@ -215,7 +215,7 @@ def estimate_dub_cost(engine: str, tts: str, tier: str, video: Path, stem: str,
         voice_cost = round(chars / 1000.0 * TTS_RATE_PER_1K.get(tts, 0.0), 4)
         if tts in ("turbo", "hd") and already_cloned.get(stem) != tts:
             clone_cost = MINIMAX_CLONE_FEE            # one-time voice clone for this stem+model
-    lip = tier if engine == "fal" else tier  # both use the tier name; local voice is free
+    lip = tier  # both engines use the tier name for the lip-sync step; local voice is free
     lipsync_cost = round(dur * LIPSYNC_RATE_PER_SEC.get(lip, 0.0), 4)
 
     total = round(voice_cost + clone_cost + lipsync_cost, 4)
@@ -789,11 +789,6 @@ def api_script_save(stem):
 
 # ---------------------------------------------------------------- subtitle cleaner
 
-def ffmpeg_exe(name: str) -> str:
-    p = FFMPEG_BIN / f"{name}.exe"
-    return str(p) if p.is_file() else name
-
-
 def clean_subs_worker(job_id: str, fname: str, box: dict, mode: str) -> None:
     """Clean a burned-in subtitle region (OpenCV per-frame engine); original is backed up."""
     job = jobs[job_id]
@@ -805,7 +800,7 @@ def clean_subs_worker(job_id: str, fname: str, box: dict, mode: str) -> None:
     try:
         src = UPLOADS / fname
         probe = subprocess.run(
-            [ffmpeg_exe("ffprobe"), "-v", "error", "-select_streams", "v:0",
+            [ff_tool("ffprobe"), "-v", "error", "-select_streams", "v:0",
              "-show_entries", "stream=width,height", "-of", "csv=p=0", str(src)],
             capture_output=True, text=True, check=True)
         vw, vh = (int(n) for n in probe.stdout.strip().split(",")[:2])
@@ -4125,7 +4120,6 @@ def studio_brand():
 
 @app.post("/api/studio/upload")
 def studio_upload():
-    import uuid
     f = request.files.get("image")
     if not f:
         abort(400, "no image uploaded")
@@ -4138,7 +4132,6 @@ def studio_upload():
 
 @app.post("/api/studio/run")
 def studio_run():
-    import subprocess
     b = request.get_json(force=True) or {}
     mode = b.get("mode")
     if mode not in ("generate", "upscale", "inpaint", "keyframe"):
