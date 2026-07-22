@@ -95,12 +95,21 @@ def _box_for(stem: str, video_h: int, video_w: int) -> dict | None:
 
 
 def band_margin(stem: str, video_h: int, video_w: int | None = None) -> int | None:
-    """If the video had subtitles erased/detected, MarginV that puts new captions over that band."""
+    """MarginV (px from the bottom) for the new captions.
+
+    Captions belong in the lower third. We only sit them exactly on the erased band
+    when that band is ALREADY in the lower part of the frame (so it looks native).
+    If the old subtitles were mid-frame / high (over the face), placing the new ones
+    there looks wrong — fall back to a proper lower-third position instead."""
+    lower_third = int(video_h * 0.16)          # ~16% up from the bottom = standard caption line
     b = _box_for(stem, video_h, video_w or video_h)
     if b is None:
-        return None
+        return lower_third
+    band_center = b["y"] + b["h"] / 2
+    if band_center < video_h * 0.60:           # band is mid-frame or higher -> don't follow it
+        return lower_third
     margin = int(video_h - (b["y"] + b["h"]) + max(0, (b["h"] - FONT_SIZE * 1.4) / 2))
-    return max(30, min(margin, video_h - FONT_SIZE - 30))
+    return max(lower_third, min(margin, video_h - FONT_SIZE - 30))
 
 
 def _ass_time(t: float) -> str:
