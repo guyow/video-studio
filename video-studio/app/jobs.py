@@ -17,6 +17,7 @@ import json
 import subprocess
 import threading
 import time
+import uuid
 from pathlib import Path
 
 JOBS_DIR = Path(__file__).resolve().parent.parent / "jobs"
@@ -31,6 +32,29 @@ jobs: dict[str, dict] = {}
 jobs_lock = threading.Lock()
 GPU_LOCK = threading.Lock()  # the 4GB GPU fits exactly one AI engine run
 _meta: dict[str, dict] = {}  # flusher bookkeeping, kept out of the job dicts
+
+
+# ---------------------------------------------------------------- creation
+
+def create(action: str, slug: str, label: str, **extra) -> str:
+    """Register a new running job and return its id.
+
+    Every job insertion goes through here so the `jobs` dict is only mutated
+    under `jobs_lock` — the readers (_write_index/_flush_logs/_awake_keeper and
+    the /api/jobs handler) iterate it under the same lock, so this closes the
+    "dictionary changed size during iteration" race. `extra` carries the
+    occasional optional key (e.g. gpu=True, resumed_from=<id>).
+    """
+    job_id = uuid.uuid4().hex[:8]
+    job = {
+        "id": job_id, "action": action, "slug": slug, "label": label,
+        "status": "running", "lines": [], "returncode": None,
+        "started": time.time(), "ended": None,
+    }
+    job.update(extra)
+    with jobs_lock:
+        jobs[job_id] = job
+    return job_id
 
 
 # ---------------------------------------------------------------- persistence

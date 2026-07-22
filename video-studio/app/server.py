@@ -153,7 +153,7 @@ def api_ping():
 # ---------------------------------------------------------------- job runner
 
 from jobs import (jobs, jobs_lock, GPU_LOCK, needs_gpu, wait_for_gpu,
-                  acquire_gpu, init as jobs_init)
+                  acquire_gpu, init as jobs_init, create as jobs_create)
 
 jobs_init()  # restore persisted jobs; start the flusher + keep-awake threads
 
@@ -380,14 +380,9 @@ def api_job_resume(job_id):
     # back through the Dubbing tab's cost-confirmation flow
     if any(part.endswith("dub.py") and not part.endswith("local_dub.py") for part in cmd):
         abort(400, "cloud dubs can't be blind-resumed — re-run from the Dubbing tab so the cost is confirmed")
-    new_id = uuid.uuid4().hex[:8]
-    jobs[new_id] = {
-        "id": new_id, "action": job.get("action"), "slug": job.get("slug"),
-        "label": f"{job.get('label') or job.get('action') or 'job'} (resumed)",
-        "status": "running", "lines": [f"▶ resuming job {job_id}"],
-        "returncode": None, "started": time.time(), "ended": None,
-        "resumed_from": job_id,
-    }
+    new_id = jobs_create(job.get("action"), job.get("slug"),
+                         f"{job.get('label') or job.get('action') or 'job'} (resumed)",
+                         resumed_from=job_id, lines=[f"▶ resuming job {job_id}"])
     threading.Thread(target=run_job, args=(new_id, cmd), daemon=True).start()
     return jsonify({"job_id": new_id, "resumed_from": job_id})
 
@@ -446,13 +441,7 @@ def api_run():
         if not TRANSCRIBE_VENV_PY.is_file():
             abort(500, f"transcribe venv missing: {TRANSCRIBE_VENV_PY}")
         cmd = [str(TRANSCRIBE_VENV_PY), str(TRANSCRIBE_PY), str(src), "--out", str(UPLOADS)]
-        job_id = uuid.uuid4().hex[:8]
-        jobs[job_id] = {
-            "id": job_id, "action": action, "slug": fname,
-            "label": f"Transcribe — {fname}",
-            "status": "running", "lines": [], "returncode": None,
-            "started": time.time(), "ended": None,
-        }
+        job_id = jobs_create(action, fname, f"Transcribe — {fname}")
         threading.Thread(target=run_job, args=(job_id, cmd), daemon=True).start()
         return jsonify({"job_id": job_id})
 
@@ -466,13 +455,7 @@ def api_run():
         if not TRANSCRIBE_VENV_PY.is_file():
             abort(500, "transcribe venv missing (needed for word timing)")
         cmd = [str(TRANSCRIBE_VENV_PY), str(ENGINES / "caption.py"), "--name", stem]
-        job_id = uuid.uuid4().hex[:8]
-        jobs[job_id] = {
-            "id": job_id, "action": action, "slug": stem,
-            "label": f"Burn captions — {stem}",
-            "status": "running", "lines": [], "returncode": None,
-            "started": time.time(), "ended": None,
-        }
+        job_id = jobs_create(action, stem, f"Burn captions — {stem}")
         threading.Thread(target=run_job, args=(job_id, cmd), daemon=True).start()
         return jsonify({"job_id": job_id})
 
@@ -485,13 +468,7 @@ def api_run():
             abort(500, "transcribe venv missing (needed for word timing)")
         cmd = [str(TRANSCRIBE_VENV_PY), str(ENGINES / "caption.py"),
                "--video", str(src)]
-        job_id = uuid.uuid4().hex[:8]
-        jobs[job_id] = {
-            "id": job_id, "action": action, "slug": src.stem,
-            "label": f"New subtitles — {fname} (from original audio)",
-            "status": "running", "lines": [], "returncode": None,
-            "started": time.time(), "ended": None,
-        }
+        job_id = jobs_create(action, src.stem, f"New subtitles — {fname} (from original audio)")
         threading.Thread(target=run_job, args=(job_id, cmd), daemon=True).start()
         return jsonify({"job_id": job_id})
 
@@ -574,13 +551,7 @@ def api_run():
             cost_ctx = {"engine": "fal", "tts": tts, "tier": tier,
                         "video": str(src), "stem": stem, "paid": True}
 
-        job_id = uuid.uuid4().hex[:8]
-        jobs[job_id] = {
-            "id": job_id, "action": action, "slug": stem,
-            "label": label,
-            "status": "running", "lines": [], "returncode": None,
-            "started": time.time(), "ended": None,
-        }
+        job_id = jobs_create(action, stem, label)
         threading.Thread(target=run_dub_job, args=(job_id, cmd, cost_ctx), daemon=True).start()
         return jsonify({"job_id": job_id})
 
@@ -605,13 +576,8 @@ def api_run():
                 abort(400, f"unknown video model: {model}")
             cmd += ["--model", model]
 
-    job_id = uuid.uuid4().hex[:8]
-    jobs[job_id] = {
-        "id": job_id, "action": action, "slug": slug,
-        "label": f"{ACTIONS[action]['label']} — {slug}" if slug else ACTIONS[action]["label"],
-        "status": "running", "lines": [], "returncode": None,
-        "started": time.time(), "ended": None,
-    }
+    job_id = jobs_create(action, slug,
+                         f"{ACTIONS[action]['label']} — {slug}" if slug else ACTIONS[action]["label"])
     threading.Thread(target=run_job, args=(job_id, cmd), daemon=True).start()
     return jsonify({"job_id": job_id})
 
@@ -921,10 +887,7 @@ def api_clean_preview():
 @app.post("/api/clean-subs")
 def api_clean_subs():
     body, fname, src, box, mode = _clean_request()
-    job_id = uuid.uuid4().hex[:8]
-    jobs[job_id] = {"id": job_id, "action": "clean-subs", "slug": fname,
-                    "label": f"Remove subtitles — {fname} ({mode})", "status": "running",
-                    "lines": [], "returncode": None, "started": time.time(), "ended": None}
+    job_id = jobs_create("clean-subs", fname, f"Remove subtitles — {fname} ({mode})")
     threading.Thread(target=clean_subs_worker, args=(job_id, fname, box, mode), daemon=True).start()
     return jsonify({"job_id": job_id})
 
@@ -1120,10 +1083,7 @@ def api_build_vsl():
     if not CLAUDE_EXE:
         abort(500, "claude CLI not found")
 
-    job_id = uuid.uuid4().hex[:8]
-    jobs[job_id] = {"id": job_id, "action": "build-vsl", "slug": vsl_slug,
-                    "label": f"Build VSL — {vsl_slug}", "status": "running",
-                    "lines": [], "returncode": None, "started": time.time(), "ended": None}
+    job_id = jobs_create("build-vsl", vsl_slug, f"Build VSL — {vsl_slug}")
     threading.Thread(target=build_vsl_worker,
                      args=(job_id, vsl_slug, product, script_rel, docs), daemon=True).start()
     return jsonify({"job_id": job_id})
@@ -2090,10 +2050,7 @@ def api_qc_ai_review():
     if not CLAUDE_EXE:
         abort(500, "claude CLI not found")
     rel = str(src.relative_to(ROOT)).replace("\\", "/")
-    job_id = uuid.uuid4().hex[:8]
-    jobs[job_id] = {"id": job_id, "action": "qc-ai", "slug": src.stem,
-                    "label": f"AI QC review — {src.name}", "status": "running",
-                    "lines": [], "returncode": None, "started": time.time(), "ended": None}
+    job_id = jobs_create("qc-ai", src.stem, f"AI QC review — {src.name}")
     threading.Thread(target=qc_ai_worker, args=(job_id, rel), daemon=True).start()
     return jsonify({"job_id": job_id})
 
@@ -2165,10 +2122,7 @@ def api_qc_remove_subs():
                "-c:v", "libx264", "-crf", "18", "-preset", "veryfast", "-pix_fmt", "yuv420p",
                "-c:a", "copy", "-movflags", "+faststart", str(out)]
 
-    job_id = uuid.uuid4().hex[:8]
-    jobs[job_id] = {"id": job_id, "action": "remove-subs", "slug": src.stem,
-                    "label": f"Clear subtitles ({method}) — {src.name}", "status": "running",
-                    "lines": [], "returncode": None, "started": time.time(), "ended": None}
+    job_id = jobs_create("remove-subs", src.stem, f"Clear subtitles ({method}) — {src.name}")
     threading.Thread(target=run_job, args=(job_id, cmd), daemon=True).start()
     return jsonify({"job_id": job_id, "output": str(out.relative_to(ROOT)).replace("\\", "/")})
 
@@ -2193,11 +2147,8 @@ def api_edit():
         cmd += ["-vf", f"crop=iw/{zoom}:ih/{zoom}:(iw-iw/{zoom})/2:(ih-ih/{zoom})/2,scale=iw*{zoom}:ih*{zoom}"]
     cmd += ["-c:v", "libx264", "-crf", "16", "-preset", "veryfast", "-pix_fmt", "yuv420p",
             "-c:a", "aac", "-movflags", "+faststart", str(out)]
-    job_id = uuid.uuid4().hex[:8]
-    jobs[job_id] = {"id": job_id, "action": "edit", "slug": src.stem,
-                    "label": f"✂ Edit — {src.name} ({start:.0f}-{end:.0f}s{', zoom ×' + str(zoom) if zoom > 1 else ''})",
-                    "status": "running", "lines": [], "returncode": None,
-                    "started": time.time(), "ended": None}
+    job_id = jobs_create("edit", src.stem,
+                         f"✂ Edit — {src.name} ({start:.0f}-{end:.0f}s{', zoom ×' + str(zoom) if zoom > 1 else ''})")
     threading.Thread(target=run_job, args=(job_id, cmd), daemon=True).start()
     return jsonify({"job_id": job_id, "output": str(out.relative_to(ROOT)).replace("\\", "/")})
 
@@ -2329,15 +2280,9 @@ def api_recaption():
     if not TRANSCRIBE_VENV_PY.is_file():
         abort(500, f"whisper venv missing: {TRANSCRIBE_VENV_PY}")
     cmd = [str(TRANSCRIBE_VENV_PY), str(RECAPTION_PY), str(src)] + flags
-    job_id = uuid.uuid4().hex[:8]
-    jobs[job_id] = {
-        "id": job_id, "action": "recaption", "slug": src.stem,
-        "label": f"Captions ({mode}) — {src.name}",
-        "status": "running", "lines": [], "returncode": None,
-        "started": time.time(), "ended": None,
-        # only full caption runs transcribe; re-burn/cover are pure ffmpeg
-        "gpu": mode == "captions",
-    }
+    # only full caption runs transcribe; re-burn/cover are pure ffmpeg
+    job_id = jobs_create("recaption", src.stem, f"Captions ({mode}) — {src.name}",
+                         gpu=(mode == "captions"))
     threading.Thread(target=run_job, args=(job_id, cmd), daemon=True).start()
     return jsonify({"job_id": job_id})
 
@@ -2532,14 +2477,8 @@ def api_dubsync_repair():
               "visual": "Fix visuals from original",
               "object": "Fix damaged object (keep the dub)",
               "swap": "Swap marked moments with original"}
-    job_id = uuid.uuid4().hex[:8]
-    jobs[job_id] = {
-        "id": job_id, "action": "dubsync-repair", "slug": stem,
-        "label": f"DubSync Repair ({labels[action]}) — {stem}",
-        "status": "running", "lines": [], "returncode": None,
-        "started": time.time(), "ended": None,
-        "gpu": action == "relipsync",   # only Wav2Lip needs the GPU
-    }
+    job_id = jobs_create("dubsync-repair", stem, f"DubSync Repair ({labels[action]}) — {stem}",
+                         gpu=(action == "relipsync"))   # only Wav2Lip needs the GPU
     threading.Thread(target=run_job, args=(job_id, cmd), daemon=True).start()
     return jsonify({"job_id": job_id})
 
@@ -3142,12 +3081,7 @@ def api_clone_run():
         cost_ctx = {"engine": "fal", "tts": tts, "tier": tier,
                     "video": str(video), "stem": stem, "paid": True}
 
-    job_id = uuid.uuid4().hex[:8]
-    jobs[job_id] = {
-        "id": job_id, "action": "dub", "slug": stem, "label": label,
-        "status": "running", "lines": [], "returncode": None,
-        "started": time.time(), "ended": None,
-    }
+    job_id = jobs_create("dub", stem, label)
     threading.Thread(target=run_dub_job, args=(job_id, cmd, cost_ctx), daemon=True).start()
     return jsonify({"job_id": job_id, "stem": stem})
 
@@ -3284,13 +3218,7 @@ def api_duo_diarize():
            "--whisper-python", str(TRANSCRIBE_VENV_PY),
            "--whisper-script", str(TRANSCRIBE_PY),
            "--uploads", str(UPLOADS)]
-    job_id = uuid.uuid4().hex[:8]
-    jobs[job_id] = {
-        "id": job_id, "action": "diarize", "slug": stem,
-        "label": f"Detect speakers — {fname}",
-        "status": "running", "lines": [], "returncode": None,
-        "started": time.time(), "ended": None,
-    }
+    job_id = jobs_create("diarize", stem, f"Detect speakers — {fname}")
     threading.Thread(target=run_job, args=(job_id, cmd), daemon=True).start()
     return jsonify({"job_id": job_id})
 
@@ -3321,13 +3249,7 @@ def api_duo_run():
 
     venv_py = Path(CONFIG["venvs"]["cv"])
     cmd = [str(venv_py), str(ENGINES / "duo_run.py"), "--name", stem, "--tier", tier]
-    job_id = uuid.uuid4().hex[:8]
-    jobs[job_id] = {
-        "id": job_id, "action": "duo", "slug": stem,
-        "label": f"Interview dub (2 voices) — {stem} [{tier}]",
-        "status": "running", "lines": [], "returncode": None,
-        "started": time.time(), "ended": None,
-    }
+    job_id = jobs_create("duo", stem, f"Interview dub (2 voices) — {stem} [{tier}]")
     threading.Thread(target=run_duo_job, args=(job_id, cmd, stem, est), daemon=True).start()
     return jsonify({"job_id": job_id, "estimate": est})
 
@@ -3607,13 +3529,7 @@ def api_i2v_run():
     cmd = [str(cv_py), str(I2V_ENGINE), "--image", str(img), "--prompt", prompt,
            "--out", str(work), "--name", slug, "--model", model,
            "--aspect", aspect, "--seconds", str(seconds), "--env-file", str(FAL_ENV_FILE)]
-    job_id = uuid.uuid4().hex[:8]
-    jobs[job_id] = {
-        "id": job_id, "action": "i2v", "slug": slug,
-        "label": f"Image→Video — {slug} [{model}]",
-        "status": "running", "lines": [], "returncode": None,
-        "started": time.time(), "ended": None,
-    }
+    job_id = jobs_create("i2v", slug, f"Image→Video — {slug} [{model}]")
     threading.Thread(target=run_i2v_job, args=(job_id, cmd, slug, est), daemon=True).start()
     return jsonify({"job_id": job_id, "slug": slug, "estimate": est})
 
@@ -3919,14 +3835,9 @@ def api_brand_generate():
     if body.get("bg_prompt"):
         cmd += ["--bg-prompt", str(body["bg_prompt"])]
 
-    job_id = uuid.uuid4().hex[:8]
-    jobs[job_id] = {
-        "id": job_id, "action": "brand-content", "slug": campaign,
-        "label": f"Brand ad ({tpl.get('label', tpl_name)}) — {campaign}",
-        "status": "running", "lines": [], "returncode": None,
-        "started": time.time(), "ended": None,
-        "gpu": True,   # ComfyUI generate + upscale hold the GPU
-    }
+    job_id = jobs_create("brand-content", campaign,
+                         f"Brand ad ({tpl.get('label', tpl_name)}) — {campaign}",
+                         gpu=True)   # ComfyUI generate + upscale hold the GPU
     threading.Thread(target=run_job, args=(job_id, cmd), daemon=True).start()
     return jsonify({"job_id": job_id, "campaign": campaign})
 
