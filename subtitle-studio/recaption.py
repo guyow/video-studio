@@ -70,13 +70,16 @@ def words_from_audio(video: Path, work: Path, trust_cache: bool = False,
     if model is None:
         raise RuntimeError("could not load whisper on any device")
 
-    segments, _ = model.transcribe(str(video), word_timestamps=True, vad_filter=True, beam_size=5)
+    segments, info = model.transcribe(str(video), word_timestamps=True, vad_filter=True, beam_size=5)
     words = [{"text": w.word, "start": round(w.start, 3), "end": round(w.end, 3)}
              for seg in segments for w in (seg.words or [])]
     if not words:
         raise RuntimeError("no speech found — nothing to caption")
     cache.write_text(json.dumps(words), encoding="utf-8")
-    print(f"word timing: {len(words)} words")
+    # remember the detected spoken language so a later --translate run knows the source
+    lang = (getattr(info, "language", None) or "en").lower()
+    (work / "lang.txt").write_text(lang, encoding="utf-8")
+    print(f"word timing: {len(words)} words (detected language: {lang})")
     return words
 
 
@@ -117,8 +120,68 @@ def _ass_time(t: float) -> str:
     return f"{h:d}:{m:02d}:{s:05.2f}"
 
 
-def group_lines(words: list[dict]) -> list[dict]:
-    """Group word timings into editable caption lines: [{start, end, text}]."""
+# ── Local offline translation (Argos Translate / ctranslate2 — no API, no cost) ──
+# Font per script so translated captions actually render (Arial has no CJK glyphs →
+# tofu boxes). Windows ships these system fonts. Upper-casing only helps Latin/Cyrillic.
+_FONT_BY_LANG = {
+    "zh": "Microsoft YaHei", "ja": "Yu Gothic", "ko": "Malgun Gothic",
+    "ar": "Arial", "he": "Arial", "th": "Leelawadee UI", "hi": "Nirmala UI",
+}
+_NO_UPPERCASE = {"zh", "ja", "ko", "ar", "he", "th", "hi"}
+
+
+def font_for(lang: str | None) -> str:
+    return _FONT_BY_LANG.get((lang or "").lower(), FONT)
+
+
+def font_for_text(text: str) -> str:
+    """Pick a font from the script actually present in the text (so edited/re-burned
+    non-Latin captions render too, even when the language code isn't known)."""
+    for ch in text:
+        o = ord(ch)
+        if 0x4E00 <= o <= 0x9FFF or 0x3040 <= o <= 0x30FF:
+            return _FONT_BY_LANG["ja" if 0x3040 <= o <= 0x30FF else "zh"]
+        if 0xAC00 <= o <= 0xD7A3:
+            return _FONT_BY_LANG["ko"]
+        if 0x0E00 <= o <= 0x0E7F:
+            return _FONT_BY_LANG["th"]
+        if 0x0900 <= o <= 0x097F:
+            return _FONT_BY_LANG["hi"]
+    return FONT
+
+
+def ensure_argos(from_code: str, to_code: str) -> None:
+    """Make sure the offline language packages for from→to are installed.
+    Argos pivots through English, so for non-English pairs we install both legs.
+    Downloading a package needs internet ONCE (cached in ~/.local/share/argos-translate);
+    after that translation is fully offline."""
+    import argostranslate.package as pkg
+    pairs = [(from_code, to_code)]
+    if "en" not in (from_code, to_code):
+        pairs = [(from_code, "en"), ("en", to_code)]   # pivot via English
+    installed = {(p.from_code, p.to_code) for p in pkg.get_installed_packages()}
+    missing = [p for p in pairs if p not in installed]
+    if not missing:
+        return
+    print(f"translation: fetching language package(s) {missing} (one-time download)…", flush=True)
+    pkg.update_package_index()
+    available = pkg.get_available_packages()
+    for fc, tc in missing:
+        match = next((p for p in available if p.from_code == fc and p.to_code == tc), None)
+        if match is None:
+            raise RuntimeError(f"no Argos package for {fc}->{tc} — that language pair isn't available offline")
+        pkg.install_from_path(match.download())
+
+
+def translate_text(text: str, from_code: str, to_code: str) -> str:
+    import argostranslate.translate as tr
+    return tr.translate(text, from_code, to_code)
+
+
+def group_lines(words: list[dict], translate: tuple[str, str] | None = None) -> list[dict]:
+    """Group word timings into editable caption lines: [{start, end, text}].
+    If translate=(from_code, to_code) is given, each line's text is translated offline
+    (keeping the original timing) before it is cased for display."""
     out, group = [], []
     for w in words:
         group.append(w)
@@ -127,13 +190,20 @@ def group_lines(words: list[dict]) -> list[dict]:
             group = []
     if group:
         out.append(group)
-    return [{"start": g[0]["start"], "end": g[-1]["end"],
-             "text": " ".join(re.sub(r"\s+", " ", w["text"].strip()) for w in g).upper()}
-            for g in out]
+
+    def render(g: list[dict]) -> str:
+        text = " ".join(re.sub(r"\s+", " ", w["text"].strip()) for w in g)
+        if translate:
+            fc, tc = translate
+            text = translate_text(text, fc, tc)
+            return text if tc in _NO_UPPERCASE else text.upper()
+        return text.upper()
+
+    return [{"start": g[0]["start"], "end": g[-1]["end"], "text": render(g)} for g in out]
 
 
 def build_ass(lines: list[dict], out_path: Path, video_w: int, video_h: int,
-              margin_v: int | None = None) -> None:
+              margin_v: int | None = None, font: str = FONT) -> None:
     """Write the .ass from editable caption lines ({start, end, text}). Text is burned
     verbatim — whatever the user edited is exactly what appears."""
     margin_v = margin_v if margin_v is not None else MARGIN_V
@@ -146,7 +216,7 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Cap,{FONT},{FONT_SIZE},&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,{OUTLINE},{SHADOW},2,{MARGIN_LR},{MARGIN_LR},{margin_v},1
+Style: Cap,{font},{FONT_SIZE},&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,{OUTLINE},{SHADOW},2,{MARGIN_LR},{MARGIN_LR},{margin_v},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -176,6 +246,9 @@ def main() -> int:
                     help="blur = frosted cover that blends into the video (default); box = solid black bar")
     ap.add_argument("--no-captions", action="store_true",
                     help="ONLY remove the old subtitles (cover the band) — do NOT add any new captions")
+    ap.add_argument("--translate", default="", metavar="LANG",
+                    help="translate the captions into this language (ISO code, e.g. es/fr/de/he/zh) "
+                         "using offline Argos Translate. Empty = keep the spoken language.")
     args = ap.parse_args()
 
     video = Path(args.video).resolve()
@@ -235,7 +308,18 @@ def main() -> int:
             print(f"script: {len(words)} words -> output/{stem}/script.txt")
             print(f"script preview: {script[:220]}{'…' if len(script) > 220 else ''}")
             return 0
-        lines = group_lines(words)
+        translate = None
+        target = args.translate.strip().lower()
+        if target:
+            source = (work / "lang.txt").read_text(encoding="utf-8").strip().lower() \
+                if (work / "lang.txt").is_file() else "en"
+            if source == target:
+                print(f"translation: spoken language is already '{target}' — no translation needed")
+            else:
+                print(f"translation: {source} -> {target} (offline)")
+                ensure_argos(source, target)
+                translate = (source, target)
+        lines = group_lines(words, translate=translate)
         # write the editable caption lines (the Edit-subtitles UI reads/writes this)
         lines_file.write_text(json.dumps(lines, indent=1), encoding="utf-8")
 
@@ -249,8 +333,12 @@ def main() -> int:
     band = band_margin(stem, vh, vw)
     if band is not None:
         print(f"captions: placing over the subtitle band (MarginV={band})")
-    build_ass(lines, ass, vw, vh, margin_v=band)
-    print(f"captions: {ass.name} built for {vw}x{vh}")
+    # font: from the requested target language, else sniffed from the caption text
+    # (keeps non-Latin captions readable on editor re-burns too)
+    sample = " ".join(ln.get("text", "") for ln in lines[:8])
+    cap_font = font_for(args.translate.strip()) if args.translate.strip() else font_for_text(sample)
+    build_ass(lines, ass, vw, vh, margin_v=band, font=cap_font)
+    print(f"captions: {ass.name} built for {vw}x{vh} (font: {cap_font})")
 
     out = work / "captioned.mp4"
     # subtitles filter path escaping (Windows: forward slashes + escaped colon)
@@ -301,7 +389,8 @@ def main() -> int:
         sys.exit(f"ffmpeg burn failed: {(proc.stderr or '')[-400:]}")
 
     READY_DIR.mkdir(parents=True, exist_ok=True)
-    deliverable = READY_DIR / f"{stem}-subtitled.mp4"
+    lang_tag = f"-{args.translate.strip().lower()}" if args.translate.strip() else ""
+    deliverable = READY_DIR / f"{stem}-subtitled{lang_tag}.mp4"
     shutil.copy2(out, deliverable)
     print(f"captioned video -> {out}")
     print(f"deliverable -> {deliverable}")

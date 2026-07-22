@@ -248,7 +248,9 @@ def api_state():
     items = []
     if FILES.is_dir():
         for p in sorted(FILES.iterdir()):
-            if not (p.is_file() and p.suffix.lower() in VIDEO_EXTS):
+            # skip dotfiles — scratch/temp (.cleaning, .lama-pass*, .preview, .subtest…)
+            # are never real library videos and must not show up as cards
+            if p.name.startswith(".") or not (p.is_file() and p.suffix.lower() in VIDEO_EXTS):
                 continue
             captioned = OUTPUT / p.stem / "captioned.mp4"
             items.append({
@@ -512,7 +514,9 @@ def api_restore():
 
 @app.post("/api/recaption")
 def api_recaption():
-    name = Path(request.get_json(force=True).get("file") or "").name
+    body = request.get_json(force=True)
+    name = Path(body.get("file") or "").name
+    translate = re.sub(r"[^a-z]", "", str(body.get("translate") or "").lower())[:5]
     src = FILES / name
     if not name or not src.is_file():
         abort(404, "file not found")
@@ -522,7 +526,10 @@ def api_recaption():
     job = new_job("recaption", f"New subtitles — {name}", name)
 
     def worker():
-        rc = stream_cmd(job, [str(WHISPER_PY), str(ROOT / "recaption.py"), str(src)])
+        cmd = [str(WHISPER_PY), str(ROOT / "recaption.py"), str(src)]
+        if translate:
+            cmd += ["--translate", translate]
+        rc = stream_cmd(job, cmd)
         finish(job, rc == 0)
 
     threading.Thread(target=worker, daemon=True).start()
@@ -719,6 +726,8 @@ def api_boxcaption():
     name = Path(body.get("file") or "").name
     style = body.get("style") if body.get("style") in ("blur", "box", "magic", "sttn") else "magic"
     want_caps = body.get("captions", True)
+    # optional: translate the new captions into another language (offline Argos Translate)
+    translate = re.sub(r"[^a-z]", "", str(body.get("translate") or "").lower())[:5]
     src = FILES / name
     if not name or not src.is_file():
         abort(404, "file not found")
@@ -780,8 +789,12 @@ def api_boxcaption():
                                                "w": box["w"], "h": box["h"], "mode": "erase"})
                     log_line(job, f"original backed up to files/.originals/{name}")
                 if want_caps:
-                    log_line(job, "=== final step — burning new audio-synced captions")
-                    rc = stream_cmd(job, [str(WHISPER_PY), str(ROOT / "recaption.py"), str(src)])
+                    tmsg = f" (translated -> {translate})" if translate else ""
+                    log_line(job, f"=== final step — burning new audio-synced captions{tmsg}")
+                    cap_cmd = [str(WHISPER_PY), str(ROOT / "recaption.py"), str(src)]
+                    if translate:
+                        cap_cmd += ["--translate", translate]
+                    rc = stream_cmd(job, cap_cmd)
                     if rc != 0:
                         raise RuntimeError("caption burn failed — see log above")
                 else:
@@ -797,8 +810,11 @@ def api_boxcaption():
                 return
 
             cmd = [str(WHISPER_PY), str(ROOT / "recaption.py"), str(src), "--cover", "--cover-style", style]
+            if translate:
+                cmd += ["--translate", translate]
             if want_caps:
-                log_line(job, f"=== step 2/2 — covering that band ({style}) and burning new captions")
+                log_line(job, f"=== step 2/2 — covering that band ({style}) and burning new captions"
+                              + (f" (translated -> {translate})" if translate else ""))
             else:
                 cmd.append("--no-captions")
                 log_line(job, f"=== step 2/2 — covering that band ({style}), NO new captions")

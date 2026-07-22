@@ -72,6 +72,23 @@
   <h1>🎬 Subtitle Studio</h1>
   <span class="free">100% local &amp; free — no fal.ai, no API keys, nothing can charge you</span>
   <span style="flex:1"></span>
+  <select id="lang" class="search" title="Translate the new captions into this language (offline). 'Keep original' = same language as the audio." style="max-width:210px">
+    <option value="">🌐 Captions: keep original</option>
+    <option value="en">🌐 Translate → English</option>
+    <option value="es">🌐 Translate → Spanish</option>
+    <option value="fr">🌐 Translate → French</option>
+    <option value="de">🌐 Translate → German</option>
+    <option value="pt">🌐 Translate → Portuguese</option>
+    <option value="it">🌐 Translate → Italian</option>
+    <option value="nl">🌐 Translate → Dutch</option>
+    <option value="ru">🌐 Translate → Russian</option>
+    <option value="ar">🌐 Translate → Arabic</option>
+    <option value="he">🌐 Translate → Hebrew</option>
+    <option value="zh">🌐 Translate → Chinese</option>
+    <option value="ja">🌐 Translate → Japanese</option>
+    <option value="ko">🌐 Translate → Korean</option>
+    <option value="hi">🌐 Translate → Hindi</option>
+  </select>
   <input id="search" class="search" placeholder="🔎 search name or tag…" oninput="filterCards()">
   <button id="cleanupbtn" onclick="cleanup(this)" title="Show where disk is used and reclaim space (removes leftover temp files; emptying trash is a separate confirm). Your videos, backups and finished results are never touched.">🧹 Clean up</button>
   <button onclick="selfTest(this)" title="Check that every part of the system works (ffmpeg, GPU, AI engines, disk)">🧪 Self-test</button>
@@ -183,11 +200,19 @@ async function upload(file) {
   } catch (e) { toast('Upload failed: ' + e.message.replace(/<[^>]*>/g,' ').slice(0,140)); }
 }
 
+function targetLang() {
+  const el = document.getElementById('lang');
+  return el ? el.value : '';
+}
+
 async function boxCaption(name, style, captions) {
   try {
+    const translate = targetLang();
+    if (translate && captions !== false)
+      toast('Captions will be translated → ' + translate + ' (first use downloads the language once)');
     const r = await api('/api/boxcaption', {method:'POST',
       headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({file:name, style: style||'blur', captions: captions !== false})});
+      body:JSON.stringify({file:name, style: style||'blur', captions: captions !== false, translate})});
     watchJob(r.job_id);
   } catch (e) { toast('Error: ' + e.message.replace(/<[^>]*>/g,' ').slice(0,140)); }
 }
@@ -579,8 +604,10 @@ async function stopJob(id, btn) {
 
 async function recaption(name) {
   try {
+    const translate = targetLang();
+    if (translate) toast('Captions will be translated → ' + translate);
     const r = await api('/api/recaption', {method:'POST',
-      headers:{'Content-Type':'application/json'}, body:JSON.stringify({file:name})});
+      headers:{'Content-Type':'application/json'}, body:JSON.stringify({file:name, translate})});
     watchJob(r.job_id);
   } catch (e) { toast('Error: ' + e.message.replace(/<[^>]*>/g,' ').slice(0,140)); }
 }
