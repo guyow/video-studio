@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Editor — Video Studio</title>
+<link rel="stylesheet" href="/static/editor.css">
+</head>
+<body>
+
+<header class="ed-top">
+  <div class="ed-brand"><span class="mk">▶</span>Video Studio <span style="color:var(--dim);font-weight:400;font-size:11px">EDITOR</span></div>
+  <div class="ed-proj">›&nbsp;<b id="ed-projname">no video selected</b></div>
+  <span class="ed-spend" id="ed-spend">fal ⛁ $0.00</span>
+  <a class="ed-back" href="/">← classic view</a>
+  <button class="ed-deliver" id="ed-deliverbtn" disabled>⬆ Deliver</button>
+</header>
+
+<main class="ed-main">
+  <!-- left: tools + browser -->
+  <aside class="ed-left">
+    <nav class="ed-tools" id="ed-tools" aria-label="Tools"></nav>
+    <div class="ed-browser" id="ed-browser">
+      <label class="ed-drop" id="ed-drop">
+        <input type="file" id="ed-file" accept="video/*,audio/*,.mp4,.mov,.mkv,.webm,.m4v" multiple style="display:none">
+        ⬆ Drop a video or click to upload
+      </label>
+      <div class="ed-grid" id="ed-grid"><div class="ed-empty">loading library…</div></div>
+    </div>
+  </aside>
+
+  <!-- center: preview -->
+  <section class="ed-stage" aria-label="Preview">
+    <div class="ed-frame" id="ed-frame"><div class="ph">← pick a video from the library</div></div>
+    <div class="ed-transport">
+      <span class="tc" id="ed-tc">0:00</span>
+      <button class="ed-play" id="ed-play" title="play / pause">▶</button>
+      <span class="tc" id="ed-dur" style="color:var(--dim)">0:00</span>
+      <span style="width:10px"></span>
+      <button class="ed-take on" id="ed-take-final">Final</button>
+      <button class="ed-take" id="ed-take-source">Source</button>
+    </div>
+  </section>
+
+  <!-- right: inspector -->
+  <aside class="ed-inspect" id="ed-inspect" aria-label="Inspector">
+    <h3>Inspector</h3>
+    <div class="h2">Welcome</div>
+    <div class="sub">Pick a video on the left, then choose a tool.</div>
+  </aside>
+
+  <!-- bottom: pipeline tracks -->
+  <section class="ed-tracks" aria-label="Pipeline">
+    <div class="ed-trackbar"><b>Pipeline</b> the state of this video, end to end
+      <span style="margin-left:auto" id="ed-jobnote"></span></div>
+    <div class="ed-lanes" id="ed-lanes"></div>
+  </section>
+</main>
+
+<script src="/static/js/vs-core.js"></script>
+<script src="/static/js/editor-app.js"></script>
+</body>
+</html>

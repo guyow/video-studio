@@ -3968,6 +3968,13 @@ def settings_page():
     return send_from_directory(STATIC, "settings.html")
 
 
+@app.get("/editor")
+def editor_page():
+    # CapCut-style editor shell (beta) — a second skin over the same APIs;
+    # "/" (the one-page Creator) remains the default until the user promotes this.
+    return send_from_directory(STATIC, "editor.html")
+
+
 _LEGACY_STEP = {
     "/library": None, "/new": "__new__",
     "/transcript": "script",

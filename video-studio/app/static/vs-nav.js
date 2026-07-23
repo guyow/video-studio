@@ -3,6 +3,7 @@
 (function () {
   var TABS = [
     ["🎬 Creator", "/", ["/"]],
+    ["🎛 Editor β", "/editor", ["/editor"]],
     ["Image → Video", "/image-to-video", ["/image-to-video"]],
     ["Voices", "/voices", ["/voices"]],
     ["Brand Studio", "/brand-studio", ["/brand-studio"]],
