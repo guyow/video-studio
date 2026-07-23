@@ -28,6 +28,18 @@
     return Math.round(d / 86400) + "d ago";
   };
 
+  // the universal "make it liitt" conversion — shared by the Creator's Script step
+  // and the Editor so the prompt can't drift between the two.  Send with
+  // {brand:true, slug:"fairy-flame"} so /api/copywrite grounds it in offer.md + banks.
+  VS.LIITT_PROMPT = `CONVERT this script — whatever brand or product it currently sells — into a script for liitt's Fairy Flame microdose gummies. It's a WINNING script being adapted, so preserve what makes it win:
+- Identify the brand/product being sold and replace it with Fairy Flame (by liitt). Remove every trace of the old brand, its product format, and its category language — nothing of the old product may survive.
+- Re-map the product context intelligently, don't just delete it: the old format/ritual/dosing (drinks, cans, pills, powders, drops, smoking, coffee, whatever) → one flame-shaped gummy from the pouch; its store/link/handle → fairyflame dot com (spoken form); its benefit/mechanism claims → the Fairy Flame state-shift: lighter mood, clarity, focus, feeling like yourself again.
+- Keep the actives general — "microdose gummies"; never name specific actives.
+- KEEP THE HOOK: same opening pattern, same emotional beats, same rhythm and energy — that structure is why the script wins. Adapt its content to liitt, never flatten it into a generic ad.
+- Compliance: no disease/medical claims, no cure/treat/heal language, no guaranteed outcomes, never promise a high or intoxication (this is sub-perceptual). Personal-experience framing ("I felt…") is fine.
+- Stay within ±10% of the original word count — the lip-sync depends on it.
+- Tone: premium, clean, intimate — not hypey, not stoner culture.`;
+
   VS.api = async (path, opts) => {
     const r = await fetch(path, opts);
     if (!r.ok) {

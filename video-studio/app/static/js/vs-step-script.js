@@ -31,6 +31,8 @@
           <input class="vs-in" id="scr-steer" style="width:100%"
             placeholder="how to change it — e.g. “punchier hook, mention the 3-pack, keep the same length”">
           <div class="vs-row">
+            <button class="vs-btn primary" id="scr-liitt"
+              title="turn ANY script — any brand, any product — into a liitt Fairy Flame script: swaps the whole product world to microdose gummies, keeps the winning hook & beats, stays compliant">🔥 liitt</button>
             <button class="vs-btn" id="scr-ai">✨ Rewrite with AI</button>
             <span class="vs-hint" id="scr-aimsg"></span>
           </div>
@@ -63,23 +65,28 @@
         } catch (e) { VS.toast("Error: " + e.message); }
       };
 
-      el.querySelector("#scr-ai").onclick = async () => {
-        const btn = el.querySelector("#scr-ai");
-        const msg = el.querySelector("#scr-aimsg");
+      const aiBtn = el.querySelector("#scr-ai");
+      const liBtn = el.querySelector("#scr-liitt");
+      const msg = el.querySelector("#scr-aimsg");
+      const doRewrite = async (busy, done, extra, brandOn) => {
         const text = ta.value.trim();
         if (!text) { VS.toast("Nothing to rewrite yet"); return; }
-        btn.disabled = true;
-        msg.textContent = "🪄 rewriting… (~30s)";
+        aiBtn.disabled = liBtn.disabled = true;
+        msg.textContent = busy;
+        const steer = el.querySelector("#scr-steer").value.trim();
+        const body = {text, instruction: [extra, steer].filter(Boolean).join("\n")};
+        if (brandOn) { body.brand = true; body.slug = "fairy-flame"; }  // grounded in offer.md + banks
         try {
-          const r = await VS.post("/api/copywrite", {
-            text, instruction: el.querySelector("#scr-steer").value.trim(),
-          });
+          const r = await VS.post("/api/copywrite", body);
           ta.value = r.text || text;
           updCount();
-          msg.textContent = "✓ rewritten — review, tweak, then Save";
+          msg.textContent = done;
         } catch (e) { msg.textContent = ""; VS.toast("Rewrite failed: " + e.message); }
-        btn.disabled = false;
+        aiBtn.disabled = liBtn.disabled = false;
       };
+      aiBtn.onclick = () => doRewrite("🪄 rewriting… (~30s)", "✓ rewritten — review, tweak, then Save", "", false);
+      liBtn.onclick = () => doRewrite("🔥 making it liitt… (~45s)",
+        "🔥 Fairy Flame version ready — review, tweak, then Save", VS.LIITT_PROMPT, true);
     },
 
     sync() { /* no live state */ },
