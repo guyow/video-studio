@@ -45,6 +45,7 @@
         <div class="ed-browtools">
           <button class="ed-import" id="ed-import"><span class="pl">＋</span> Import</button>
           <input class="ed-search" id="ed-search" placeholder="🔎 search">
+          <button class="ed-pop" data-pop="left" title="pop out — float media &amp; tools">⤢</button>
           <input type="file" id="ed-file" accept="video/*,audio/*,.mp4,.mov,.mkv,.webm,.m4v" multiple style="display:none">
         </div>
         <div class="ed-assets" id="ed-assets"><div class="ed-empty">loading…</div></div>
@@ -62,7 +63,9 @@
   <!-- ═══ center: player ═══ -->
   <section class="ed-playerwrap" aria-label="Player">
     <div class="ed-phead">Player<span class="sub" id="ed-pname">— no video selected</span>
-      <span class="mn" id="ed-pmenu" title="open the file in a new tab">≡</span></div>
+      <span class="ed-pgrp">
+        <button class="ed-pop" data-pop="player" title="pop out — float the player">⤢</button>
+        <span class="mn" id="ed-pmenu" title="open the file in a new tab">≡</span></span></div>
     <div class="ed-stage" style="position:relative">
       <div class="ed-frame" id="ed-frame"><div class="ph">← pick a video from the media panel</div></div>
       <div class="ed-pilot" id="ed-pilot" title="AI advisor — describe what's wrong, it picks the fix">
@@ -84,11 +87,18 @@
     </div>
   </section>
 
+  <!-- fills the centre when the player is floated -->
+  <div class="ed-centerghost" id="ed-centerghost">
+    <div><span class="gi">▶</span><p>The player is floating.</p>
+      <button class="ed-pop2" id="ghost-dock">⤡ Dock it back</button></div>
+  </div>
+
   <div class="ed-sp v" id="sp-right" title="drag to resize · double-click to reset"></div>
 
   <!-- ═══ right: inspector ═══ -->
   <aside class="ed-inspect" id="ed-inspect" aria-label="Details">
-    <div class="ed-ihead"><span class="cap" id="ed-icap">Details</span></div>
+    <div class="ed-ihead"><span class="cap" id="ed-icap">Details</span>
+      <button class="ed-pop" data-pop="right" title="pop out — float the details panel">⤢</button></div>
     <div class="ed-chips" id="ed-chips"></div>
     <div class="ed-ibody" id="ed-ibody">
       <div class="ed-note">Pick a video on the left to see its details and actions.</div>
@@ -114,6 +124,7 @@
         <span id="tl-jobnote"></span>
         <span>zoom</span><input type="range" class="ed-tlzoom" id="tl-zoom" min="60" max="260" value="100">
       </div>
+      <button class="ed-pop" data-pop="bottom" title="pop out — float the timeline" style="margin-left:8px">⤢</button>
     </div>
     <div class="ed-tlscroll" id="tl-scroll">
       <div class="ed-tlinner" id="tl-inner">

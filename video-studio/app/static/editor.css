@@ -52,11 +52,12 @@ a{color:var(--link)}
 .ed-deliver:disabled{opacity:.35;cursor:not-allowed}
 
 /* ═══ main grid — all four panels resizable via splitters ═══ */
-.ed-main{--wl:360px;--wr:318px;--hb:218px;
+.ed-main{--wl:360px;--wr:318px;--hb:218px;--spl:6px;--spr:6px;--sphb:6px;
   display:grid;height:calc(100vh - 44px);
-  /* side panels never exceed a viewport share, so the player always has room */
-  grid-template-columns:min(var(--wl),28vw) 6px minmax(0,1fr) 6px min(var(--wr),26vw);
-  grid-template-rows:minmax(0,1fr) 6px min(var(--hb),32vh)}
+  /* side panels never exceed a viewport share, so the player always has room.
+     splitter widths are vars so a floated panel can collapse its whole track. */
+  grid-template-columns:min(var(--wl),28vw) var(--spl) minmax(0,1fr) var(--spr) min(var(--wr),26vw);
+  grid-template-rows:minmax(0,1fr) var(--sphb) min(var(--hb),32vh)}
 /* three adjustable squares on top; the timeline runs the FULL width below */
 .ed-left{grid-column:1;grid-row:1}
 .ed-sp{background:transparent;position:relative;z-index:20;touch-action:none;user-select:none}
@@ -188,8 +189,9 @@ body.ed-dragging{user-select:none;cursor:inherit}
 /* ═══ right: details ═══ */
 .ed-inspect{background:var(--panel);border-left:1px solid var(--line);overflow-y:auto;min-height:0;
   display:flex;flex-direction:column}
-.ed-ihead{padding:10px 14px 0;flex:none}
+.ed-ihead{padding:10px 14px 0;flex:none;display:flex;align-items:center;gap:8px}
 .ed-ihead .cap{font-size:12.5px;font-weight:800}
+.ed-ihead .ed-pop{margin-left:auto}
 .ed-chips{display:flex;gap:5px;flex-wrap:wrap;padding:8px 14px;border-bottom:1px solid var(--line);flex:none}
 .ed-chip{background:none;border:1px solid var(--line);color:var(--dim);font-size:10px;font-weight:700;
   border-radius:12px;padding:4px 9px;cursor:pointer}
@@ -292,3 +294,49 @@ body.ed-dragging{user-select:none;cursor:inherit}
   .ed-main{--wl:300px;--wr:272px}
   .ed-subnav{width:90px}
 }
+
+/* ═══ detachable / floating panels — pop a square out, drag it anywhere,
+   resize it, and its docked slot collapses so the rest reflow (CapCut-style) ═══ */
+.ed-pop{width:23px;height:20px;display:grid;place-items:center;border:1px solid var(--line);
+  border-radius:6px;background:none;color:var(--dim);cursor:pointer;font-size:12px;flex:none;line-height:1}
+.ed-pop:hover{color:var(--text);background:var(--panel2)}
+.ed-pop.on{color:var(--accink);background:var(--acc);border-color:var(--acc)}
+.ed-pgrp{margin-left:auto;display:flex;align-items:center;gap:7px}
+.ed-pgrp .mn{margin-left:0}
+
+/* collapse a floated panel's whole grid track so the docked panels take the space.
+   the --wl/--wr/--hb + splitter vars are zeroed inline in JS (inline beats a class
+   rule, since applyLayout also writes them inline); here we just hide the splitter. */
+.ed-main.fl-left #sp-left{display:none}
+.ed-main.fl-right #sp-right{display:none}
+.ed-main.fl-bottom #sp-bottom{display:none}
+
+/* when the player floats, this ghost fills the empty centre with a dock affordance */
+.ed-centerghost{grid-column:3;grid-row:1;display:none;align-items:center;justify-content:center;
+  background:var(--bg2);border-right:1px solid var(--line)}
+.ed-main.fl-player .ed-centerghost{display:flex}
+.ed-centerghost>div{text-align:center;color:var(--dim)}
+.ed-centerghost .gi{font-size:32px;display:block;margin-bottom:10px;opacity:.45}
+.ed-centerghost p{font-size:12.5px;margin-bottom:13px}
+.ed-pop2{background:var(--acc);color:var(--accink);border:0;border-radius:9px;padding:9px 17px;
+  font:800 12px "Segoe UI",sans-serif;cursor:pointer}
+.ed-pop2:hover{background:#e9e9ec}
+
+.ed-float{position:fixed;z-index:120;border:1px solid #4a4a50;border-radius:12px;
+  box-shadow:0 26px 74px rgba(0,0,0,.66);overflow:hidden;resize:both;
+  min-width:250px;min-height:170px;max-width:97vw;max-height:93vh}
+.ed-float>.ed-fbar{height:25px;flex:none;display:flex;align-items:center;justify-content:center;
+  background:var(--panel2);border-bottom:1px solid var(--line);cursor:grab;position:relative;
+  color:var(--faint);user-select:none;touch-action:none}
+.ed-float>.ed-fbar .dots{font-size:14px;letter-spacing:2px;line-height:1}
+.ed-float>.ed-fbar .ttl{position:absolute;left:11px;font-size:9.5px;font-weight:800;letter-spacing:.5px;
+  text-transform:uppercase;color:var(--dim)}
+.ed-float>.ed-fbar .dock{position:absolute;right:5px;top:2px;width:21px;height:20px;border:0;
+  background:none;color:var(--dim);cursor:pointer;border-radius:5px;font-size:12px}
+.ed-float>.ed-fbar .dock:hover{background:var(--line);color:var(--text)}
+.ed-float.drag,.ed-float.drag>.ed-fbar{cursor:grabbing}
+/* the inspector scrolls on its root when docked; when floated keep the bar fixed and scroll the body */
+.ed-inspect.ed-float{overflow:hidden}
+.ed-inspect.ed-float .ed-ibody{overflow-y:auto;min-height:0}
+/* a floated player should never keep the docked right border */
+.ed-playerwrap.ed-float{border-right:0}

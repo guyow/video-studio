@@ -560,12 +560,20 @@
     const capsBody = capJob ? bar("running", "💬 burning captions", pct(capJob))
       : v.captioned ? bar("caps", "💬 captions burned", "✓")
       : bar("ghost", v.dub ? "ready — Captions tab" : "waiting for a dub");
+    const nBroll = (ED.i2v || []).filter(c => c.ready).length;
+    const brollBody = nBroll ? bar("effect", `🎞 ${nBroll} AI b-roll clip${nBroll > 1 ? "s" : ""}`, "ready")
+      : bar("ghost", "no AI b-roll — make clips in Media ▸ AI Video");
+    const delBody = v.exported ? bar("voice", "📤 delivered to Desktop", "✓")
+      : v.dub ? bar("ghost", "ready — Deliver in the right panel")
+      : bar("ghost", "finish the dub first");
 
     lanes.innerHTML =
       lane(["✦", "👁"], "FX/JOB", fxBody) +
       lane(["🎬", "🔒", "👁"], "VIDEO", filmBody) +
+      lane(["🎞", "👁"], "B-ROLL", brollBody) +
       lane(["🔊", "👁"], "VOICE", voiceBody) +
-      lane(["💬", "👁"], "CAPTIONS", capsBody);
+      lane(["💬", "👁"], "CAPTIONS", capsBody) +
+      lane(["📤"], "DELIVER", delBody);
     $("#tl-jobnote").textContent = running ? `⏳ ${running.label || running.action}` : "";
     loadFilmstrip();
 
@@ -1042,6 +1050,111 @@
     makeSplitter("#sp-left", "wl", false, false);    // wider drag → wider media panel
     makeSplitter("#sp-right", "wr", false, true);    // drag left → wider inspector
     makeSplitter("#sp-bottom", "hb", true, true);    // drag up → taller timeline
+
+    // ── detachable panels: pop a square out, drag it anywhere, resize it,
+    //    and its docked slot collapses so the rest reflow (CapCut-style) ──
+    const FLOATS = {
+      left:   {sel: ".ed-left",       cls: "fl-left",   title: "Media & Tools", def: {w: 340, h: 560}},
+      player: {sel: ".ed-playerwrap", cls: "fl-player", title: "Player",        def: {w: 540, h: 520}},
+      right:  {sel: ".ed-inspect",    cls: "fl-right",  title: "Details",       def: {w: 320, h: 560}},
+      bottom: {sel: ".ed-tl",         cls: "fl-bottom", title: "Timeline",      def: {w: 940, h: 300}},
+    };
+    let zTop = 120;
+    const floatState = JSON.parse(localStorage.getItem("ed-floats") || "{}");
+    const saveFloats = () => localStorage.setItem("ed-floats", JSON.stringify(floatState));
+    const isFloating = key => $(FLOATS[key].sel).classList.contains("ed-float");
+    const clampX = (x, w) => Math.max(-w + 90, Math.min(window.innerWidth - 60, x));
+    const clampY = (y) => Math.max(46, Math.min(window.innerHeight - 40, y));
+    const raise = el => { el.style.zIndex = ++zTop; };
+    const rememberFloat = (key, el) => {
+      floatState[key] = {on: true, x: el.offsetLeft, y: el.offsetTop, w: el.offsetWidth, h: el.offsetHeight};
+      saveFloats();
+    };
+    function updatePopBtns() {
+      $$(".ed-pop").forEach(b => {
+        const on = isFloating(b.dataset.pop);
+        b.classList.toggle("on", on);
+        b.title = on ? "dock this panel back" : "pop out — float this panel";
+      });
+    }
+    function floatPanel(key, st) {
+      const cfg = FLOATS[key], el = $(cfg.sel);
+      if (el.classList.contains("ed-float")) return;
+      const bar = document.createElement("div");
+      bar.className = "ed-fbar";
+      bar.innerHTML = `<span class="ttl">${cfg.title}</span><span class="dots">•••</span>
+        <button class="dock" title="dock back">⤡</button>`;
+      el.insertBefore(bar, el.firstChild);
+      el.classList.add("ed-float");
+      main.classList.add(cfg.cls);
+      // collapse the docked track (inline, so it wins over applyLayout's inline vars)
+      if (key === "left")   { main.style.setProperty("--wl", "0px"); main.style.setProperty("--spl", "0px"); }
+      if (key === "right")  { main.style.setProperty("--wr", "0px"); main.style.setProperty("--spr", "0px"); }
+      if (key === "bottom") { main.style.setProperty("--hb", "0px"); main.style.setProperty("--sphb", "0px"); }
+      const s = st || floatState[key] || {};
+      const w = s.w || cfg.def.w, h = s.h || cfg.def.h;
+      el.style.width = w + "px"; el.style.height = h + "px";
+      el.style.left = clampX(s.x != null ? s.x : (window.innerWidth - w) / 2, w) + "px";
+      el.style.top  = clampY(s.y != null ? s.y : (window.innerHeight - h) / 2) + "px";
+      raise(el);
+      rememberFloat(key, el);
+      bar.addEventListener("pointerdown", ev => {
+        if (ev.target.closest(".dock")) return;
+        ev.preventDefault(); raise(el);
+        el.classList.add("drag"); document.body.classList.add("ed-dragging");
+        try { bar.setPointerCapture(ev.pointerId); } catch (e) { /* synthetic */ }
+        const ox = ev.clientX - el.offsetLeft, oy = ev.clientY - el.offsetTop;
+        const mv = e => {
+          el.style.left = clampX(e.clientX - ox, el.offsetWidth) + "px";
+          el.style.top  = clampY(e.clientY - oy) + "px";
+        };
+        const up = () => {
+          el.classList.remove("drag"); document.body.classList.remove("ed-dragging");
+          document.removeEventListener("pointermove", mv);
+          document.removeEventListener("pointerup", up);
+          document.removeEventListener("pointercancel", up);
+          rememberFloat(key, el);
+          if (key === "bottom" || key === "player") { renderTimeline(); const vv = playerVideo(); if (vv) movePlayhead(vv.currentTime); }
+        };
+        document.addEventListener("pointermove", mv);
+        document.addEventListener("pointerup", up);
+        document.addEventListener("pointercancel", up);
+      });
+      el.addEventListener("pointerdown", () => raise(el), true);
+      bar.querySelector(".dock").onclick = () => dockPanel(key);
+      if (window.ResizeObserver) {
+        const ro = new ResizeObserver(() => {
+          if (!el.classList.contains("ed-float")) return;
+          rememberFloat(key, el);
+          if (key === "bottom") renderTimeline();
+        });
+        ro.observe(el); el._ro = ro;
+      }
+      updatePopBtns();
+      if (key === "bottom" || key === "player") renderTimeline();
+    }
+    function dockPanel(key) {
+      const cfg = FLOATS[key], el = $(cfg.sel);
+      if (!el.classList.contains("ed-float")) return;
+      const bar = el.querySelector(":scope > .ed-fbar"); if (bar) bar.remove();
+      el.classList.remove("ed-float");
+      main.classList.remove(cfg.cls);
+      // restore the docked track
+      if (key === "left")   { main.style.setProperty("--wl", layout.wl + "px"); main.style.removeProperty("--spl"); }
+      if (key === "right")  { main.style.setProperty("--wr", layout.wr + "px"); main.style.removeProperty("--spr"); }
+      if (key === "bottom") { main.style.setProperty("--hb", layout.hb + "px"); main.style.removeProperty("--sphb"); }
+      el.style.cssText = el.style.cssText
+        .replace(/(left|top|width|height|z-index):[^;]+;?/g, "");
+      if (el._ro) { el._ro.disconnect(); el._ro = null; }
+      floatState[key] = {on: false}; saveFloats();
+      updatePopBtns();
+      if (key === "bottom" || key === "player") renderTimeline();
+    }
+    const toggleFloat = key => isFloating(key) ? dockPanel(key) : floatPanel(key);
+    $$(".ed-pop").forEach(b => b.onclick = () => toggleFloat(b.dataset.pop));
+    $("#ghost-dock").onclick = () => dockPanel("player");
+    // restore any panels that were left floating
+    Object.keys(FLOATS).forEach(k => { if (floatState[k] && floatState[k].on) floatPanel(k, floatState[k]); });
 
     // top bar
     const mb = $("#ed-menubtn"), ml = $("#ed-menulist");
