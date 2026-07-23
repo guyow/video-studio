@@ -3968,6 +3968,70 @@ def settings_page():
     return send_from_directory(STATIC, "settings.html")
 
 
+@app.post("/api/extract-audio")
+def api_extract_audio():
+    """Editor Audio tool: pull the audio track out of a library video as an mp3.
+    Fast, synchronous ffmpeg — the file lands in output/edits/ (shows in Exports)."""
+    fname = Path((request.get_json(force=True) or {}).get("file") or "").name
+    src = UPLOADS / fname
+    if not fname or not src.is_file():
+        abort(404, "upload not found")
+    if not has_audio_stream(src):
+        abort(400, "this video has no audio track to extract")
+    out_dir = ROOT / "output" / "edits"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    dest = out_dir / f"{src.stem}-audio.mp3"
+    r = subprocess.run([ff_tool("ffmpeg"), "-y", "-loglevel", "error", "-i", str(src),
+                        "-vn", "-codec:a", "libmp3lame", "-b:a", "192k", str(dest)],
+                       env=job_env(), timeout=300)
+    if r.returncode != 0 or not dest.is_file() or dest.stat().st_size == 0:
+        abort(500, "audio extraction failed")
+    rel = str(dest.relative_to(ROOT)).replace("\\", "/")
+    return jsonify({"audio": rel, "size": dest.stat().st_size})
+
+
+ASPECT_RATIOS = {"9:16": 9 / 16, "1:1": 1.0, "16:9": 16 / 9}
+
+
+@app.post("/api/export-aspects")
+def api_export_aspects():
+    """Stage-15 of the VSL pipeline: cut the finished master into platform
+    aspect ratios (center-crop-to-fill) — 9:16 / 1:1 / 16:9. Synchronous
+    ffmpeg per aspect; results land in output/edits/ (visible in Exports)."""
+    b = request.get_json(force=True)
+    stem = Path(b.get("stem") or "").name
+    aspects = [a for a in (b.get("aspects") or []) if a in ASPECT_RATIOS]
+    use_captioned = bool(b.get("captioned"))
+    work = SWAP_WORK / stem
+    src = work / ("final-captioned.mp4" if use_captioned else "final.mp4")
+    if use_captioned and not src.is_file():
+        src = SUBSTUDIO_OUT / stem / "captioned.mp4"
+    if not stem or not src.is_file():
+        abort(404, "master not found — dub (and caption) first")
+    if not aspects:
+        abort(400, "pick at least one aspect ratio")
+    out_dir = ROOT / "output" / "edits"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    made = []
+    for a in aspects:
+        ar = ASPECT_RATIOS[a]
+        tag = a.replace(":", "x")
+        dest = out_dir / f"{stem}-{tag}{'-captioned' if use_captioned else ''}.mp4"
+        # crop to fill the target ratio (center), keep even dimensions
+        vf = (f"crop='if(gt(iw/ih,{ar}),ih*{ar},iw)':'if(gt(iw/ih,{ar}),ih,iw/{ar})',"
+              "crop=trunc(iw/2)*2:trunc(ih/2)*2")
+        r = subprocess.run([ff_tool("ffmpeg"), "-y", "-loglevel", "error", "-i", str(src),
+                            "-vf", vf, "-c:v", "libx264", "-crf", "18", "-preset", "fast",
+                            "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", str(dest)],
+                           env=job_env(), timeout=600)
+        if r.returncode == 0 and dest.is_file() and dest.stat().st_size:
+            made.append({"aspect": a, "path": str(dest.relative_to(ROOT)).replace("\\", "/"),
+                         "size": dest.stat().st_size})
+    if not made:
+        abort(500, "aspect export failed")
+    return jsonify({"masters": made})
+
+
 @app.get("/editor")
 def editor_page():
     # CapCut-style editor shell (beta) — a second skin over the same APIs;

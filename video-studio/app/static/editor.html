@@ -10,8 +10,9 @@
 
 <!-- ═══ top bar ═══ -->
 <header class="ed-top">
+  <span class="ed-mark" title="Video Studio">▶</span>
   <div class="ed-menu">
-    <button class="ed-menubtn" id="ed-menubtn">☰ Menu ▾</button>
+    <button class="ed-menubtn" id="ed-menubtn">Menu ▾</button>
     <nav class="ed-menulist" id="ed-menulist">
       <a href="/">🎬 Classic Creator view</a>
       <a href="/image-to-video">🎞 Image → Video studio</a>
@@ -56,6 +57,8 @@
     </div>
   </aside>
 
+  <div class="ed-sp v" id="sp-left" title="drag to resize · double-click to reset"></div>
+
   <!-- ═══ center: player ═══ -->
   <section class="ed-playerwrap" aria-label="Player">
     <div class="ed-phead">Player<span class="sub" id="ed-pname">— no video selected</span>
@@ -78,14 +81,18 @@
     </div>
   </section>
 
+  <div class="ed-sp v" id="sp-right" title="drag to resize · double-click to reset"></div>
+
   <!-- ═══ right: inspector ═══ -->
-  <aside class="ed-inspect" id="ed-inspect" aria-label="Inspector">
+  <aside class="ed-inspect" id="ed-inspect" aria-label="Details">
     <div class="ed-ihead"><span class="cap" id="ed-icap">Details</span></div>
+    <div class="ed-chips" id="ed-chips"></div>
     <div class="ed-ibody" id="ed-ibody">
-      <div class="ed-note">Pick a video on the left, then choose a tool above the media panel.</div>
+      <div class="ed-note">Pick a video on the left to see its details and actions.</div>
     </div>
-    <div class="ed-modify" id="ed-modify" style="display:none"><button id="ed-modifybtn">Modify</button></div>
   </aside>
+
+  <div class="ed-sp hz" id="sp-bottom" title="drag to resize · double-click to reset"></div>
 
   <!-- ═══ bottom: timeline ═══ -->
   <section class="ed-tl" aria-label="Pipeline timeline">
@@ -93,9 +100,13 @@
       <button class="ed-tlbtn" id="tl-refresh" title="refresh">↺</button>
       <span class="ed-tlsep"></span>
       <button class="ed-tlbtn" id="tl-tostart" title="jump to start">⏮</button>
-      <button class="ed-tlbtn cy" id="tl-play" title="play / pause">▶</button>
+      <button class="ed-tlbtn" id="tl-play" title="play / pause (space)">▶</button>
       <span class="ed-tlsep"></span>
-      <span style="color:var(--dim);font-size:11px" id="tl-label">pipeline of the selected video</span>
+      <button class="ed-tlbtn" id="tl-in" title="mark cut start at the playhead">⟦ In</button>
+      <button class="ed-tlbtn" id="tl-out" title="mark cut end at the playhead">Out ⟧</button>
+      <button class="ed-tlbtn" id="tl-cut" title="export the marked range as a new clip" disabled>✂ Make cut</button>
+      <span class="ed-tlsep"></span>
+      <span style="color:var(--dim);font-size:11px" id="tl-label"></span>
       <div class="ed-tlnote">
         <span id="tl-jobnote"></span>
         <span>zoom</span><input type="range" class="ed-tlzoom" id="tl-zoom" min="60" max="260" value="100">

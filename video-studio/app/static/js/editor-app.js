@@ -1,133 +1,491 @@
-/* editor-app.js v2 — pro editor wired to the real Video Studio API.
-   Reuses vs-core.js (VS.api/post/toast + the single poller + pub-sub).
-   Pro touches: duration-scaled timeline with click-to-seek + live playhead,
-   real filmstrip frames, panel toggles, autosave chip, floating Advisor. */
+/* editor-app.js v3 — full professional taxonomy (user-spec), gray & white.
+   Left: 9 tool tabs, each with its own sub-nav + content (grids / AI panels).
+   Right: Details + action chips (Clean/Script/Dub/Fix/Deliver — the pipeline).
+   Bottom: editing timeline — filmstrip, click-to-seek, live playhead, and a
+   REAL Cut tool (mark In/Out → /api/edit exports the range as a new clip).
+   Every wired control hits a real endpoint; unbuilt library packs are visible
+   but tagged SOON — nothing pretends. */
 (function () {
   const VS = window.VS;
   const $ = (s, r) => (r || document).querySelector(s);
   const $$ = (s, r) => [...(r || document).querySelectorAll(s)];
 
   const ED = {
-    video: null, tool: "media", take: "final", ratio: "9:16", fit: "contain",
-    voices: [], filter: "all", search: "",
-    dur: 0, pxs: 100,             // timeline: seconds + px-per-second (zoom)
-    filmKey: null,                // cache key of the loaded filmstrip
+    video: null, tab: "media", sec: "media", chip: "details",
+    take: "final", ratio: "9:16", fit: "contain",
+    voices: [], i2v: [], actors: [],
+    search: "", dur: 0, pxs: 100, filmKey: null,
+    cutIn: null, cutOut: null,
+    aiImg: null,            // uploaded reference for AI Image / Photo→Avatar
   };
-  const HEADW = 118;              // timeline lane-head width (matches CSS)
+  const HEADW = 118;
 
-  /* ── autosave chip ── */
   function savedNow() {
     $("#ed-savetime").textContent = "Auto saved: " + new Date().toLocaleTimeString();
   }
   const _post = VS.post;
   VS.post = async (p, b) => { const r = await _post(p, b); savedNow(); return r; };
 
-  /* ═════════ tools ═════════ */
-  const TOOLS = [
-    {id: "media",    ic: "🎞", label: "Media"},
-    {id: "clean",    ic: "🧹", label: "Clean"},
-    {id: "script",   ic: "✍️", label: "Script"},
-    {id: "dub",      ic: "🎙", label: "Dub"},
-    {id: "voices",   ic: "🗣", label: "Voices"},
-    {id: "fix",      ic: "🩹", label: "Fix"},
-    {id: "captions", ic: "💬", label: "Captions"},
-    {id: "i2v",      ic: "🎬", label: "Img→Vid"},
-    {id: "clone",    ic: "🏆", label: "Clone"},
-    {id: "deliver",  ic: "📤", label: "Deliver"},
+  /* ═════════════ LEFT: tabs + sub-nav spec ═════════════ */
+  const TABS = [
+    {id: "media",       ic: "🎞", label: "Media"},
+    {id: "audio",       ic: "🎵", label: "Audio"},
+    {id: "text",        ic: "🅃",  label: "Text"},
+    {id: "stickers",    ic: "😀", label: "Stickers"},
+    {id: "effects",     ic: "✨", label: "Effects"},
+    {id: "transitions", ic: "⧉",  label: "Transit."},
+    {id: "captions",    ic: "💬", label: "Captions"},
+    {id: "filters",     ic: "🎚", label: "Filters"},
+    {id: "avatar",      ic: "🧑‍🚀", label: "AI Avatar"},
   ];
-  const SUBNAV = {
-    media:  [["all", "All"], ["dubbed", "Dubbed"], ["delivered", "Delivered"], ["drafts", "Drafts"]],
-    voices: [["bank", "Bank"]],
+  const NAV = {
+    media: [["h", "Import"], ["media", "Media"], ["subprojects", "Subprojects"],
+            ["h", "Yours"], ["fav", "Favorites"], ["my", "My"], ["brand", "Brand assets"],
+            ["h", "Generate AI"], ["aiimage", "AI Image"], ["aivideo", "AI Video"], ["aidialog", "AI Dialog"]],
+    audio: [["h", "Audio"], ["extract", "Extract audio"], ["import", "Import audio"], ["lib", "Library"]],
+    text: [["h", "Text"], ["add", "Add text"], ["fx", "Text effects"], ["tpl", "Templates"],
+           ["h", "Captions"], ["auto", "Auto caption"], ["local", "Local caption"]],
+    stickers: [["h", "Stickers"], ["aigen", "AI generated"], ["trend", "Trending"],
+               ["memes", "Memes"], ["classic", "Classic"], ["new", "New"]],
+    effects: [["h", "Video effects"], ["trend", "Trending"], ["classic", "Classic"],
+              ["h", "Body effects"], ["blur", "Blur"], ["heat", "Heat"], ["clone", "Clone"]],
+    transitions: [["h", "Transitions"], ["trend", "Trending"], ["classic", "Classic"], ["new", "New"],
+                  ["heat", "Heat"], ["free", "Free"], ["fire", "Fire"], ["overlay", "Overlay"]],
+    captions: [["h", "Captions"], ["auto", "Auto caption"], ["tpl", "Templates"],
+               ["lyrics", "Auto lyrics"], ["add", "Add caption"]],
+    filters: [["h", "Filters"], ["movie", "Movie"], ["mono", "Mono"], ["portrait", "Portrait"],
+              ["retro", "Retro"], ["night", "Night"], ["alt", "Alternative"], ["food", "Food"]],
+    avatar: [["h", "AI Avatar"], ["lib", "Avatar library"], ["photo", "Photo to Avatar"],
+             ["fashion", "Fashion model"], ["translate", "Video translator"], ["dialog", "AI Dialog"]],
   };
 
   function renderTabs() {
-    $("#ed-tabs").innerHTML = TOOLS.map(t =>
-      `<button class="ed-tab ${ED.tool === t.id ? "on" : ""}" data-t="${t.id}">
-         <span class="ic">${t.ic}</span>${t.label}</button>`).join("");
-    $$(".ed-tab").forEach(b => b.onclick = () => setTool(b.dataset.t));
+    $("#ed-tabs").innerHTML = TABS.map(t =>
+      `<button class="ed-tab ${ED.tab === t.id ? "on" : ""}" data-t="${t.id}">
+        <span class="ic">${t.ic}</span>${t.label}</button>`).join("");
+    $$(".ed-tab").forEach(b => b.onclick = () => {
+      ED.tab = b.dataset.t;
+      ED.sec = (NAV[ED.tab].find(x => x[0] !== "h") || ["media"])[0];
+      renderTabs(); renderSubnav(); renderContent(); syncURL();
+    });
   }
 
   function renderSubnav() {
-    const items = SUBNAV[ED.tool] || [["panel", "Panel"]];
-    $("#ed-subnav").innerHTML = items.map(([k, lab], i) =>
-      `<button class="sn ${(ED.tool === "media" ? ED.filter === k : i === 0) ? "on" : ""}" data-k="${k}">${lab}</button>`).join("");
+    $("#ed-subnav").innerHTML = (NAV[ED.tab] || []).map(([k, lab]) =>
+      k === "h" ? `<div class="snh">${lab}</div>`
+        : `<button class="sn ${ED.sec === k ? "on" : ""}" data-k="${k}">${lab}</button>`).join("");
     $$("#ed-subnav .sn").forEach(b => b.onclick = () => {
-      if (ED.tool === "media") { ED.filter = b.dataset.k; renderAssets(); renderSubnav(); }
+      ED.sec = b.dataset.k;
+      renderSubnav(); renderContent(); syncURL();
     });
   }
 
-  function setTool(id) {
-    ED.tool = id;
-    renderTabs(); renderSubnav(); renderAssets(); renderInspector();
-    syncURL();
+  /* ═════════════ content helpers ═════════════ */
+  const soonTiles = (items) => `<div class="ed-tiles">` + items.map(([e, n]) =>
+    `<div class="ed-tile"><span class="soon">SOON</span><span class="big">${e}</span>${n}</div>`).join("") + "</div>";
+  const panel = (h, sub, body) =>
+    `<div class="ed-panel"><h4>${h}</h4><div class="ph4">${sub}</div>${body}</div>`;
+
+  function videoCard(v) {
+    const run = VS.runningFor(v);
+    const fav = (v.tags || []).includes("fav");
+    const badge = run ? `<span class="bdg run">⏳ ${VS.esc(run.action)}</span>`
+      : v.exported ? '<span class="bdg ok">DELIVERED</span>'
+      : v.dub ? '<span class="bdg">DUBBED</span>' : "";
+    return `<div class="ed-card ${ED.video && ED.video.name === v.name ? "sel" : ""}" data-n="${VS.esc(v.name)}">
+      <div class="th"><img loading="lazy" src="/api/thumb/${encodeURIComponent(v.name)}" alt="">${badge}
+        <button class="ed-fav" data-fav="${VS.esc(v.name)}" title="favorite">${fav ? "♥" : "♡"}</button></div>
+      <div class="nm">${VS.esc(v.title || v.name)}</div></div>`;
   }
 
-  /* ═════════ browser assets ═════════ */
-  function renderAssets() {
-    const box = $("#ed-assets");
-    if (ED.tool === "voices") {
-      box.innerHTML = ED.voices.length
-        ? `<div class="ed-grid" style="grid-template-columns:1fr">` + ED.voices.map(v =>
-            `<div class="ed-card" style="padding:9px 11px"><b style="font-size:12px">🎙 ${VS.esc(v.name)}</b>
-             ${v.sample ? `<audio controls preload="none" src="/media/${v.sample}" style="width:100%;margin-top:6px"></audio>` : ""}
-             <div class="nm" style="padding:4px 0 0">from ${VS.esc(v.source || "?")}</div></div>`).join("") + "</div>"
-        : '<div class="ed-empty">no saved voices — clone one from the Voices inspector</div>';
-      return;
-    }
-    // media grid
-    const q = ED.search.toLowerCase();
-    let vids = VS.state.videos.filter(v =>
-      !q || v.name.toLowerCase().includes(q) || (v.title || "").toLowerCase().includes(q));
-    if (ED.filter === "dubbed") vids = vids.filter(v => v.dub);
-    else if (ED.filter === "delivered") vids = vids.filter(v => v.exported);
-    else if (ED.filter === "drafts") vids = vids.filter(v => !v.dub);
-    if (!vids.length) { box.innerHTML = '<div class="ed-empty">nothing here — import a video above</div>'; return; }
-    box.innerHTML = `<div class="ed-grid">` + vids.map(v => {
-      const run = VS.runningFor(v);
-      const badge = run ? `<span class="bdg run">⏳ ${VS.esc(run.action)}</span>`
-        : v.exported ? '<span class="bdg ok">DELIVERED</span>'
-        : v.dub ? '<span class="bdg" style="color:var(--cy)">DUBBED</span>' : "";
-      return `<div class="ed-card ${ED.video && ED.video.name === v.name ? "sel" : ""}" data-n="${VS.esc(v.name)}">
-        <div class="th"><img loading="lazy" src="/api/thumb/${encodeURIComponent(v.name)}" alt="">${badge}</div>
-        <div class="nm">${VS.esc(v.title || v.name)}</div></div>`;
-    }).join("") + "</div>";
-    $$(".ed-card[data-n]").forEach(el => el.onclick = () => {
+  function bindCards(root) {
+    $$(".ed-card[data-n]", root).forEach(el => el.onclick = e => {
+      if (e.target.dataset.fav) return;
       const v = VS.state.videos.find(x => x.name === el.dataset.n);
       if (v) select(v);
     });
+    $$(".ed-fav", root).forEach(b => b.onclick = async e => {
+      e.stopPropagation();
+      const v = VS.state.videos.find(x => x.name === b.dataset.fav);
+      if (!v) return;
+      const tags = new Set(v.tags || []);
+      tags.has("fav") ? tags.delete("fav") : tags.add("fav");
+      try { await VS.post("/api/creator/meta", {name: v.name, tags: [...tags]}); VS.refreshLibrary(); }
+      catch (err) { VS.toast("Error: " + err.message); }
+    });
   }
 
-  function select(v, tool) {
+  function grid(vids, empty) {
+    if (!vids.length) return `<div class="ed-empty">${empty}</div>`;
+    return `<div class="ed-grid">` + vids.map(videoCard).join("") + "</div>";
+  }
+
+  /* ═════════════ content per tab.section ═════════════ */
+  const C = {};
+
+  // ── MEDIA ──
+  C["media.media"] = () => {
+    const q = ED.search.toLowerCase();
+    const vids = VS.state.videos.filter(v => !q || v.name.toLowerCase().includes(q)
+      || (v.title || "").toLowerCase().includes(q));
+    let html = grid(vids, "no media yet — Import above");
+    if (ED.i2v.length) {
+      html += `<div class="snh" style="padding:12px 2px 6px">GENERATED CLIPS (Image→Video)</div><div class="ed-grid">`
+        + ED.i2v.filter(c => c.ready).map(c =>
+          `<div class="ed-card" data-clip="${VS.esc(c.clip)}"><div class="th">
+             <video muted preload="metadata" src="/media/${c.clip}" style="width:100%;height:100%;object-fit:cover"></video>
+             <span class="bdg">AI CLIP</span></div>
+           <div class="nm">${VS.esc((c.prompt || c.slug).slice(0, 30))}</div></div>`).join("") + "</div>";
+    }
+    return html;
+  };
+  C["media.media"].bind = root => {
+    bindCards(root);
+    $$("[data-clip]", root).forEach(el => el.onclick = () => window.open("/media/" + el.dataset.clip, "_blank"));
+  };
+  C["media.subprojects"] = () => grid(VS.state.videos.filter(v => v.dub),
+    "no subprojects yet — a video becomes one once it's dubbed");
+  C["media.subprojects"].bind = bindCards;
+  C["media.fav"] = () => grid(VS.state.videos.filter(v => (v.tags || []).includes("fav")),
+    "no favorites — tap ♡ on any card");
+  C["media.fav"].bind = bindCards;
+  C["media.my"] = () => grid(VS.state.videos, "your uploads appear here");
+  C["media.my"].bind = bindCards;
+  C["media.brand"] = () => panel("Brand assets", "the locked liitt brand kit — used by Brand Studio",
+    `<div class="ed-tiles">
+      <div class="ed-tile live" data-b="banks/brand-assets/wordmark/official-logo.png"><span class="big">🏷</span>official logo</div>
+      <div class="ed-tile live" data-b="banks/brand-assets/wordmark/liitt-gold-on-dark.png"><span class="big">🌙</span>gold on dark</div>
+      <div class="ed-tile live" data-b="banks/brand-assets/wordmark/liitt-light.png"><span class="big">☀️</span>light</div>
+    </div><div class="ed-note">fonts + kit tokens live in <a href="/brand-studio">Brand Studio ↗</a></div>`);
+  C["media.brand"].bind = root => $$("[data-b]", root).forEach(t =>
+    t.onclick = () => window.open("/media/" + t.dataset.b, "_blank"));
+
+  C["media.aiimage"] = () => panel("AI Image", "describe an image — rendered locally on your GPU (free, ComfyUI)",
+    `<div class="ed-field"><label>Reference image (optional — guides the result)</label>
+       <button class="ed-run ghostly" id="ai-imgpick">${ED.aiImg ? "✓ image attached — replace" : "⬆ Upload an image"}</button>
+       <input type="file" id="ai-imgfile" accept="image/*" style="display:none"></div>
+     <div class="ed-field"><label>Describe your image</label>
+       <textarea id="ai-prompt" rows="3" placeholder="e.g. mushroom gummies jar on a marble counter, soft morning light, photorealistic"></textarea></div>
+     <div class="ed-field"><label>How many results</label>
+       <select id="ai-count"><option>1</option><option>2</option><option selected>4</option><option>6</option><option>8</option></select></div>
+     <button class="ed-run" id="ai-go">🖼 Generate</button>
+     <div class="ed-cost free">free · local GPU · needs ComfyUI running</div>
+     <div id="ai-results" class="ed-tiles" style="margin-top:10px"></div>`);
+  C["media.aiimage"].bind = root => bindAiImage(root, "");
+  function bindAiImage(root, promptSuffix) {
+    const pick = $("#ai-imgpick", root), file = $("#ai-imgfile", root);
+    pick.onclick = () => file.click();
+    file.onchange = async e => {
+      const f = e.target.files[0];
+      if (!f) return;
+      const fd = new FormData(); fd.append("image", f);
+      pick.textContent = "uploading…";
+      try {
+        const r = await fetch("/api/studio/upload", {method: "POST", body: fd});
+        const d = await r.json();
+        ED.aiImg = d.path; pick.textContent = "✓ image attached — replace"; savedNow();
+      } catch (err) { pick.textContent = "⬆ Upload an image"; VS.toast("Upload failed"); }
+    };
+    $("#ai-go", root).onclick = async () => {
+      const prompt = ($("#ai-prompt", root).value.trim() + " " + promptSuffix).trim();
+      if (!prompt) { VS.toast("Describe the image first"); return; }
+      const btn = $("#ai-go", root), out = $("#ai-results", root);
+      btn.disabled = true; btn.textContent = "🖼 rendering… (1-3 min)";
+      out.innerHTML = "";
+      try {
+        const body = ED.aiImg
+          ? {mode: "keyframe", image: ED.aiImg, prompt}
+          : {mode: "generate", prompt, count: +$("#ai-count", root).value};
+        const d = await VS.post("/api/studio/run", body);
+        if (d.ok && d.results.length) {
+          out.innerHTML = d.results.map(u =>
+            `<div class="ed-tile live" style="padding:0;overflow:hidden" data-img="${u}">
+               <img src="${u}" style="width:100%;height:100%;object-fit:cover"></div>`).join("");
+          $$("[data-img]", out).forEach(t => t.onclick = () => window.open(t.dataset.img, "_blank"));
+          VS.toast(`✓ ${d.results.length} image(s) rendered`);
+        } else {
+          out.innerHTML = `<div class="ed-empty">no result — is ComfyUI running? (run_nvidia_lowvram.bat)</div>`;
+        }
+      } catch (e) { VS.toast("Generate failed: " + e.message); }
+      btn.disabled = false; btn.textContent = "🖼 Generate";
+    };
+  }
+
+  C["media.aivideo"] = () => panel("AI Video", "make clips with AI",
+    `<div class="ed-cats" id="av-cats">
+       <button class="ed-cat on" data-c="i2v">Image to Video</button>
+       <button class="ed-cat" data-c="t2v">Omni / Text to Video</button>
+       <button class="ed-cat" data-c="mf">Multiframe</button></div>
+     <div id="av-body"></div>`);
+  C["media.aivideo"].bind = root => {
+    const body = $("#av-body", root);
+    const show = c => {
+      $$(".ed-cat", root).forEach(x => x.classList.toggle("on", x.dataset.c === c));
+      if (c === "i2v") {
+        body.innerHTML = `<div class="ed-note" style="margin-bottom:8px">A picture + a motion prompt → up to a 30s clip (fal.ai, cost-gated). Chained segments keep it continuous.</div>
+          <a class="ed-run" style="display:block;text-align:center;text-decoration:none" href="/image-to-video">🎬 Open Image→Video ↗</a>
+          <div class="ed-note">finished clips appear under Media as “AI CLIP”.</div>`;
+      } else if (c === "t2v") {
+        body.innerHTML = `<div class="ed-note" style="margin-bottom:8px">Text-to-video shot generation (Seedance / Wan / Kling / Hailuo) runs per product inside the Ads Factory shot pipeline.</div>
+          <a class="ed-run ghostly" style="display:block;text-align:center;text-decoration:none" href="/creator">Open Ads Factory ↗</a>`;
+      } else {
+        body.innerHTML = `<div class="ed-tiles"><div class="ed-tile"><span class="soon">SOON</span><span class="big">🎞</span>Multiframe</div></div>
+          <div class="ed-note">keyframe-to-keyframe video is on the roadmap.</div>`;
+      }
+    };
+    $$(".ed-cat", root).forEach(b => b.onclick = () => show(b.dataset.c));
+    show("i2v");
+  };
+  C["media.aidialog"] = () => panel("AI Dialog", "two AI voices in conversation",
+    soonTiles([["🗨️", "Dialog scenes"]]) +
+    `<div class="ed-note">today you can already voice TWO real speakers with <a href="/?step=dub">Interview mode ↗</a>.</div>`);
+
+  // ── AUDIO ──
+  C["audio.extract"] = () => {
+    const v = ED.video;
+    return panel("Extract audio", "pull the audio track out of a video as an mp3",
+      v ? `<div class="ed-note" style="margin-bottom:8px">from: <b>${VS.esc(v.title || v.name)}</b></div>
+           <button class="ed-run" id="ax-go">🎵 Extract audio</button><div class="ed-note" id="ax-out"></div>`
+        : `<div class="ed-empty">pick a video in Media first</div>`);
+  };
+  C["audio.extract"].bind = root => {
+    const b = $("#ax-go", root);
+    if (!b) return;
+    b.onclick = async () => {
+      b.disabled = true; b.textContent = "🎵 extracting…";
+      try {
+        const d = await VS.post("/api/extract-audio", {file: ED.video.name});
+        $("#ax-out", root).innerHTML = `✓ <a href="/media/${d.audio}" target="_blank">${d.audio.split("/").pop()}</a> (${VS.fmtSize(d.size)}) — also in Exports`;
+        VS.toast("Audio extracted");
+      } catch (e) { VS.toast("Extract failed: " + e.message); }
+      b.disabled = false; b.textContent = "🎵 Extract audio";
+    };
+  };
+  C["audio.import"] = () => panel("Import audio", "mp3 · m4a · wav — lands in your library",
+    `<button class="ed-run" id="au-imp">⬆ Import audio file</button>
+     <div class="ed-note">voice references for the Voice Bank also live here.</div>`);
+  C["audio.import"].bind = root => { $("#au-imp", root).onclick = () => $("#ed-file").click(); };
+  C["audio.lib"] = () => {
+    const auds = VS.state.videos.filter(v => /\.(mp3|m4a|wav)$/i.test(v.name));
+    return panel("Audio library", "your imported audio",
+      auds.length ? auds.map(a => `<div class="ed-opt" style="cursor:default"><div class="t">🎵 ${VS.esc(a.name)}</div>
+        <audio controls preload="none" src="/media/uploads/${encodeURIComponent(a.name)}" style="width:100%;margin-top:6px"></audio></div>`).join("")
+      : `<div class="ed-empty">no audio files yet</div>`);
+  };
+
+  // ── TEXT ──
+  C["text.add"] = () => panel("Add text", "overlay titles on the video",
+    `<div class="ed-cats"><button class="ed-cat on">Default</button><button class="ed-cat">Yours</button></div>` +
+    soonTiles([["🅰", "Headline"], ["𝘉", "Sub line"], ["✎", "Handwrite"], ["◻", "Lower third"]]) +
+    `<div class="ed-note">burned word-timed captions are LIVE under the Captions tab — text overlays are next.</div>`);
+  C["text.fx"] = () => panel("Text effects", "styles & animations",
+    soonTiles([["✨", "Glow"], ["🌈", "Gradient"], ["🫨", "Shake"], ["🌀", "Spin in"], ["💧", "Drop"], ["🔥", "Burn"]]));
+  C["text.tpl"] = () => panel("Text templates", "ready-made layouts",
+    soonTiles([["📰", "News bar"], ["💬", "Chat bubble"], ["🏷", "Price tag"], ["⭐", "Review"], ["📢", "CTA"], ["🎬", "Title card"]]));
+  C["text.auto"] = () => panel("Auto caption", "word-timed captions from the audio",
+    `<button class="ed-run" id="tx-cap">💬 Open Auto caption</button>`);
+  C["text.auto"].bind = root => { $("#tx-cap", root).onclick = () => { ED.tab = "captions"; ED.sec = "auto";
+    renderTabs(); renderSubnav(); renderContent(); }; };
+  C["text.local"] = () => panel("Local caption", "import an existing caption file",
+    soonTiles([["📄", "SRT"], ["🎼", "LRC"], ["🎬", "ASS"]]) +
+    `<div class="ed-note">importing caption files is on the roadmap — generated captions are live under Captions.</div>`);
+
+  // ── STICKERS ──
+  C["stickers.aigen"] = () => panel("AI generated stickers", "make a sticker with the local image AI",
+    `<div class="ed-field"><label>Describe the sticker</label>
+       <textarea id="ai-prompt" rows="2" placeholder="e.g. cute mushroom mascot waving"></textarea></div>
+     <div class="ed-field" style="display:none"><button id="ai-imgpick"></button><input type="file" id="ai-imgfile"></div>
+     <div class="ed-field"><label>How many</label>
+       <select id="ai-count"><option>1</option><option selected>4</option><option>6</option></select></div>
+     <button class="ed-run" id="ai-go">😀 Generate stickers</button>
+     <div id="ai-results" class="ed-tiles" style="margin-top:10px"></div>`);
+  C["stickers.aigen"].bind = root => { ED.aiImg = null; bindAiImage(root, ", sticker style, bold outline, plain background"); };
+  const stTiles = soonTiles([["😂", "LOL"], ["🔥", "Fire"], ["💯", "100"], ["🫶", "Hearts"], ["😎", "Cool"],
+    ["🎉", "Party"], ["🐸", "Meme frog"], ["🍄", "Shroom"], ["⭐", "Stars"]]);
+  C["stickers.trend"] = () => panel("Trending stickers", "what's hot right now", stTiles);
+  C["stickers.memes"] = () => panel("Memes", "meme pack", stTiles);
+  C["stickers.classic"] = () => panel("Classic", "evergreen pack", stTiles);
+  C["stickers.new"] = () => panel("New", "fresh drops", stTiles);
+
+  // ── EFFECTS ──
+  const fxTiles = soonTiles([["📼", "Shaky glitch"], ["🌫", "Dreamy"], ["⚡", "Flash"], ["🎞", "Film grain"],
+    ["🫧", "Bokeh"], ["🌈", "Prism"], ["🕶", "Negative split"], ["💥", "Zoom pop"]]);
+  C["effects.trend"] = () => panel("Video effects — Trending", "the loud ones", fxTiles);
+  C["effects.classic"] = () => panel("Video effects — Classic", "the timeless ones", fxTiles);
+  C["effects.blur"] = () => panel("Body effects — Blur", "subject-aware blur",
+    soonTiles([["🌀", "Body blur"], ["👤", "Face blur"], ["🏃", "Motion trail"]]));
+  C["effects.heat"] = () => panel("Body effects — Heat", "energy on the subject",
+    soonTiles([["🔥", "Aura"], ["⚡", "Lightning"], ["✨", "Sparkle skin"]]));
+  C["effects.clone"] = () => panel("Body effects — Clone", "multiply the subject",
+    soonTiles([["👥", "Echo clone"], ["🪞", "Mirror"], ["🌊", "Trail clone"]]) +
+    `<div class="ed-note">object & face-aware REPAIRS (the practical cousin of body effects) are live — right panel → Fix.</div>`);
+
+  // ── TRANSITIONS ──
+  const trTiles = soonTiles([["◧", "Wipe"], ["⬒", "Split"], ["◐", "Circle"], ["✦", "Flash"],
+    ["🌀", "Warp"], ["📄", "Page"], ["🎞", "Film burn"], ["⚡", "Glitch"]]);
+  ["trend", "classic", "new", "heat", "free", "fire", "overlay"].forEach(k => {
+    C["transitions." + k] = () => panel("Transitions — " + k[0].toUpperCase() + k.slice(1),
+      "between-clip moves", trTiles);
+  });
+
+  // ── CAPTIONS ──
+  C["captions.auto"] = () => {
+    const v = ED.video;
+    const run = v && VS.runningFor(v, ["caption", "recaption"]);
+    return panel("Auto caption", "word-timed captions generated from the actual audio",
+      (v ? `<div class="ed-field"><label>Spoken language</label>
+        <select id="cc-lang"><option value="auto" selected>Auto detect</option><option>English</option>
+        <option>Spanish</option><option>German</option><option>French</option><option>Hebrew</option></select></div>
+      <div class="ed-field"><label style="display:flex;gap:6px;align-items:center">
+        <input type="checkbox" disabled> Bilingual caption <span class="soon" style="position:static;margin-left:6px">SOON</span></label></div>
+      ${run ? '<div class="ed-msg">⏳ burning… watch the timeline</div>' : ""}
+      <button class="ed-run" id="cc-gen" ${run ? "disabled" : ""}>💬 Generate</button>
+      <button class="ed-run ghostly" id="cc-del" disabled>🗑 Delete current caption <span class="soon" style="position:static;margin-left:4px">SOON</span></button>
+      ${v.captioned ? `<div class="ed-note">✓ captioned — <a href="/captioned/${encodeURIComponent(v.stem)}" target="_blank">watch ↗</a> · edit lines in the <a href="/?v=${encodeURIComponent(v.name)}&step=captions">classic view ↗</a></div>` : ""}`
+      : `<div class="ed-empty">pick a video in Media first</div>`));
+  };
+  C["captions.auto"].bind = root => {
+    const b = $("#cc-gen", root);
+    if (!b) return;
+    b.onclick = async () => {
+      const v = ED.video;
+      try {
+        if (v.dub) await VS.post("/api/run", {action: "caption", file: v.stem});
+        else await VS.post("/api/recaption", {path: "uploads/" + v.name, mode: "captions"});
+        VS.toast("💬 Generating captions…"); renderTimeline();
+      } catch (e) { VS.toast("Error: " + e.message); }
+    };
+  };
+  C["captions.tpl"] = () => panel("Caption templates", "designs for the burned captions",
+    `<div class="ed-cats"><button class="ed-cat on">Trending</button><button class="ed-cat">Classic</button>
+      <button class="ed-cat">New</button><button class="ed-cat">Heat</button></div>
+     <div class="ed-tiles">
+       <div class="ed-tile live" id="cc-house"><span class="big">💬</span>House Bold<br><span style="color:var(--ok);font-size:8px">LIVE</span></div>
+       ${[["🌈", "Pop line"], ["📦", "Boxed"], ["🖍", "Marker"], ["⚡", "Impact"], ["🫧", "Soft"]].map(([e, n]) =>
+         `<div class="ed-tile"><span class="soon">SOON</span><span class="big">${e}</span>${n}</div>`).join("")}
+     </div>`);
+  C["captions.tpl"].bind = root => {
+    $("#cc-house", root).onclick = async () => {
+      const v = ED.video;
+      if (!v) { VS.toast("Pick a video first"); return; }
+      try {
+        if (v.dub) await VS.post("/api/run", {action: "caption", file: v.stem});
+        else await VS.post("/api/recaption", {path: "uploads/" + v.name, mode: "captions"});
+        VS.toast("💬 Burning House Bold captions…");
+      } catch (e) { VS.toast("Error: " + e.message); }
+    };
+  };
+  C["captions.lyrics"] = () => panel("Auto lyrics", "timed lyrics for music videos",
+    `<div class="ed-field"><label>Language</label><select disabled><option>Auto detect</option></select></div>
+     <button class="ed-run ghostly" disabled>🎼 Generate lyrics <span class="soon" style="position:static;margin-left:4px">SOON</span></button>`);
+  C["captions.add"] = () => panel("Add caption", "import an existing caption file",
+    `<div class="ed-tiles">${[["📄", "SRT"], ["🎼", "LRC"], ["🎬", "ASS"]].map(([e, n]) =>
+      `<div class="ed-tile"><span class="soon">SOON</span><span class="big">${e}</span>${n}</div>`).join("")}</div>
+     <div class="ed-note">supported formats will be SRT · LRC · ASS.</div>`);
+
+  // ── FILTERS ──
+  const filterPack = names => soonTiles(names.map(n => ["🎞", n]));
+  C["filters.movie"] = () => panel("Filters — Movie", "cinema grades", filterPack(["Teal&Orange", "Noir", "Blockbuster", "Indie"]));
+  C["filters.mono"] = () => panel("Filters — Mono", "black & white", filterPack(["Classic B&W", "High key", "Low key", "Silver"]));
+  C["filters.portrait"] = () => panel("Filters — Portrait", "skin-friendly looks", filterPack(["Soft skin", "Golden hour", "Studio", "Natural"]));
+  C["filters.retro"] = () => panel("Filters — Retro", "vintage vibes", filterPack(["VHS", "70s film", "Polaroid", "Sepia"]));
+  C["filters.night"] = () => panel("Filters — Night", "after dark", filterPack(["Neon", "Moonlight", "City glow", "Midnight"]));
+  C["filters.alt"] = () => panel("Filters — Alternative", "the weird ones", filterPack(["Bleach", "Cross process", "Infrared", "Duotone"]));
+  C["filters.food"] = () => panel("Filters — Food", "make it delicious", filterPack(["Fresh", "Warm plate", "Crisp", "Juicy"]));
+
+  // ── AI AVATAR ──
+  C["avatar.lib"] = () => panel("Avatar library", "people from your own footage — ready to voice & clone",
+    ED.actors.length
+      ? `<div class="ed-grid">` + ED.actors.map(a =>
+          `<div class="ed-card" data-act="${VS.esc(a.name)}"><div class="th">
+             <img loading="lazy" src="/api/thumb/${encodeURIComponent(a.name)}"><span class="bdg">YOURS</span></div>
+           <div class="nm">${VS.esc(a.name)}</div></div>`).join("") + "</div>"
+        + `<div class="ed-note">use any of them as the actor in <a href="/?step=deliver">Clone Winner ↗</a>. A generated-avatar pack is coming.</div>`
+      : soonTiles([["🧑‍🚀", "AI people pack"]]));
+  C["avatar.lib"].bind = root => $$("[data-act]", root).forEach(el => el.onclick = () => {
+    const v = VS.state.videos.find(x => x.name === el.dataset.act);
+    if (v) select(v);
+  });
+  C["avatar.photo"] = () => panel("Photo to Avatar", "upload a photo → a stylized avatar (local GPU)",
+    `<div class="ed-field"><label>Your photo</label>
+       <button class="ed-run ghostly" id="ai-imgpick">${ED.aiImg ? "✓ photo attached — replace" : "⬆ Upload a photo"}</button>
+       <input type="file" id="ai-imgfile" accept="image/*" style="display:none"></div>
+     <div class="ed-field"><label>Avatar style</label>
+       <textarea id="ai-prompt" rows="2" placeholder="e.g. professional headshot, warm studio light, confident smile"></textarea></div>
+     <div class="ed-field" style="display:none"><select id="ai-count"><option>1</option></select></div>
+     <button class="ed-run" id="ai-go">🧑‍🚀 Create avatar</button>
+     <div id="ai-results" class="ed-tiles" style="margin-top:10px"></div>`);
+  C["avatar.photo"].bind = root => { ED.aiImg = null; bindAiImage(root, ", portrait avatar, high detail"); };
+  C["avatar.fashion"] = () => panel("Fashion model", "ready model bank",
+    soonTiles([["🕴", "Studio A"], ["💃", "Street"], ["🧥", "Editorial"], ["👟", "Sport"]]));
+  C["avatar.translate"] = () => {
+    const v = ED.video;
+    return panel("Video translator", "re-voice this video in another language — voice cloned, lips re-synced",
+      v ? `<div class="ed-note" style="margin-bottom:6px">video: <b>${VS.esc(v.title || v.name)}</b>${v.script ? "" : " · <span style='color:var(--warn)'>needs a saved Script (the translated words)</span>"}</div>
+        <div class="ed-field"><label>Target language</label>
+          <select id="vt-lang"><option value="es">Spanish</option><option value="de">German</option>
+          <option value="fr">French</option><option value="pt">Portuguese</option>
+          <option value="it">Italian</option><option value="en">English</option></select></div>
+        <div class="ed-field"><label style="display:flex;gap:6px;align-items:center">
+          <input type="checkbox" id="vt-lips" checked> re-sync the lips (Wav2Lip HD, free)</label></div>
+        <button class="ed-run" id="vt-go" ${v.script ? "" : "disabled"}>🌍 Translate & dub</button>
+        <div class="ed-cost free">free · local XTTS speaks the saved script in the chosen language</div>
+        <div class="ed-note">write the translated script first: right panel → Script (the ✨ AI rewrite can translate it).</div>`
+      : `<div class="ed-empty">pick a video in Media first</div>`);
+  };
+  C["avatar.translate"].bind = root => {
+    const b = $("#vt-go", root);
+    if (!b) return;
+    b.onclick = async () => {
+      const v = ED.video;
+      try {
+        await VS.post("/api/run", {action: "dub", file: v.name, engine: "local",
+          language: $("#vt-lang", root).value,
+          lipsync: $("#vt-lips", root).checked ? "wav2lip-hd" : "none"});
+        VS.toast("🌍 Translation dub started"); renderTimeline();
+      } catch (e) { VS.toast("Couldn't start: " + e.message); }
+    };
+  };
+  C["avatar.dialog"] = () => panel("AI Dialog", "AI-driven two-person dialog scenes",
+    soonTiles([["🗨️", "Dialog builder"]]) +
+    `<div class="ed-note">real two-speaker dubbing is already live: <a href="/?step=dub">Interview mode ↗</a>.</div>`);
+
+  function renderContent() {
+    const key = ED.tab + "." + ED.sec;
+    const fn = C[key];
+    const box = $("#ed-assets");
+    box.innerHTML = fn ? fn() : `<div class="ed-empty">…</div>`;
+    if (fn && fn.bind) { try { fn.bind(box); } catch (e) { console.error(key, e); } }
+  }
+
+  /* ═════════════ selection / player ═════════════ */
+  function select(v, chip) {
     ED.video = v;
     ED.take = v.dub ? "final" : "source";
-    ED.filmKey = null;
-    $("#ed-title").textContent = (v.title || v.name) + " — Video Studio";
+    ED.filmKey = null; ED.cutIn = ED.cutOut = null;
+    $("#ed-title").textContent = v.title || v.name;
     $("#ed-pname").textContent = "— " + (v.title || v.name);
     $("#ed-deliverbtn").disabled = !v.dub;
-    renderAssets(); renderPreview(); renderTimeline();
-    setTool(tool || ED.tool);
+    ED.chip = chip || "details";
+    renderContent(); renderPreview(); renderTimeline(); renderChips(); renderInspector();
+    syncURL();
   }
 
-  /* ═════════ player ═════════ */
   function previewSrc() {
     const v = ED.video;
     if (!v) return null;
     if (ED.take === "final" && v.dub) return "/media/" + v.dub + "?v=" + (v.dub_mtime || "");
     return "/media/uploads/" + encodeURIComponent(v.name);
   }
-  const fmtT = s => {
-    if (!isFinite(s)) return "00:00.0";
-    return String(Math.floor(s / 60)).padStart(2, "0") + ":" +
-      (s % 60).toFixed(1).padStart(4, "0");
-  };
-
-  function playerVideo() { return $("#ed-frame video"); }
+  const fmtT = s => !isFinite(s) ? "00:00.0"
+    : String(Math.floor(s / 60)).padStart(2, "0") + ":" + (s % 60).toFixed(1).padStart(4, "0");
+  const playerVideo = () => $("#ed-frame video");
 
   function renderPreview() {
     const f = $("#ed-frame");
     f.className = "ed-frame" + (ED.ratio === "16:9" ? " wide" : ED.ratio === "1:1" ? " square" : "");
     const src = previewSrc();
-    if (!src) { f.innerHTML = '<div class="ph">← pick a video from the media panel</div>'; return; }
+    if (!src) { f.innerHTML = '<div class="ph">← pick a video from Media</div>'; return; }
     let vid = playerVideo();
     if (!vid) {
       f.innerHTML = "";
@@ -154,79 +512,72 @@
     $("#ed-ratio").textContent = ED.ratio;
   }
 
-  /* ═════════ timeline ═════════ */
-  function tlWidth() { return Math.max(400, ED.dur * ED.pxs); }
+  /* ═════════════ timeline ═════════════ */
+  const tlWidth = () => Math.max(400, ED.dur * ED.pxs);
+  function movePlayhead(t) { $("#tl-playhead").style.left = (HEADW + (t || 0) * ED.pxs) + "px"; }
 
   function renderTimeline() {
     const v = ED.video;
     const ruler = $("#tl-ruler"), lanes = $("#tl-lanes"), inner = $("#tl-inner");
     if (!v) {
-      ruler.innerHTML = ""; lanes.innerHTML =
-        '<div class="ed-empty" style="padding:26px">the pipeline timeline appears when you pick a video</div>';
+      ruler.innerHTML = "";
+      lanes.innerHTML = '<div class="ed-empty" style="padding:26px">the editing timeline appears when you pick a video</div>';
       return;
     }
     const W = tlWidth();
     inner.style.width = (HEADW + W + 40) + "px";
-
-    // ruler ticks — adaptive step
     const step = ED.pxs >= 180 ? 1 : ED.pxs >= 90 ? 2 : 5;
     let ticks = "";
-    for (let t = 0; t <= Math.max(1, ED.dur); t += step) {
+    for (let t = 0; t <= Math.max(1, ED.dur); t += step)
       ticks += `<div class="tick" style="left:${HEADW + t * ED.pxs}px">${t}s</div>`;
+    // cut range highlight
+    if (ED.cutIn != null) {
+      const a = HEADW + ED.cutIn * ED.pxs;
+      const b = ED.cutOut != null ? HEADW + ED.cutOut * ED.pxs : a + 2;
+      ticks += `<div class="ed-cutrange" style="left:${a}px;width:${Math.max(2, b - a)}px"></div>`;
     }
     ruler.innerHTML = ticks;
 
     const jobs = VS.jobsFor(v).filter(j => j.status === "running");
     const jb = a => jobs.find(j => a.includes(j.action));
     const pct = j => (j && j.progress && j.progress.pct != null) ? j.progress.pct + "%" : "running…";
-    const bar = (cls, x, w, text, st) =>
-      `<div class="ed-clipbar ${cls}" style="left:${HEADW + x}px;width:${w}px">${text}${st ? `<span class="st">${st}</span>` : ""}</div>`;
+    const bar = (cls, text, st) =>
+      `<div class="ed-clipbar ${cls}" style="left:${HEADW}px;width:${W}px">${text}${st ? `<span class="st">${st}</span>` : ""}</div>`;
     const lane = (icons, name, body) =>
       `<div class="ed-lane"><div class="head">${icons.map(i => `<span class="ic">${i}</span>`).join("")}
-        <span class="nm">${name}</span></div><div class="body" data-seek="1">${body}</div></div>`;
+        <span class="nm">${name}</span></div><div class="body">${body}</div></div>`;
 
-    // FX lane — a running job spans the full width (CapCut's purple effect band)
     const running = jobs[0];
-    const fxBody = running
-      ? bar("effect", 0, W, "⚙ " + VS.esc(running.label || running.action), pct(running))
-      : bar("ghost", 0, W, "no job running");
-    // VIDEO lane — filmstrip
+    const fxBody = running ? bar("effect", "⚙ " + VS.esc(running.label || running.action), pct(running))
+      : bar("ghost", "no job running");
     const filmBody = `<div class="ed-film" id="tl-film" style="left:${HEADW}px;width:${W}px">
-        <div class="cliplabel">${VS.esc(v.name)} · ${ED.dur ? ED.dur.toFixed(1) + "s" : ""} ${v.cleaned ? "· subtitles erased ✓" : ""}</div>
-      </div>`;
-    // VOICE lane
+        <div class="cliplabel">${VS.esc(v.name)} · ${ED.dur ? ED.dur.toFixed(1) + "s" : ""} ${v.cleaned ? "· subtitles erased ✓" : ""}</div></div>`;
     const dubJob = jb(["dub", "duo", "diarize"]);
-    const voiceBody = dubJob ? bar("running", 0, W, "🎙 " + VS.esc(dubJob.action), pct(dubJob))
-      : v.dub ? bar("voice", 0, W, "🎙 dubbed voice", "✓ final.mp4")
-      : bar("ghost", 0, W, v.script ? "ready — run the Dub tool" : "needs a script first");
-    // CAPTIONS lane
+    const voiceBody = dubJob ? bar("running", "🎙 " + VS.esc(dubJob.action), pct(dubJob))
+      : v.dub ? bar("voice", "🎙 dubbed voice", "✓ final.mp4")
+      : bar("ghost", v.script ? "ready — Dub (right panel)" : "needs a script first");
     const capJob = jb(["caption", "recaption"]);
-    const capsBody = capJob ? bar("running", 0, W, "💬 burning captions", pct(capJob))
-      : v.captioned ? bar("caps", 0, W, "💬 captions burned", "✓")
-      : bar("ghost", 0, W, v.dub ? "ready — run the Captions tool" : "waiting for a dub");
+    const capsBody = capJob ? bar("running", "💬 burning captions", pct(capJob))
+      : v.captioned ? bar("caps", "💬 captions burned", "✓")
+      : bar("ghost", v.dub ? "ready — Captions tab" : "waiting for a dub");
 
     lanes.innerHTML =
-      lane(["✦", "🔒", "👁"], "FX/JOB", fxBody) +
+      lane(["✦", "👁"], "FX/JOB", fxBody) +
       lane(["🎬", "🔒", "👁"], "VIDEO", filmBody) +
-      lane(["🔊", "🔒", "👁"], "VOICE", voiceBody) +
-      lane(["💬", "🔒", "👁"], "CAPTIONS", capsBody);
-
+      lane(["🔊", "👁"], "VOICE", voiceBody) +
+      lane(["💬", "👁"], "CAPTIONS", capsBody);
     $("#tl-jobnote").textContent = running ? `⏳ ${running.label || running.action}` : "";
     loadFilmstrip();
-    // click-to-seek on ruler + lane bodies
+
     const seek = e => {
       const rect = inner.getBoundingClientRect();
-      const x = e.clientX - rect.left - HEADW + $("#tl-scroll").scrollLeft * 0;
       const t = Math.max(0, Math.min(ED.dur, (e.clientX - rect.left - HEADW) / ED.pxs));
       const vid = playerVideo();
       if (vid && isFinite(t)) { vid.currentTime = t; movePlayhead(t); }
     };
     ruler.onclick = seek;
     $$("#tl-lanes .body").forEach(b => b.onclick = seek);
-  }
-
-  function movePlayhead(t) {
-    $("#tl-playhead").style.left = (HEADW + (t || 0) * ED.pxs) + "px";
+    updateCutBtn();
   }
 
   async function loadFilmstrip() {
@@ -239,39 +590,53 @@
     ED.filmKey = key;
     try {
       const d = await VS.api(`/api/qc/frames?path=${encodeURIComponent(rel)}&count=12`);
-      if (ED.filmKey !== key) return;                   // stale
-      const imgs = (d.frames || []).map(f =>
-        `<img src="/media/${f.path.replace(/^\/+/, "")}" alt="">`).join("");
-      holder.insertAdjacentHTML("beforeend", imgs);
-    } catch (e) { /* frames unavailable — label-only strip is fine */ }
+      if (ED.filmKey !== key) return;
+      holder.insertAdjacentHTML("beforeend",
+        (d.frames || []).map(f => `<img src="/media/${f.path.replace(/^\/+/, "")}" alt="">`).join(""));
+    } catch (e) { /* label-only strip */ }
   }
 
-  /* ═════════ inspector panels ═════════ */
+  /* cut tool */
+  function updateCutBtn() {
+    const ok = ED.video && ED.cutIn != null && ED.cutOut != null && ED.cutOut > ED.cutIn + 0.05;
+    $("#tl-cut").disabled = !ok;
+    $("#tl-label").textContent = ED.cutIn != null
+      ? `cut: ${fmtT(ED.cutIn)} → ${ED.cutOut != null ? fmtT(ED.cutOut) : "…"}` : "";
+  }
+
+  /* ═════════════ RIGHT: chips + panels (the pipeline) ═════════════ */
+  const CHIPS = [["details", "Details"], ["clean", "Clean"], ["script", "Script"],
+                 ["dub", "Dub"], ["fix", "Fix"], ["deliver", "Deliver"]];
+  function renderChips() {
+    $("#ed-chips").innerHTML = CHIPS.map(([k, lab]) =>
+      `<button class="ed-chip ${ED.chip === k ? "on" : ""}" data-c="${k}">${lab}</button>`).join("");
+    $$(".ed-chip").forEach(b => b.onclick = () => { ED.chip = b.dataset.c; renderChips(); renderInspector(); });
+  }
+
   const P = {};
-  const need = (cap, msg) => { $("#ed-icap").textContent = cap;
-    return `<div class="ed-note">${msg || "Pick a video in the media panel first."}</div>`; };
+  const need = msg => `<div class="ed-note">${msg || "Pick a video in Media first."}</div>`;
   const rows = pairs => pairs.map(([k, v]) =>
     `<div class="ed-row"><span class="k">${k}</span><span class="v">${v}</span></div>`).join("");
 
-  P.media = () => {
+  P.details = () => {
     const v = ED.video;
     $("#ed-icap").textContent = "Details";
-    if (!v) return need("Details");
+    if (!v) return need();
     return rows([
-      ["Name:", `<input type="text" id="mi-title" value="${VS.esc(v.title || "")}" placeholder="${VS.esc(v.name)}" style="width:100%;background:var(--bg2);border:1px solid var(--line);border-radius:6px;color:var(--text);padding:5px 8px;font-size:12px">`],
+      ["Name:", `<input type="text" id="mi-title" value="${VS.esc(v.title || "")}" placeholder="${VS.esc(v.name)}">`],
       ["File:", VS.esc(v.name)],
       ["Size:", VS.fmtSize(v.size)],
-      ["Character:", `<input type="text" id="mi-char" value="${VS.esc(v.character || "")}" placeholder="who's in it" style="width:100%;background:var(--bg2);border:1px solid var(--line);border-radius:6px;color:var(--text);padding:5px 8px;font-size:12px">`],
-      ["Tags:", `<input type="text" id="mi-tags" value="${VS.esc((v.tags || []).join(", "))}" placeholder="comma, separated" style="width:100%;background:var(--bg2);border:1px solid var(--line);border-radius:6px;color:var(--text);padding:5px 8px;font-size:12px">`],
+      ["Character:", `<input type="text" id="mi-char" value="${VS.esc(v.character || "")}" placeholder="who's in it">`],
+      ["Tags:", `<input type="text" id="mi-tags" value="${VS.esc((v.tags || []).join(", "))}" placeholder="comma, separated">`],
     ]) + `<div class="ed-hr"></div>` + rows([
       ["Transcribed:", v.transcript ? "✓ yes" : "not yet"],
-      ["Clean:", v.cleaned ? "✓ subtitles erased" : (v.no_subs ? "✓ no burned subs" : "not cleaned")],
+      ["Clean:", v.cleaned ? "✓ erased" : (v.no_subs ? "✓ no burned subs" : "not cleaned")],
       ["Dub:", v.dub ? "✓ final.mp4" : "—"],
       ["Captions:", v.captioned ? "✓ burned" : "—"],
       ["Delivered:", v.exported ? "✓ on Desktop" : "—"],
     ]) + `<button class="ed-run ghostly" id="mi-save" style="margin-top:12px">💾 Save details</button>`;
   };
-  P.media.bind = el => {
+  P.details.bind = el => {
     const v = ED.video; if (!v) return;
     $("#mi-save", el).onclick = async () => {
       try {
@@ -286,19 +651,15 @@
   P.clean = () => {
     const v = ED.video;
     $("#ed-icap").textContent = "Clean";
-    if (!v) return need("Clean");
+    if (!v) return need();
     const run = VS.runningFor(v, ["clean-subs"]);
-    return `<div class="ed-sec"><div class="shead">Burned-in subtitles</div>
-      <div class="ed-note" style="margin:0 0 8px">Erase old captions from the pixels before dubbing — free, on your GPU.</div>
-      ${run ? `<div class="ed-msg">⏳ erasing… watch the FX lane below</div>` : ""}
-      <button class="ed-run" id="cl-erase" ${run ? "disabled" : ""}>🧹 ${v.cleaned ? "Re-erase" : "Erase burned-in subtitles"}</button>
+    return `${run ? `<div class="ed-msg">⏳ erasing… watch the timeline</div>` : ""}
+      <button class="ed-run" id="cl-erase" ${run ? "disabled" : ""}>🧹 ${v.cleaned ? "Re-erase subtitles" : "Erase burned-in subtitles"}</button>
       ${v.cleaned ? `<button class="ed-run ghostly" id="cl-restore">↩ Restore original</button>` : ""}
       <div class="ed-field"><label style="display:flex;gap:6px;align-items:center">
-        <input type="checkbox" id="cl-nosubs" ${v.no_subs ? "checked" : ""}> this video has no burned subtitles</label></div></div>
+        <input type="checkbox" id="cl-nosubs" ${v.no_subs ? "checked" : ""}> no burned subtitles</label></div>
       <div class="ed-hr"></div>
-      <div class="ed-sec"><div class="shead">Transcribe</div>
-      <div class="ed-note" style="margin:0 0 8px">${v.transcript ? "✓ transcribed — the Script tool has the words." : "Needed before Script."}</div>
-      <button class="ed-run ghostly" id="cl-transcribe">${v.transcript ? "↻ Re-transcribe" : "▶ Transcribe"}</button></div>`;
+      <button class="ed-run ghostly" id="cl-transcribe">${v.transcript ? "↻ Re-transcribe" : "▶ Transcribe"}</button>`;
   };
   P.clean.bind = el => {
     const v = ED.video; if (!v) return;
@@ -326,10 +687,10 @@
   P.script = () => {
     const v = ED.video;
     $("#ed-icap").textContent = "Script";
-    if (!v) return need("Script");
-    return `<div class="ed-note" style="margin-bottom:8px">${v.orig_words ? `Original spoke ~${v.orig_words} words — stay close so the lips fit.` : "Write or load the words they'll say."}</div>
+    if (!v) return need();
+    return `<div class="ed-note" style="margin-bottom:8px">${v.orig_words ? `Original spoke ~${v.orig_words} words — stay close so the lips fit.` : "The words they'll say."}</div>
       <div class="ed-field"><textarea id="sc-text" rows="10" placeholder="loading…"></textarea></div>
-      <div class="ed-field"><input type="text" id="sc-steer" placeholder="✨ AI rewrite — e.g. punchier hook, same length"></div>
+      <div class="ed-field"><input type="text" id="sc-steer" placeholder="✨ AI rewrite — e.g. translate to Spanish / punchier hook"></div>
       <button class="ed-run ghostly" id="sc-ai">✨ Rewrite with AI</button>
       <button class="ed-run" id="sc-save">💾 Save script</button>
       <div class="ed-cost free" id="sc-count"></div>`;
@@ -346,7 +707,7 @@
       const text = ta.value.trim();
       if (!text) { VS.toast("Write the script first"); return; }
       try { await VS.post("/api/script/" + encodeURIComponent(v.stem), {text});
-        VS.toast("Script saved — Dub unlocked"); VS.refreshLibrary(); renderTimeline(); }
+        VS.toast("Script saved"); VS.refreshLibrary(); renderTimeline(); }
       catch (e) { VS.toast("Error: " + e.message); }
     };
     $("#sc-ai", el).onclick = async () => {
@@ -363,41 +724,41 @@
   P.dub = () => {
     const v = ED.video;
     $("#ed-icap").textContent = "Dub & Lip-sync";
-    if (!v) return need("Dub & Lip-sync");
+    if (!v) return need();
     const run = VS.runningFor(v, ["dub", "duo"]);
-    const voiceOpts = ['<option value="">🎤 On-screen speaker (clone from this video)</option>']
+    const voiceOpts = ['<option value="">🎤 On-screen speaker</option>']
       .concat(ED.voices.map(vo => `<option value="${VS.esc(vo.id)}">🎙 ${VS.esc(vo.name)}</option>`)).join("");
     return `
       <div class="ed-itabs"><button class="ed-itab on" data-it="basic">Basic</button>
         <button class="ed-itab" data-it="adv">Advanced</button></div>
-      <div data-pane="basic" style="margin-top:12px">
-        <div class="ed-opt on" data-eng="local"><div class="t">💻 Local — FREE<span class="price" style="color:var(--ok)">$0 · ~15m</span></div>
-          <div class="d">XTTS + Wav2Lip HD on your GPU. Great for testing.</div></div>
-        <div class="ed-opt" data-eng="fal"><div class="t">☁ Premium cloud — PAID<span class="price" style="color:var(--warn)">~$1.50 + $3/min</span></div>
-          <div class="d">MiniMax HD voice + sync.so pro — the winner pipeline.</div></div>
+      <div data-pane="basic">
+        <div class="ed-opt on" data-eng="local"><div class="t">💻 Local — FREE<span class="price" style="color:var(--ok)">$0</span></div>
+          <div class="d">XTTS + Wav2Lip HD on your GPU.</div></div>
+        <div class="ed-opt" data-eng="fal"><div class="t">☁ Premium cloud<span class="price" style="color:var(--warn)">~$1.50+$3/m</span></div>
+          <div class="d">MiniMax HD + sync.so pro — the winner pipeline.</div></div>
         <div class="ed-field"><label>Voice</label><select id="du-voice">${voiceOpts}</select></div>
         <div class="ed-field" id="du-localrow"><label>Lip-sync</label><select id="du-lip">
-          <option value="wav2lip-hd" selected>Wav2Lip HD (GFPGAN, free)</option>
-          <option value="wav2lip">Wav2Lip (faster, softer)</option>
-          <option value="none">voice only (silent / generated clips)</option></select></div>
-        <div class="ed-field" id="du-falrow" style="display:none"><label>Cloud voice · lip-sync tier</label>
-          <select id="du-tts"><option value="hd" selected>MiniMax HD</option><option value="turbo">MiniMax turbo</option><option value="f5">F5 (no clone fee)</option></select>
-          <select id="du-tier" style="margin-top:6px"><option value="standard" selected>sync v2 standard</option><option value="pro">sync v2 pro (best)</option><option value="veed">veed (cheap)</option><option value="latentsync">latentsync (cheapest)</option></select></div>
+          <option value="wav2lip-hd" selected>Wav2Lip HD (free)</option>
+          <option value="wav2lip">Wav2Lip (faster)</option>
+          <option value="none">voice only (silent clips)</option></select></div>
+        <div class="ed-field" id="du-falrow" style="display:none"><label>Cloud voice · tier</label>
+          <select id="du-tts"><option value="hd" selected>MiniMax HD</option><option value="turbo">turbo</option><option value="f5">F5 (no clone fee)</option></select>
+          <select id="du-tier" style="margin-top:6px"><option value="standard" selected>sync v2 standard</option><option value="pro">sync v2 pro</option><option value="veed">veed</option><option value="latentsync">latentsync</option></select></div>
       </div>
-      <div data-pane="adv" style="display:none;margin-top:12px">
+      <div data-pane="adv" style="display:none">
         <div class="ed-field"><label>Language</label><select id="du-lang">
           <option value="en" selected>English</option><option value="es">Spanish</option>
           <option value="de">German</option><option value="fr">French</option>
           <option value="pt">Portuguese</option><option value="it">Italian</option></select></div>
-        <div class="ed-param"><span class="pl">Keep original audio (music bleed)</span>
+        <div class="ed-param"><span class="pl">Keep original audio (music bleed) %</span>
           <input type="range" id="du-keep" min="0" max="60" value="0">
           <input class="num" id="du-keepn" value="0"></div>
-        <div class="ed-note">Two speakers? <a href="/?v=${encodeURIComponent(v.name)}&step=dub">Interview mode ↗</a> (classic view) handles who-says-what.</div>
+        <div class="ed-note">Two speakers? <a href="/?v=${encodeURIComponent(v.name)}&step=dub">Interview mode ↗</a></div>
       </div>
-      ${run ? `<div class="ed-msg">⏳ ${VS.esc(run.label || "dub running")} — one dub at a time</div>` : ""}
+      ${run ? `<div class="ed-msg">⏳ ${VS.esc(run.label || "dub running")} — one at a time</div>` : ""}
       <button class="ed-run" id="du-run" ${run || !v.script ? "disabled" : ""}>🎙 Dub</button>
       <div class="ed-cost free" id="du-cost">✓ 100% local — nothing is charged</div>
-      ${!v.script ? '<div class="ed-msg">save a Script first — the dub needs words</div>' : ""}`;
+      ${!v.script ? '<div class="ed-msg">save a Script first</div>' : ""}`;
   };
   P.dub.bind = el => {
     const v = ED.video; if (!v) return;
@@ -412,7 +773,7 @@
       $("#du-localrow", el).style.display = engine === "local" ? "" : "none";
       $("#du-falrow", el).style.display = engine === "fal" ? "" : "none";
       const c = $("#du-cost", el);
-      if (engine === "fal") { c.textContent = "💰 voice + lip-sync charged on fal.ai — you approve first"; c.className = "ed-cost paid"; }
+      if (engine === "fal") { c.textContent = "💰 charged on fal.ai — you approve first"; c.className = "ed-cost paid"; }
       else { c.textContent = "✓ 100% local — nothing is charged"; c.className = "ed-cost free"; }
     });
     const kr = $("#du-keep", el), kn = $("#du-keepn", el);
@@ -433,47 +794,27 @@
         if (!confirm("⚠ This spends money on fal.ai (voice + lip-sync).\n\nApprove and start?")) return;
         body.confirm_cost = true;
       }
-      try {
-        await VS.post("/api/run", body);
+      try { await VS.post("/api/run", body);
         VS.toast(engine === "local" ? "🎙 Free local dub started" : "🎙 Cloud dub started");
-        renderTimeline(); renderInspector();
-      } catch (e) { VS.toast("Couldn't start: " + e.message); }
-    };
-  };
-
-  P.voices = () => {
-    const v = ED.video;
-    $("#ed-icap").textContent = "Voice Bank";
-    return `<div class="ed-note" style="margin-bottom:10px">Clone once, reuse on any character. Saved voices appear in the media panel and in the Dub voice picker.</div>
-      ${v ? `<button class="ed-run" id="vo-add">➕ Clone the voice from “${VS.esc(v.title || v.name)}”</button>` : '<div class="ed-note">pick a video to clone its voice</div>'}
-      <div class="ed-note"><a href="/voices">manage the full Voice Bank ↗</a></div>`;
-  };
-  P.voices.bind = el => {
-    const v = ED.video;
-    const b = $("#vo-add", el);
-    if (b) b.onclick = async () => {
-      b.disabled = true; b.textContent = "🎧 cloning… (a few seconds)";
-      try { await VS.post("/api/voices/create", {file: v.name, name: v.character || v.title || v.stem});
-        await loadVoices(); VS.toast("Voice saved"); renderAssets(); renderInspector(); }
-      catch (e) { VS.toast("Error: " + e.message); b.disabled = false; b.textContent = "➕ Clone this voice"; }
+        renderTimeline(); renderInspector(); }
+      catch (e) { VS.toast("Couldn't start: " + e.message); }
     };
   };
 
   P.fix = () => {
     const v = ED.video;
     $("#ed-icap").textContent = "Fix & QA";
-    if (!v) return need("Fix & QA");
-    if (!v.dub) return `<div class="ed-note">Run a Dub first — repairs work on the dubbed video.</div>`;
-    return `<div class="ed-note" style="margin-bottom:8px">Describe what looks wrong — the AI watches the video and picks the repair. Every fix is a new take.</div>
+    if (!v) return need();
+    if (!v.dub) return need("Run a Dub first — repairs work on the dubbed video.");
+    return `<div class="ed-note" style="margin-bottom:8px">Describe what's wrong — the AI watches and picks the repair.</div>
       <div class="ed-field"><input type="text" id="fx-txt" placeholder="e.g. the cup warps when he drinks"></div>
       <button class="ed-run" id="fx-advise">🪄 Analyze</button>
       <div id="fx-out"></div>
       <div class="ed-hr"></div>
-      <div class="ed-sec"><div class="shead">Quick repairs</div>
-      <button class="ed-run ghostly" data-fix="relipsync">👄 Re-lip-sync (local)</button>
+      <button class="ed-run ghostly" data-fix="relipsync">👄 Re-lip-sync</button>
       <button class="ed-run ghostly" data-fix="renorm">🔊 Fix loudness</button>
-      <button class="ed-run ghostly" data-fix="remux">📦 Remux voice onto source</button></div>
-      <div class="ed-note">deep tools: <a href="/dubsync-lab" target="_blank">DubSync lab ↗</a> · frames: <a href="/qc-lab" target="_blank">QC lab ↗</a></div>`;
+      <button class="ed-run ghostly" data-fix="remux">📦 Remux voice</button>
+      <div class="ed-note">deep tools: <a href="/dubsync-lab" target="_blank">DubSync lab ↗</a> · <a href="/qc-lab" target="_blank">QC lab ↗</a></div>`;
   };
   P.fix.bind = el => {
     const v = ED.video; if (!v || !v.dub) return;
@@ -508,55 +849,41 @@
     };
   };
 
-  P.captions = () => {
-    const v = ED.video;
-    $("#ed-icap").textContent = "Captions";
-    if (!v) return need("Captions");
-    const run = VS.runningFor(v, ["caption", "recaption"]);
-    return `<div class="ed-note" style="margin-bottom:8px">Bold, word-timed captions burned over the old band.</div>
-      ${run ? '<div class="ed-msg">⏳ burning… watch the FX lane</div>' : ""}
-      <button class="ed-run" id="cp-dub" ${!v.dub || run ? "disabled" : ""}>🔥 Caption the dubbed video</button>
-      <button class="ed-run ghostly" id="cp-orig" ${run ? "disabled" : ""}>Caption the original instead</button>
-      ${v.captioned ? `<div class="ed-note">✓ captioned — <a href="/captioned/${encodeURIComponent(v.stem)}" target="_blank">watch ↗</a> · edit lines in the <a href="/?v=${encodeURIComponent(v.name)}&step=captions">classic view ↗</a></div>` : ""}`;
-  };
-  P.captions.bind = el => {
-    const v = ED.video; if (!v) return;
-    $("#cp-dub", el).onclick = async () => {
-      try { await VS.post("/api/run", {action: "caption", file: v.stem}); VS.toast("🔥 Captioning…"); renderTimeline(); }
-      catch (e) { VS.toast("Error: " + e.message); }
-    };
-    $("#cp-orig", el).onclick = async () => {
-      try { await VS.post("/api/recaption", {path: "uploads/" + v.name, mode: "captions"}); VS.toast("🔥 Captioning original…"); renderTimeline(); }
-      catch (e) { VS.toast("Error: " + e.message); }
-    };
-  };
-
-  P.i2v = () => { $("#ed-icap").textContent = "Image → Video";
-    return `<div class="ed-note" style="margin-bottom:10px">Upload a picture + a motion prompt → a ~30s clip (fal.ai, cost-gated). Finished clips land in the media panel.</div>
-    <a class="ed-run" style="display:block;text-align:center;text-decoration:none" href="/image-to-video">🎬 Open Image→Video studio ↗</a>`; };
-
-  P.clone = () => {
-    const v = ED.video;
-    $("#ed-icap").textContent = "Clone Winner";
-    if (!v || !v.dub) return `<div class="ed-note">Pick a dubbed video first — then multiply it with a fresh similar script.</div>`;
-    return `<div class="ed-note" style="margin-bottom:10px">Same winning structure, fresh words — same or a different actor.</div>
-      <a class="ed-run" style="display:block;text-align:center;text-decoration:none"
-        href="/?v=${encodeURIComponent(v.name)}&step=deliver">🏆 Open the Clone panel ↗</a>`;
-  };
-
   P.deliver = () => {
     const v = ED.video;
     $("#ed-icap").textContent = "Deliver";
-    if (!v) return need("Deliver");
-    return `<div class="ed-note" style="margin-bottom:8px">Copies the finished video to your Desktop export folder.</div>
-      <div class="ed-opt ${v.captioned ? "on" : ""}" data-del="captioned" style="${v.captioned ? "" : "opacity:.45;pointer-events:none"}">
-        <div class="t">🔥 Captioned final</div><div class="d">recommended for ads</div></div>
-      <div class="ed-opt ${v.captioned ? "" : "on"}" data-del="final" style="${v.dub ? "" : "opacity:.45;pointer-events:none"}">
+    if (!v) return need();
+    return `<div class="ed-opt ${v.captioned ? "on" : ""}" data-del="captioned" style="${v.captioned ? "" : "opacity:.4;pointer-events:none"}">
+        <div class="t">💬 Captioned final</div><div class="d">recommended for ads</div></div>
+      <div class="ed-opt ${v.captioned ? "" : "on"}" data-del="final" style="${v.dub ? "" : "opacity:.4;pointer-events:none"}">
         <div class="t">🎬 Final (no captions)</div></div>
       <div class="ed-field"><label style="display:flex;gap:6px;align-items:center">
         <input type="checkbox" id="dl-clean" checked> auto-clean workspace after export (24h, reversible)</label></div>
       <button class="ed-run" id="dl-send" ${v.dub ? "" : "disabled"}>📤 Send to Desktop</button>
-      <div class="ed-note" id="dl-note"></div>`;
+      <div class="ed-note" id="dl-note"></div>
+      <div class="ed-hr"></div>
+      <div class="ed-row" style="margin-bottom:4px"><span class="k">Masters</span>
+        <span class="v" style="display:flex;gap:9px;flex-wrap:wrap">
+          <label style="display:flex;gap:4px;align-items:center;font-size:11.5px"><input type="checkbox" class="dl-ar" value="9:16" checked>9:16</label>
+          <label style="display:flex;gap:4px;align-items:center;font-size:11.5px"><input type="checkbox" class="dl-ar" value="1:1">1:1</label>
+          <label style="display:flex;gap:4px;align-items:center;font-size:11.5px"><input type="checkbox" class="dl-ar" value="16:9">16:9</label>
+        </span></div>
+      <button class="ed-run ghostly" id="dl-aspects" ${v.dub ? "" : "disabled"}>🎬 Export aspect masters</button>
+      <div class="ed-note" id="dl-anote"></div>
+      <div class="ed-hr"></div>
+      <div class="ed-note">🏆 winner? <a href="/?v=${encodeURIComponent(v.name)}&step=deliver">Clone it with a fresh script ↗</a></div>
+      <div class="ed-hr"></div>
+      <div class="ed-row"><span class="k">Pipeline</span><span class="v" style="font-size:10.5px;line-height:1.7;color:var(--dim)">
+        ${[["Upload source", true], ["Shot inspect/split", null], ["Extract audio", true],
+           ["Whisper + word timestamps", true], ["Transcript correction", true],
+           ["Subtitle removal + restore", true], ["Rewrite / translate script", true],
+           ["Dubbed audio", !!v.dub], ["Audio-duration match", true],
+           ["Lip-sync", !!v.dub], ["DubSync repair + QA", true],
+           ["AI B-roll / product visuals", true], ["Branded captions", !!v.captioned],
+           ["CTA cards · music · transitions", null], ["Upscale", null],
+           ["Multi-aspect export", true]].map(([n, s]) =>
+             `${s === null ? "◌" : s ? "✓" : "○"} ${n}${s === null ? ' <span class="soon" style="position:static">SOON</span>' : ""}`
+           ).join("<br>")}</span></div>`;
   };
   P.deliver.bind = el => {
     const v = ED.video; if (!v) return;
@@ -582,16 +909,32 @@
         VS.refreshLibrary(); renderTimeline();
       } catch (e) { note.textContent = ""; VS.toast("Export failed: " + e.message); }
     };
+    const ab = $("#dl-aspects", el);
+    if (ab) ab.onclick = async () => {
+      const aspects = $$(".dl-ar", el).filter(c => c.checked).map(c => c.value);
+      if (!aspects.length) { VS.toast("Pick at least one aspect"); return; }
+      const note = $("#dl-anote", el);
+      ab.disabled = true; ab.textContent = "🎬 encoding masters…";
+      note.textContent = "";
+      try {
+        const r = await VS.post("/api/export-aspects",
+          {stem: v.stem, aspects, captioned: what === "captioned" && v.captioned});
+        note.innerHTML = "✅ " + r.masters.map(m =>
+          `<a href="/media/${m.path}" target="_blank">${m.aspect}</a>`).join(" · ") + " — in Exports";
+        VS.toast(`🎬 ${r.masters.length} master(s) exported`);
+      } catch (e) { VS.toast("Masters failed: " + e.message); }
+      ab.disabled = false; ab.textContent = "🎬 Export aspect masters";
+    };
   };
 
   function renderInspector() {
     const el = $("#ed-ibody");
-    const p = P[ED.tool] || P.media;
+    const p = P[ED.chip] || P.details;
     el.innerHTML = p();
     if (p.bind) { try { p.bind(el); } catch (e) { console.error(e); } }
   }
 
-  /* ═════════ upload ═════════ */
+  /* ═════════════ upload / glue ═════════════ */
   function upload(files) {
     for (const f of files) {
       const fd = new FormData(); fd.append("file", f);
@@ -600,12 +943,13 @@
       x.onload = async () => {
         if (x.status === 200) {
           const res = JSON.parse(x.responseText);
-          VS.toast(`Uploaded ${res.name} — transcribing…`);
+          VS.toast(`Uploaded ${res.name}`);
           savedNow();
-          VS.post("/api/run", {action: "transcribe", file: res.name}).catch(() => {});
+          if (!/\.(mp3|m4a|wav)$/i.test(res.name))
+            VS.post("/api/run", {action: "transcribe", file: res.name}).catch(() => {});
           await VS.refreshLibrary();
           const v = VS.state.videos.find(y => y.name === res.name);
-          if (v) select(v, "clean");
+          if (v) select(v);
         } else VS.toast("Upload failed: " + x.responseText.slice(0, 120));
       };
       x.onerror = () => VS.toast("Upload failed");
@@ -613,13 +957,18 @@
     }
   }
 
-  /* ═════════ glue ═════════ */
   function syncURL() {
-    const q = ED.video ? `?v=${encodeURIComponent(ED.video.name)}&tool=${ED.tool}` : "";
-    history.replaceState(null, "", "/editor" + q);
+    const q = new URLSearchParams();
+    if (ED.video) q.set("v", ED.video.name);
+    q.set("tab", ED.tab); q.set("sec", ED.sec);
+    history.replaceState(null, "", "/editor?" + q.toString());
   }
   async function loadVoices() {
     try { ED.voices = (await VS.api("/api/voices")).voices || []; } catch (e) { ED.voices = []; }
+  }
+  async function loadExtras() {
+    try { ED.i2v = (await VS.api("/api/i2v/list")).items || []; } catch (e) { ED.i2v = []; }
+    try { ED.actors = (await VS.api("/api/clone/actors")).actors || []; } catch (e) { ED.actors = []; }
   }
   function onLibrary() {
     savedNow();
@@ -633,11 +982,58 @@
         $("#ed-deliverbtn").disabled = !fresh.dub;
       }
     }
-    renderAssets(); renderTimeline();
+    renderContent(); renderTimeline();
   }
 
   (async () => {
-    renderTabs(); renderSubnav();
+    renderTabs(); renderSubnav(); renderChips();
+
+    // ── resizable panels (drag the splitters; double-click resets) ──
+    const main = $("#ed-main");
+    const DEFAULTS = {wl: 360, wr: 318, hb: 218};
+    const saved = JSON.parse(localStorage.getItem("ed-layout") || "{}");
+    const applyLayout = l => {
+      main.style.setProperty("--wl", (l.wl || DEFAULTS.wl) + "px");
+      main.style.setProperty("--wr", (l.wr || DEFAULTS.wr) + "px");
+      main.style.setProperty("--hb", (l.hb || DEFAULTS.hb) + "px");
+    };
+    applyLayout(saved);
+    const layout = Object.assign({}, DEFAULTS, saved);
+    function makeSplitter(id, key, horizontal, invert) {
+      const sp = $(id);
+      sp.addEventListener("pointerdown", e => {
+        e.preventDefault();
+        sp.classList.add("drag");
+        sp.setPointerCapture(e.pointerId);
+        const start = horizontal ? e.clientY : e.clientX;
+        const base = layout[key];
+        const move = ev => {
+          const delta = (horizontal ? ev.clientY : ev.clientX) - start;
+          layout[key] = Math.max(140, Math.min(horizontal ? 460 : 640,
+            base + (invert ? -delta : delta)));
+          applyLayout(layout);
+        };
+        const up = () => {
+          sp.classList.remove("drag");
+          sp.removeEventListener("pointermove", move);
+          sp.removeEventListener("pointerup", up);
+          localStorage.setItem("ed-layout", JSON.stringify(layout));
+          renderTimeline();
+          const v = playerVideo(); if (v) movePlayhead(v.currentTime);
+        };
+        sp.addEventListener("pointermove", move);
+        sp.addEventListener("pointerup", up);
+      });
+      sp.addEventListener("dblclick", () => {
+        layout[key] = DEFAULTS[key];
+        applyLayout(layout);
+        localStorage.setItem("ed-layout", JSON.stringify(layout));
+        renderTimeline();
+      });
+    }
+    makeSplitter("#sp-left", "wl", false, false);    // wider drag → wider media panel
+    makeSplitter("#sp-right", "wr", false, true);    // drag left → wider inspector
+    makeSplitter("#sp-bottom", "hb", true, true);    // drag up → taller timeline
 
     // top bar
     const mb = $("#ed-menubtn"), ml = $("#ed-menulist");
@@ -647,7 +1043,7 @@
       $("#ed-toggle-left").classList.toggle("off"); };
     $("#ed-toggle-right").onclick = () => { $("#ed-main").classList.toggle("no-right");
       $("#ed-toggle-right").classList.toggle("off"); };
-    $("#ed-deliverbtn").onclick = () => setTool("deliver");
+    $("#ed-deliverbtn").onclick = () => { ED.chip = "deliver"; renderChips(); renderInspector(); };
 
     // browser
     $("#ed-import").onclick = () => $("#ed-file").click();
@@ -655,13 +1051,14 @@
     const assets = $("#ed-assets");
     assets.addEventListener("dragover", e => e.preventDefault());
     assets.addEventListener("drop", e => { e.preventDefault(); upload(e.dataTransfer.files); });
-    $("#ed-search").addEventListener("input", e => { ED.search = e.target.value; renderAssets(); });
-    const openFix = () => { if (ED.video) { setTool("fix");
-      const t = $("#fx-txt"); if (t) t.focus(); } else VS.toast("Pick a video first"); };
+    $("#ed-search").addEventListener("input", e => { ED.search = e.target.value; renderContent(); });
+    const openFix = () => { if (ED.video && ED.video.dub) { ED.chip = "fix"; renderChips(); renderInspector();
+        const t = $("#fx-txt"); if (t) t.focus(); }
+      else VS.toast(ED.video ? "Dub the video first — repairs work on the dub" : "Pick a video first"); };
     $("#ed-strip-btn").onclick = openFix;
     $("#ed-pilot").onclick = openFix;
 
-    // player controls
+    // player
     const togglePlay = () => { const v = playerVideo(); if (v) v.paused ? v.play() : v.pause(); };
     $("#ed-play").onclick = togglePlay;
     $("#tl-play").onclick = togglePlay;
@@ -669,10 +1066,8 @@
     $("#ed-fs").onclick = () => { const v = playerVideo(); if (v && v.requestFullscreen) v.requestFullscreen(); };
     $("#ed-fit").onclick = () => { ED.fit = ED.fit === "contain" ? "cover" : "contain";
       $("#ed-fit").classList.toggle("on", ED.fit === "cover"); renderPreview(); };
-    $("#ed-ratio").onclick = () => {
-      ED.ratio = ED.ratio === "9:16" ? "1:1" : ED.ratio === "1:1" ? "16:9" : "9:16";
-      renderPreview();
-    };
+    $("#ed-ratio").onclick = () => { ED.ratio = ED.ratio === "9:16" ? "1:1" : ED.ratio === "1:1" ? "16:9" : "9:16";
+      renderPreview(); };
     $("#ed-take").onclick = () => { ED.take = ED.take === "final" ? "source" : "final";
       ED.filmKey = null; renderPreview(); renderTimeline(); };
     $("#ed-pmenu").onclick = () => { const s = previewSrc(); if (s) window.open(s, "_blank"); };
@@ -682,26 +1077,48 @@
       }
     });
 
-    // timeline controls
+    // timeline
     $("#tl-zoom").addEventListener("input", e => { ED.pxs = +e.target.value; renderTimeline();
       const v = playerVideo(); if (v) movePlayhead(v.currentTime); });
     $("#tl-refresh").onclick = () => { ED.filmKey = null; VS.refreshLibrary(); renderTimeline(); };
+    $("#tl-in").onclick = () => { const v = playerVideo(); if (!v) return;
+      ED.cutIn = v.currentTime;
+      if (ED.cutOut != null && ED.cutOut <= ED.cutIn) ED.cutOut = null;
+      $("#tl-in").classList.add("armed"); renderTimeline(); };
+    $("#tl-out").onclick = () => { const v = playerVideo(); if (!v) return;
+      ED.cutOut = v.currentTime; $("#tl-out").classList.add("armed"); renderTimeline(); };
+    $("#tl-cut").onclick = async () => {
+      const v = ED.video;
+      if (!v || ED.cutIn == null || ED.cutOut == null) return;
+      const rel = (ED.take === "final" && v.dub) ? v.dub : "uploads/" + v.name;
+      try {
+        const r = await VS.post("/api/edit", {path: rel, start: +ED.cutIn.toFixed(2), end: +ED.cutOut.toFixed(2)});
+        VS.toast(`✂ Cut exported — ${(ED.cutOut - ED.cutIn).toFixed(1)}s clip in Exports`);
+        ED.cutIn = ED.cutOut = null;
+        $("#tl-in").classList.remove("armed"); $("#tl-out").classList.remove("armed");
+        renderTimeline();
+      } catch (e) { VS.toast("Cut failed: " + e.message); }
+    };
 
     await loadVoices();
+    await loadExtras();
     await VS.start();
     VS.on("library", onLibrary);
-    VS.on("jobs", () => { renderTimeline(); renderAssets(); });
-    VS.on("job-done", () => { VS.refreshLibrary(); loadVoices(); });
+    VS.on("jobs", () => { renderTimeline(); });
+    VS.on("job-done", () => { VS.refreshLibrary(); loadVoices(); loadExtras(); });
 
     try { const s = await VS.api("/api/spend"); $("#ed-spend").textContent = `fal ⛁ $${s.total.toFixed(2)}`; } catch (e) { /* */ }
 
-    renderAssets();
+    renderContent();
     savedNow();
     const q = new URLSearchParams(location.search);
+    ED.tab = q.get("tab") || "media";
+    ED.sec = q.get("sec") || (NAV[ED.tab].find(x => x[0] !== "h") || ["media"])[0];
+    renderTabs(); renderSubnav(); renderContent();
     const want = q.get("v");
     if (want) {
       const v = VS.state.videos.find(x => x.name === want);
-      if (v) select(v, q.get("tool") || "media");
+      if (v) select(v);
     }
   })();
 })();
