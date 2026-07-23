@@ -699,6 +699,9 @@
     return `<div class="ed-note" style="margin-bottom:8px">${v.orig_words ? `Original spoke ~${v.orig_words} words — stay close so the lips fit.` : "The words they'll say."}</div>
       <div class="ed-field"><textarea id="sc-text" rows="10" placeholder="loading…"></textarea></div>
       <div class="ed-field"><input type="text" id="sc-steer" placeholder="✨ AI rewrite — e.g. translate to Spanish / punchier hook"></div>
+      <label style="display:flex;gap:7px;align-items:flex-start;font-size:11px;color:var(--dim);margin:2px 0 9px;cursor:pointer;line-height:1.4">
+        <input type="checkbox" id="sc-brand" style="accent-color:#f0b25c;margin-top:1px">
+        <span>🔥 Build for <b style="color:var(--text)">liitt Fairy Flame</b> gummies — on-brand voice, real product facts &amp; proven hooks (compliance-safe)</span></label>
       <button class="ed-run ghostly" id="sc-ai">✨ Rewrite with AI</button>
       <button class="ed-run" id="sc-save">💾 Save script</button>
       <div class="ed-cost free" id="sc-count"></div>
@@ -720,14 +723,21 @@
         VS.toast("Script saved"); VS.refreshLibrary(); renderTimeline(); }
       catch (e) { VS.toast("Error: " + e.message); }
     };
-    $("#sc-ai", el).onclick = async () => {
-      const b = $("#sc-ai", el);
-      if (!ta.value.trim()) { VS.toast("Nothing to rewrite yet"); return; }
-      b.disabled = true; b.textContent = "✨ rewriting… (~30s)";
-      try { const r = await VS.post("/api/copywrite", {text: ta.value.trim(), instruction: $("#sc-steer", el).value.trim()});
-        ta.value = r.text || ta.value; count(); VS.toast("Rewritten — review then Save"); }
+    const brand = $("#sc-brand", el), aiBtn = $("#sc-ai", el);
+    const syncAi = () => { aiBtn.textContent = brand && brand.checked ? "🔥 Build Fairy Flame script" : "✨ Rewrite with AI"; };
+    if (brand) brand.onchange = syncAi;
+    syncAi();
+    aiBtn.onclick = async () => {
+      if (!ta.value.trim()) { VS.toast("Load or write a script first"); return; }
+      const on = brand && brand.checked;
+      aiBtn.disabled = true; aiBtn.textContent = on ? "🔥 building… (~45s)" : "✨ rewriting… (~30s)";
+      const body = {text: ta.value.trim(), instruction: $("#sc-steer", el).value.trim()};
+      if (on) { body.brand = true; body.slug = "fairy-flame"; }   // grounds the copy in products/fairy-flame/offer.md + hooks/angles banks
+      try { const r = await VS.post("/api/copywrite", body);
+        ta.value = r.text || ta.value; count();
+        VS.toast(on ? "🔥 Built for Fairy Flame — review then Save" : "Rewritten — review then Save"); }
       catch (e) { VS.toast("Rewrite failed: " + e.message); }
-      b.disabled = false; b.textContent = "✨ Rewrite with AI";
+      aiBtn.disabled = false; syncAi();
     };
     mountFit($("#sc-fit", el), v);
   };
