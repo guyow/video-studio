@@ -702,6 +702,7 @@
       <label style="display:flex;gap:7px;align-items:flex-start;font-size:11px;color:var(--dim);margin:2px 0 9px;cursor:pointer;line-height:1.4">
         <input type="checkbox" id="sc-brand" style="accent-color:#f0b25c;margin-top:1px">
         <span>🔥 Build for <b style="color:var(--text)">liitt Fairy Flame</b> gummies — on-brand voice, real product facts &amp; proven hooks (compliance-safe)</span></label>
+      <button class="ed-run ghostly" id="sc-liitt" title="turn ANY script — any brand, any product — into a liitt Fairy Flame script: detects what it sells, swaps the whole product world to microdose gummies, keeps the winning hook & beats, stays compliant">🔥 liitt</button>
       <button class="ed-run ghostly" id="sc-ai">✨ Rewrite with AI</button>
       <button class="ed-run ghostly" id="sc-goldies" title="Goldies is a cannabis brand — this rewrites its script as Fairy Flame: brand swap + every weed / flower / smoking / high reference becomes the microdose-gummies equivalent, tone lifted from stoner to premium">🔄 Goldies → Fairy Flame</button>
       <button class="ed-run" id="sc-save">💾 Save script</button>
@@ -724,7 +725,8 @@
         VS.toast("Script saved"); VS.refreshLibrary(); renderTimeline(); }
       catch (e) { VS.toast("Error: " + e.message); }
     };
-    const brand = $("#sc-brand", el), aiBtn = $("#sc-ai", el), gBtn = $("#sc-goldies", el);
+    const brand = $("#sc-brand", el), aiBtn = $("#sc-ai", el),
+          gBtn = $("#sc-goldies", el), lBtn = $("#sc-liitt", el);
     const syncAi = () => { aiBtn.textContent = brand && brand.checked ? "🔥 Build Fairy Flame script" : "✨ Rewrite with AI"; };
     if (brand) brand.onchange = syncAi;
     syncAi();
@@ -732,7 +734,7 @@
       if (!ta.value.trim()) { VS.toast("Load or write a script first"); return; }
       const on = forceBrand || (brand && brand.checked);
       const idle = btn.textContent;
-      aiBtn.disabled = gBtn.disabled = true;
+      aiBtn.disabled = gBtn.disabled = lBtn.disabled = true;
       btn.textContent = busy;
       const steer = $("#sc-steer", el).value.trim();
       const body = {text: ta.value.trim(), instruction: [extra, steer].filter(Boolean).join("\n")};
@@ -741,9 +743,20 @@
         ta.value = r.text || ta.value; count();
         VS.toast(on ? "🔥 Fairy Flame version ready — review then Save" : "Rewritten — review then Save"); }
       catch (e) { VS.toast("Rewrite failed: " + e.message); }
-      aiBtn.disabled = gBtn.disabled = false;
+      aiBtn.disabled = gBtn.disabled = lBtn.disabled = false;
       btn.textContent = idle; syncAi();
     };
+    // the universal one-press: ANY script, ANY brand/category → a liitt Fairy Flame
+    // script. Keeps the winning hook & beats; re-maps the whole product world.
+    const LIITT_CONVERT = `CONVERT this script — whatever brand or product it currently sells — into a script for liitt's Fairy Flame microdose gummies. It's a WINNING script being adapted, so preserve what makes it win:
+- Identify the brand/product being sold and replace it with Fairy Flame (by liitt). Remove every trace of the old brand, its product format, and its category language — nothing of the old product may survive.
+- Re-map the product context intelligently, don't just delete it: the old format/ritual/dosing (drinks, cans, pills, powders, drops, smoking, coffee, whatever) → one flame-shaped gummy from the pouch; its store/link/handle → fairyflame dot com (spoken form); its benefit/mechanism claims → the Fairy Flame state-shift: lighter mood, clarity, focus, feeling like yourself again.
+- Keep the actives general — "microdose gummies"; never name specific actives.
+- KEEP THE HOOK: same opening pattern, same emotional beats, same rhythm and energy — that structure is why the script wins. Adapt its content to liitt, never flatten it into a generic ad.
+- Compliance: no disease/medical claims, no cure/treat/heal language, no guaranteed outcomes, never promise a high or intoxication (this is sub-perceptual). Personal-experience framing ("I felt…") is fine.
+- Stay within ±10% of the original word count — the lip-sync depends on it.
+- Tone: premium, clean, intimate — not hypey, not stoner culture.`;
+    lBtn.onclick = () => doRewrite(lBtn, "🔥 making it liitt… (~45s)", LIITT_CONVERT, true);
     aiBtn.onclick = () => doRewrite(aiBtn,
       brand && brand.checked ? "🔥 building… (~45s)" : "✨ rewriting… (~30s)", "", false);
     // Goldies is a CANNABIS brand — a plain brand-swap would leave weed context all
