@@ -1004,9 +1004,13 @@
       sp.addEventListener("pointerdown", e => {
         e.preventDefault();
         sp.classList.add("drag");
-        sp.setPointerCapture(e.pointerId);
+        document.body.classList.add("ed-dragging");
+        document.body.style.cursor = horizontal ? "row-resize" : "col-resize";
+        try { sp.setPointerCapture(e.pointerId); } catch (err) { /* synthetic/odd pointer */ }
         const start = horizontal ? e.clientY : e.clientX;
         const base = layout[key];
+        // listen on the DOCUMENT so the drag never drops when the cursor
+        // leaves the 6px splitter (the reason dragging felt dead before)
         const move = ev => {
           const delta = (horizontal ? ev.clientY : ev.clientX) - start;
           layout[key] = Math.max(140, Math.min(horizontal ? 460 : 640,
@@ -1015,14 +1019,18 @@
         };
         const up = () => {
           sp.classList.remove("drag");
-          sp.removeEventListener("pointermove", move);
-          sp.removeEventListener("pointerup", up);
+          document.body.classList.remove("ed-dragging");
+          document.body.style.cursor = "";
+          document.removeEventListener("pointermove", move);
+          document.removeEventListener("pointerup", up);
+          document.removeEventListener("pointercancel", up);
           localStorage.setItem("ed-layout", JSON.stringify(layout));
           renderTimeline();
           const v = playerVideo(); if (v) movePlayhead(v.currentTime);
         };
-        sp.addEventListener("pointermove", move);
-        sp.addEventListener("pointerup", up);
+        document.addEventListener("pointermove", move);
+        document.addEventListener("pointerup", up);
+        document.addEventListener("pointercancel", up);
       });
       sp.addEventListener("dblclick", () => {
         layout[key] = DEFAULTS[key];
@@ -1064,6 +1072,24 @@
     $("#tl-play").onclick = togglePlay;
     $("#tl-tostart").onclick = () => { const v = playerVideo(); if (v) { v.currentTime = 0; movePlayhead(0); } };
     $("#ed-fs").onclick = () => { const v = playerVideo(); if (v && v.requestFullscreen) v.requestFullscreen(); };
+    // video zoom — scales the whole frame so you can inspect details up close
+    ED.zoom = 1;
+    const applyZoom = () => {
+      const f = $("#ed-frame");
+      f.style.transform = ED.zoom === 1 ? "" : `scale(${ED.zoom})`;
+      $("#ed-zoomlvl").textContent = Math.round(ED.zoom * 100) + "%";
+      $("#ed-zoomlvl").classList.toggle("on", ED.zoom !== 1);
+    };
+    $("#ed-zoomin").onclick = () => { ED.zoom = Math.min(3, +(ED.zoom + 0.25).toFixed(2)); applyZoom(); };
+    $("#ed-zoomout").onclick = () => { ED.zoom = Math.max(0.5, +(ED.zoom - 0.25).toFixed(2)); applyZoom(); };
+    $("#ed-zoomlvl").onclick = () => { ED.zoom = 1; applyZoom(); };
+    // ctrl+scroll over the player also zooms
+    $(".ed-stage").addEventListener("wheel", e => {
+      if (!e.ctrlKey) return;
+      e.preventDefault();
+      ED.zoom = Math.max(0.5, Math.min(3, +(ED.zoom + (e.deltaY < 0 ? 0.15 : -0.15)).toFixed(2)));
+      applyZoom();
+    }, {passive: false});
     $("#ed-fit").onclick = () => { ED.fit = ED.fit === "contain" ? "cover" : "contain";
       $("#ed-fit").classList.toggle("on", ED.fit === "cover"); renderPreview(); };
     $("#ed-ratio").onclick = () => { ED.ratio = ED.ratio === "9:16" ? "1:1" : ED.ratio === "1:1" ? "16:9" : "9:16";
