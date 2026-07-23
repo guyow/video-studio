@@ -3598,6 +3598,118 @@ def api_i2v_list():
     return jsonify({"items": items})
 
 
+# ── Fit video to script (AI-extend) ─────────────────────────────────────────
+# Grow a video to match a LONGER rewritten script: measure the script's real
+# spoken length (XTTS, free), then AI-generate the missing seconds from the last
+# frame (fal.ai, cost-gated) and prove the final length matches. See fit_extend.py.
+FIT_ENGINE = APP_DIR / "engines" / "fit_extend.py"
+
+
+def _fit_work(stem: str) -> Path:
+    work = (SWAP_WORK / stem / "fit").resolve()
+    if not str(work).startswith(str(SWAP_WORK.resolve())):
+        abort(400, "bad stem")
+    return work
+
+
+def _fit_need(gap: float, seg: int) -> int:
+    """Seconds to request from i2v: the gap rounded UP to a whole segment, so the
+    generated footage is never short of the gap (a segment multiple also makes the
+    engine's round(seconds/seg) exact)."""
+    n = max(1, int(gap // seg) + (1 if gap % seg > 0.01 else 0))
+    return n * seg
+
+
+@app.post("/api/fit/analyze")
+def api_fit_analyze():
+    b = request.get_json(force=True)
+    name = (b.get("file") or "").strip()
+    if not name:
+        abort(400, "no file")
+    src = (UPLOADS / name).resolve()
+    if not str(src).startswith(str(UPLOADS.resolve())) or not src.is_file():
+        abort(400, "video not found")
+    if not has_audio_stream(src):
+        abort(400, "This video has no audio to clone a voice from — fit it after a dub, "
+                   "or use a clip that has speech.")
+    stem = Path(name).stem
+    script = SWAP_WORK / stem / "script-edited.txt"
+    if not script.is_file() or not script.read_text(encoding="utf-8").strip():
+        abort(400, "Save a script first (right panel → Script), then Fit.")
+    work = _fit_work(stem)
+    work.mkdir(parents=True, exist_ok=True)
+    cv_py = CONFIG["venvs"]["cv"]
+    ds_app = str(Path(CONFIG["dubbing_studio"]) / "app.py")
+    cmd = [cv_py, str(FIT_ENGINE), "--mode", "analyze", "--source", str(src),
+           "--stem", stem, "--work", str(work), "--script", str(script),
+           "--ds-py", str(DUB_VENV_PY), "--ds-app", ds_app, "--language", "en"]
+    job_id = jobs_create("fit", stem, f"Fit analysis — {stem}", gpu=True)
+    threading.Thread(target=run_job, args=(job_id, cmd), daemon=True).start()
+    return jsonify({"job_id": job_id, "stem": stem})
+
+
+@app.get("/api/fit/plan/<path:stem>")
+def api_fit_plan(stem):
+    work = _fit_work(stem)
+    return jsonify({"plan": read_json(work / "plan.json") or {},
+                    "fit": read_json(work / "fit.json") or {}})
+
+
+def run_fit_job(job_id: str, cmd: list[str], stem: str, est: dict) -> None:
+    run_job(job_id, cmd)
+    job = jobs[job_id]
+    if job["status"] != "done":
+        return
+    try:
+        res = record_spend(stem, est)
+        with jobs_lock:
+            job["lines"].append("")
+            job["lines"].append(f"💰 This fit cost ~${res['this_run']:.2f} on fal.ai  ({est['summary']})")
+            job["lines"].append(f"🧾 Total spent on fal.ai so far: ${res['total']:.2f}")
+        job["cost"] = {"this_run": res["this_run"], "total": res["total"], "summary": est["summary"]}
+    except Exception as exc:                      # noqa: BLE001
+        with jobs_lock:
+            job["lines"].append(f"(cost tracking skipped: {exc})")
+
+
+@app.post("/api/fit/run")
+def api_fit_run():
+    b = request.get_json(force=True)
+    name = (b.get("file") or "").strip()
+    src = (UPLOADS / name).resolve()
+    if not str(src).startswith(str(UPLOADS.resolve())) or not src.is_file():
+        abort(400, "video not found")
+    stem = Path(name).stem
+    work = _fit_work(stem)
+    plan = read_json(work / "plan.json") or {}
+    if not plan:
+        abort(400, "run Analyze first")
+    if not plan.get("needs_extend"):
+        abort(400, "video is already long enough for the script — no extension needed")
+    model = b.get("model", "kling-2.1")
+    aspect = b.get("aspect", "9:16")
+    if model not in I2V_MODELS:
+        abort(400, "unknown model")
+    if aspect not in ("9:16", "16:9", "1:1"):
+        abort(400, "bad aspect")
+    seg = I2V_MODELS[model]["seg"]
+    need = _fit_need(float(plan.get("gap") or 0), seg)
+    est = _i2v_estimate(model, need)
+    if not b.get("confirm_cost"):
+        return jsonify({"needs_confirm": True, "estimate": est, "plan": plan}), 402
+    prompt = (b.get("prompt") or "").strip()
+    cv_py = CONFIG["venvs"]["cv"]
+    cmd = [cv_py, str(FIT_ENGINE), "--mode", "extend", "--source", str(src),
+           "--stem", stem, "--work", str(work), "--cv-py", cv_py, "--i2v", str(I2V_ENGINE),
+           "--env-file", str(FAL_ENV_FILE), "--model", model, "--aspect", aspect,
+           "--seconds", str(need), "--seg", str(seg), "--uploads", str(UPLOADS)]
+    if prompt:
+        cmd += ["--prompt", prompt]
+    job_id = jobs_create("fit-extend", stem, f"Fit to script — {stem} [{model}]")
+    threading.Thread(target=run_fit_job, args=(job_id, cmd, stem, est), daemon=True).start()
+    return jsonify({"job_id": job_id, "stem": stem, "estimate": est})
+
+
 @app.get("/image-to-video")
 def image_to_video_page():
     return send_from_directory(STATIC, "image-to-video.html")

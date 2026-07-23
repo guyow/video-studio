@@ -701,7 +701,9 @@
       <div class="ed-field"><input type="text" id="sc-steer" placeholder="✨ AI rewrite — e.g. translate to Spanish / punchier hook"></div>
       <button class="ed-run ghostly" id="sc-ai">✨ Rewrite with AI</button>
       <button class="ed-run" id="sc-save">💾 Save script</button>
-      <div class="ed-cost free" id="sc-count"></div>`;
+      <div class="ed-cost free" id="sc-count"></div>
+      <div class="ed-hr"></div>
+      <div id="sc-fit"></div>`;
   };
   P.script.bind = async el => {
     const v = ED.video; if (!v) return;
@@ -727,7 +729,96 @@
       catch (e) { VS.toast("Rewrite failed: " + e.message); }
       b.disabled = false; b.textContent = "✨ Rewrite with AI";
     };
+    mountFit($("#sc-fit", el), v);
   };
+
+  /* ── Fit video to script (AI-extend) — measure the script's real spoken length,
+     then grow the video to it with fal.ai and prove the final length matches ── */
+  async function mountFit(box, v) {
+    if (!box) return;
+    box.innerHTML = `<h4 style="font-size:12.5px;margin-bottom:2px">📏 Fit video to script</h4>
+      <div class="ph4" style="color:var(--dim);font-size:11px;margin-bottom:8px">extend the video with AI so its length matches the script — proven to the frame</div>
+      <div id="fit-body"><div class="ed-note">checking…</div></div>`;
+    const body = $("#fit-body", box);
+    const alive = () => document.body.contains(box) && ED.video && ED.video.name === v.name;
+
+    const wireAnalyze = () => { const b = $("#fit-an", box); if (b) b.onclick = startAnalyze; };
+    const draw = d => {
+      const plan = d.plan || {}, fit = d.fit || {};
+      if (fit && fit.final_sec) {
+        body.innerHTML = `<div class="ed-cost free">✅ fitted → final <b>${fit.final_sec}s</b> vs script <b>${fit.target_sec}s</b> (matches to ${Math.abs(fit.final_sec - fit.target_sec).toFixed(2)}s).</div>
+          ${fit.fitted ? `<div class="ed-note">added to your library as <b>${VS.esc(fit.fitted.split("/").pop())}</b> — pick it in Media to dub / lip-sync.</div>` : ""}
+          <button class="ed-run ghostly" id="fit-an" style="margin-top:8px">↻ Re-analyze</button>`;
+        wireAnalyze(); return;
+      }
+      if (!plan.source_sec) {
+        body.innerHTML = `<button class="ed-run ghostly" id="fit-an">📏 Analyze fit</button>
+          <div class="ed-note">measures the script's real spoken length with the voice engine (free, ~1 min).</div>`;
+        wireAnalyze(); return;
+      }
+      if (!plan.needs_extend) {
+        body.innerHTML = `<div class="ed-cost free">✓ already long enough — source <b>${plan.source_sec}s</b> ≥ script <b>${plan.target_sec}s</b>. No extension needed.</div>
+          <button class="ed-run ghostly" id="fit-an" style="margin-top:8px">↻ Re-analyze</button>`;
+        wireAnalyze(); return;
+      }
+      body.innerHTML = `<div class="ed-note" style="margin-bottom:8px">source <b>${plan.source_sec}s</b> → script needs <b>${plan.target_sec}s</b> → <b>${plan.gap}s</b> to generate.</div>
+        <div class="ed-field"><label>Generator (fal.ai)</label><select id="fit-model">
+          <option value="kling-2.1">Kling 2.1 — balanced</option>
+          <option value="hailuo-02">Hailuo 02 — great motion</option>
+          <option value="kling-2.1-pro">Kling 2.1 Pro — best quality</option>
+          <option value="wan-2.2">Wan 2.2 — budget</option></select></div>
+        <div class="ed-field"><label>Aspect</label><select id="fit-aspect">
+          <option>9:16</option><option>16:9</option><option>1:1</option></select></div>
+        <div class="ed-field"><label>Motion prompt (optional)</label>
+          <textarea id="fit-prompt" rows="2" placeholder="the same person keeps talking to camera, subtle natural movement, same setting & lighting"></textarea></div>
+        <button class="ed-run" id="fit-go">⚡ Extend &amp; fit</button>
+        <div class="ed-cost paid">💰 fal.ai — you approve the exact cost first</div>
+        <button class="ed-run ghostly" id="fit-an" style="margin-top:6px">↻ Re-analyze</button>`;
+      wireAnalyze();
+      $("#fit-go", box).onclick = () => runFit();
+    };
+
+    async function startAnalyze() {
+      body.innerHTML = `<div class="ed-msg">📏 measuring the script (XTTS)… watch the timeline — this can take a minute.</div>`;
+      try { await VS.post("/api/fit/analyze", {file: v.name}); renderTimeline(); pollPlan(0); }
+      catch (e) {
+        body.innerHTML = `<div class="ed-msg">${VS.esc(e.message)}</div><button class="ed-run ghostly" id="fit-an">↻ Try again</button>`;
+        wireAnalyze();
+      }
+    }
+    async function pollPlan(n) {
+      if (!alive()) return;
+      try {
+        const d = await VS.api("/api/fit/plan/" + encodeURIComponent(v.stem));
+        if (d.plan && d.plan.source_sec) { draw(d); return; }
+      } catch (e) { /* keep waiting */ }
+      if (n < 80) setTimeout(() => pollPlan(n + 1), 2500);
+    }
+    async function runFit() {
+      const model = $("#fit-model", box).value, aspect = $("#fit-aspect", box).value;
+      const prompt = $("#fit-prompt", box).value.trim();
+      const btn = $("#fit-go", box); btn.disabled = true;
+      const payload = m => JSON.stringify({file: v.name, model, aspect, prompt, ...(m || {})});
+      const hdr = {"Content-Type": "application/json"};
+      try {
+        let r = await fetch("/api/fit/run", {method: "POST", headers: hdr, body: payload()});
+        if (r.status === 402) {
+          const d = await r.json();
+          if (!confirm(`⚠ This generates footage on fal.ai (spends money).\n\n${d.estimate.summary}\n\nApprove and start?`)) { btn.disabled = false; return; }
+          r = await fetch("/api/fit/run", {method: "POST", headers: hdr, body: payload({confirm_cost: true})});
+        }
+        if (!r.ok) throw new Error((await r.text()).slice(0, 200));
+        VS.toast("⚡ Extending — generating footage on fal.ai"); renderTimeline();
+        body.innerHTML = `<div class="ed-msg">⚡ generating &amp; fitting… watch the timeline. The fitted clip lands in Media when it's done.</div>`;
+      } catch (e) { VS.toast("Couldn't start: " + e.message); btn.disabled = false; }
+    }
+
+    try { draw(await VS.api("/api/fit/plan/" + encodeURIComponent(v.stem))); }
+    catch (e) {
+      body.innerHTML = `<button class="ed-run ghostly" id="fit-an">📏 Analyze fit</button>`;
+      wireAnalyze();
+    }
+  }
 
   P.dub = () => {
     const v = ED.video;
