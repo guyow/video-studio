@@ -57,19 +57,20 @@ a{color:var(--link)}
   /* side panels never exceed a viewport share, so the player always has room */
   grid-template-columns:min(var(--wl),28vw) 6px minmax(0,1fr) 6px min(var(--wr),26vw);
   grid-template-rows:minmax(0,1fr) 6px min(var(--hb),32vh)}
-.ed-left{grid-column:1;grid-row:1/4}
+/* three adjustable squares on top; the timeline runs the FULL width below */
+.ed-left{grid-column:1;grid-row:1}
 .ed-sp{background:transparent;position:relative;z-index:20}
 .ed-sp::after{content:"";position:absolute;inset:0;margin:auto;background:var(--line);transition:.12s}
-.ed-sp.v{grid-row:1/4;cursor:col-resize}
+.ed-sp.v{grid-row:1;cursor:col-resize}
 .ed-sp.v::after{width:1px}
-.ed-sp.hz{grid-column:3/6;grid-row:2;cursor:row-resize}
+.ed-sp.hz{grid-column:1/6;grid-row:2;cursor:row-resize}
 .ed-sp.hz::after{height:1px}
 .ed-sp:hover::after,.ed-sp.drag::after{background:#8b8b92;width:auto;height:auto;inset:1px}
 #sp-left{grid-column:2}
 .ed-playerwrap{grid-column:3;grid-row:1}
-#sp-right{grid-column:4;grid-row:1/4}
-.ed-inspect{grid-column:5;grid-row:1/4}
-.ed-tl{grid-column:3;grid-row:3}
+#sp-right{grid-column:4;grid-row:1}
+.ed-inspect{grid-column:5;grid-row:1}
+.ed-tl{grid-column:1/6;grid-row:3}
 .ed-main.no-left{--wl:0px}
 .ed-main.no-left .ed-left,.ed-main.no-left #sp-left{display:none}
 .ed-main.no-right{--wr:0px}
