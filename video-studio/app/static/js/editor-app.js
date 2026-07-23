@@ -703,6 +703,7 @@
         <input type="checkbox" id="sc-brand" style="accent-color:#f0b25c;margin-top:1px">
         <span>🔥 Build for <b style="color:var(--text)">liitt Fairy Flame</b> gummies — on-brand voice, real product facts &amp; proven hooks (compliance-safe)</span></label>
       <button class="ed-run ghostly" id="sc-ai">✨ Rewrite with AI</button>
+      <button class="ed-run ghostly" id="sc-goldies" title="Goldies is a cannabis brand — this rewrites its script as Fairy Flame: brand swap + every weed / flower / smoking / high reference becomes the microdose-gummies equivalent, tone lifted from stoner to premium">🔄 Goldies → Fairy Flame</button>
       <button class="ed-run" id="sc-save">💾 Save script</button>
       <div class="ed-cost free" id="sc-count"></div>
       <div class="ed-hr"></div>
@@ -723,22 +724,38 @@
         VS.toast("Script saved"); VS.refreshLibrary(); renderTimeline(); }
       catch (e) { VS.toast("Error: " + e.message); }
     };
-    const brand = $("#sc-brand", el), aiBtn = $("#sc-ai", el);
+    const brand = $("#sc-brand", el), aiBtn = $("#sc-ai", el), gBtn = $("#sc-goldies", el);
     const syncAi = () => { aiBtn.textContent = brand && brand.checked ? "🔥 Build Fairy Flame script" : "✨ Rewrite with AI"; };
     if (brand) brand.onchange = syncAi;
     syncAi();
-    aiBtn.onclick = async () => {
+    const doRewrite = async (btn, busy, extra, forceBrand) => {
       if (!ta.value.trim()) { VS.toast("Load or write a script first"); return; }
-      const on = brand && brand.checked;
-      aiBtn.disabled = true; aiBtn.textContent = on ? "🔥 building… (~45s)" : "✨ rewriting… (~30s)";
-      const body = {text: ta.value.trim(), instruction: $("#sc-steer", el).value.trim()};
-      if (on) { body.brand = true; body.slug = "fairy-flame"; }   // grounds the copy in products/fairy-flame/offer.md + hooks/angles banks
+      const on = forceBrand || (brand && brand.checked);
+      const idle = btn.textContent;
+      aiBtn.disabled = gBtn.disabled = true;
+      btn.textContent = busy;
+      const steer = $("#sc-steer", el).value.trim();
+      const body = {text: ta.value.trim(), instruction: [extra, steer].filter(Boolean).join("\n")};
+      if (on) { body.brand = true; body.slug = "fairy-flame"; }   // grounded in products/fairy-flame/offer.md + hooks/angles banks
       try { const r = await VS.post("/api/copywrite", body);
         ta.value = r.text || ta.value; count();
-        VS.toast(on ? "🔥 Built for Fairy Flame — review then Save" : "Rewritten — review then Save"); }
+        VS.toast(on ? "🔥 Fairy Flame version ready — review then Save" : "Rewritten — review then Save"); }
       catch (e) { VS.toast("Rewrite failed: " + e.message); }
-      aiBtn.disabled = false; syncAi();
+      aiBtn.disabled = gBtn.disabled = false;
+      btn.textContent = idle; syncAi();
     };
+    aiBtn.onclick = () => doRewrite(aiBtn,
+      brand && brand.checked ? "🔥 building… (~45s)" : "✨ rewriting… (~30s)", "", false);
+    // Goldies is a CANNABIS brand — a plain brand-swap would leave weed context all
+    // over the script. This converts the whole world of the script, not just the name.
+    const GOLDIES_CONVERT = `CONVERT this script from "Goldies" (a marijuana/cannabis brand — the name may appear as Goldies, Goldie's or Blow Goldies) into a script for liitt's Fairy Flame microdose gummies. Blend it seamlessly — the result must read as if it was always written for Fairy Flame:
+- Replace every Goldies brand mention with Fairy Flame (the company behind it is liitt).
+- Convert ALL cannabis context to the gummies equivalent: flower / bud / strain / eighth / gram / pre-roll / blunt / joint → a pouch of microdose gummies (one gummy per serving); smoking / rolling / lighting up / hitting / vaping → taking a gummy; dispensary / plug → fairyflame.com; weed / marijuana / cannabis / THC → microdose gummies (keep the actives general — never name them).
+- getting high / stoned / baked / faded / blazed → the Fairy Flame state-shift: lighter mood, clarity, focus, feeling like yourself again. NEVER promise a high, buzz or intoxication — this is sub-perceptual.
+- Not one cannabis word may survive anywhere in the result.
+- Keep the same hook structure, beats, energy and length (stay within ±10% of the original word count — the lip-sync depends on it).
+- Lift the tone from stoner culture to premium and clean, but keep it punchy and native to short-form.`;
+    gBtn.onclick = () => doRewrite(gBtn, "🔄 converting… (~45s)", GOLDIES_CONVERT, true);
     mountFit($("#sc-fit", el), v);
   };
 
