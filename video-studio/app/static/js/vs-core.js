@@ -31,14 +31,21 @@
   // the universal "make it liitt" conversion — shared by the Creator's Script step
   // and the Editor so the prompt can't drift between the two.  Send with
   // {brand:true, slug:"fairy-flame"} so /api/copywrite grounds it in offer.md + banks.
-  VS.LIITT_PROMPT = `CONVERT this script — whatever brand or product it currently sells — into a script for liitt's Fairy Flame microdose gummies. It's a WINNING script being adapted, so preserve what makes it win:
+  VS.LIITT_PROMPT = `CONVERT this script — whatever brand or product it currently sells — into a script for liitt's Fairy Flame gummies. It's a WINNING script being adapted, so BLEND, don't rebuild: keep as much of the original wording, rhythm and sentence flow as possible — change ONLY what must change to make it Fairy Flame. The result must read as the same script, same person, same energy — now selling Fairy Flame.
 - Identify the brand/product being sold and replace it with Fairy Flame (by liitt). Remove every trace of the old brand, its product format, and its category language — nothing of the old product may survive.
-- Re-map the product context intelligently, don't just delete it: the old format/ritual/dosing (drinks, cans, pills, powders, drops, smoking, coffee, whatever) → one flame-shaped gummy from the pouch; its store/link/handle → fairyflame dot com (spoken form); its benefit/mechanism claims → the Fairy Flame state-shift: lighter mood, clarity, focus, feeling like yourself again.
-- Keep the actives general — "microdose gummies"; never name specific actives.
+- Re-map the product context intelligently, don't just delete it: the old format/ritual/dosing (drinks, cans, pills, powders, drops, smoking, coffee, whatever) → one flame-shaped gummy from the pouch; its benefit/mechanism claims → the Fairy Flame state-shift: lighter mood, clarity, focus, feeling like yourself again.
+- CTA rule: NEVER speak a URL or domain — no "dot com", no "go to …". Point to the on-screen link instead: "the link is down below", "tap the link below", "grab yours at the link below", or a fresh natural variant that fits the script's voice.
+- Keep the actives general; never name specific actives.
 - KEEP THE HOOK: same opening pattern, same emotional beats, same rhythm and energy — that structure is why the script wins. Adapt its content to liitt, never flatten it into a generic ad.
 - Compliance: no disease/medical claims, no cure/treat/heal language, no guaranteed outcomes, never promise a high or intoxication (this is sub-perceptual). Personal-experience framing ("I felt…") is fine.
 - Stay within ±10% of the original word count — the lip-sync depends on it.
 - Tone: premium, clean, intimate — not hypey, not stoner culture.`;
+
+  // optional add-on: open like breaking news (checkbox in both Script UIs)
+  VS.NEWS_HOOK_PROMPT = `NEWS-ANGLE HOOK: open the script like legit breaking news the viewer is catching in real time — e.g. "This is actually real news…", "It's official…", "While you were scrolling, something big happened…", "They banned it for 50 years. Now the labs want it back." Anchor it to the real news themes around this product's world: university researchers studying it, veterans asking Congress for access, laws loosening state by state, athletes crediting their recovery — while OBEYING the wording restrictions (if Meta-safe rules are given, the news beat must not use a restricted word either). Land the news beat in the first 1–2 lines, then hand off smoothly into the script's existing story — the rest keeps its structure and beats.`;
+
+  // optional add-on: dodge Meta's restricted words with creative compliant wording
+  VS.META_SAFE_PROMPT = `META-SAFE WORDING (this ad must survive Meta/Facebook ad review): the words psychedelic, psilocybin, magic mushroom(s), shrooms, microdose / microdosing, trip / trippy, high, and any drug slang are RESTRICTED — never write any of them, even where other instructions or the product doc say "microdose gummies". Play around the restriction creatively instead: "one tiny flame-shaped gummy", "Fairy Flame gummies", "a certain little ingredient scientists keep studying", "nature's mood molecule", "the ingredient we can't name on this app", or the knowing wink ("we can't say the word here — but you know the one"). Plain "mushroom" in a general functional sense is low-risk; "magic mushroom" never. News framing stays indirect: "a compound banned for 50 years is back in the lab", "researchers at a top university", "veterans are asking Congress for access" — say the news without the restricted noun. And no disease-treatment claims (never promise to treat depression/PTSD/anxiety; "for the days you feel flat" framing is fine).`;
 
   VS.api = async (path, opts) => {
     const r = await fetch(path, opts);

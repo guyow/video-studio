@@ -699,9 +699,17 @@
     return `<div class="ed-note" style="margin-bottom:8px">${v.orig_words ? `Original spoke ~${v.orig_words} words — stay close so the lips fit.` : "The words they'll say."}</div>
       <div class="ed-field"><textarea id="sc-text" rows="10" placeholder="loading…"></textarea></div>
       <div class="ed-field"><input type="text" id="sc-steer" placeholder="✨ AI rewrite — e.g. translate to Spanish / punchier hook"></div>
-      <label style="display:flex;gap:7px;align-items:flex-start;font-size:11px;color:var(--dim);margin:2px 0 9px;cursor:pointer;line-height:1.4">
-        <input type="checkbox" id="sc-brand" style="accent-color:#f0b25c;margin-top:1px">
-        <span>🔥 Build for <b style="color:var(--text)">liitt Fairy Flame</b> gummies — on-brand voice, real product facts &amp; proven hooks (compliance-safe)</span></label>
+      <div style="display:flex;gap:12px;flex-wrap:wrap;margin:2px 0 9px;font-size:11px;color:var(--dim)">
+        <label style="display:flex;gap:5px;align-items:center;cursor:pointer"
+          title="ground the rewrite in the Fairy Flame offer doc + proven hooks">
+          <input type="checkbox" id="sc-brand" style="accent-color:#f0b25c">🔥 liitt brand</label>
+        <label style="display:flex;gap:5px;align-items:center;cursor:pointer"
+          title="open like breaking news — studies, veterans, laws loosening — in platform-safe wording">
+          <input type="checkbox" id="sc-news" style="accent-color:#f0b25c">📰 News hook</label>
+        <label style="display:flex;gap:5px;align-items:center;cursor:pointer"
+          title="dodge Meta's restricted words (psychedelic, psilocybin, magic mushroom, microdosing) with creative compliant wording">
+          <input type="checkbox" id="sc-safe" style="accent-color:#f0b25c" checked>🛡 Meta-safe</label>
+      </div>
       <button class="ed-run ghostly" id="sc-liitt" title="turn ANY script — any brand, any product — into a liitt Fairy Flame script: detects what it sells, swaps the whole product world to microdose gummies, keeps the winning hook & beats, stays compliant">🔥 liitt</button>
       <button class="ed-run ghostly" id="sc-ai">✨ Rewrite with AI</button>
       <button class="ed-run ghostly" id="sc-goldies" title="Goldies is a cannabis brand — this rewrites its script as Fairy Flame: brand swap + every weed / flower / smoking / high reference becomes the microdose-gummies equivalent, tone lifted from stoner to premium">🔄 Goldies → Fairy Flame</button>
@@ -737,7 +745,11 @@
       aiBtn.disabled = gBtn.disabled = lBtn.disabled = true;
       btn.textContent = busy;
       const steer = $("#sc-steer", el).value.trim();
-      const body = {text: ta.value.trim(), instruction: [extra, steer].filter(Boolean).join("\n")};
+      const news = $("#sc-news", el), safe = $("#sc-safe", el);
+      const body = {text: ta.value.trim(), instruction: [extra,
+        news && news.checked ? VS.NEWS_HOOK_PROMPT : "",
+        safe && safe.checked ? VS.META_SAFE_PROMPT : "",
+        steer].filter(Boolean).join("\n\n")};
       if (on) { body.brand = true; body.slug = "fairy-flame"; }   // grounded in products/fairy-flame/offer.md + hooks/angles banks
       try { const r = await VS.post("/api/copywrite", body);
         ta.value = r.text || ta.value; count();
@@ -755,7 +767,7 @@
     // over the script. This converts the whole world of the script, not just the name.
     const GOLDIES_CONVERT = `CONVERT this script from "Goldies" (a marijuana/cannabis brand — the name may appear as Goldies, Goldie's or Blow Goldies) into a script for liitt's Fairy Flame microdose gummies. Blend it seamlessly — the result must read as if it was always written for Fairy Flame:
 - Replace every Goldies brand mention with Fairy Flame (the company behind it is liitt).
-- Convert ALL cannabis context to the gummies equivalent: flower / bud / strain / eighth / gram / pre-roll / blunt / joint → a pouch of microdose gummies (one gummy per serving); smoking / rolling / lighting up / hitting / vaping → taking a gummy; dispensary / plug → fairyflame.com; weed / marijuana / cannabis / THC → microdose gummies (keep the actives general — never name them).
+- Convert ALL cannabis context to the gummies equivalent: flower / bud / strain / eighth / gram / pre-roll / blunt / joint → a pouch of Fairy Flame gummies (one gummy per serving); smoking / rolling / lighting up / hitting / vaping → taking a gummy; dispensary / plug → "the link down below" (NEVER speak a URL or domain); weed / marijuana / cannabis / THC → Fairy Flame gummies (keep the actives general — never name them).
 - getting high / stoned / baked / faded / blazed → the Fairy Flame state-shift: lighter mood, clarity, focus, feeling like yourself again. NEVER promise a high, buzz or intoxication — this is sub-perceptual.
 - Not one cannabis word may survive anywhere in the result.
 - Keep the same hook structure, beats, energy and length (stay within ±10% of the original word count — the lip-sync depends on it).
