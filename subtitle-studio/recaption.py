@@ -6,7 +6,9 @@ track (no API, no cost). If the video's old subtitles were erased with a box
 (files/.originals/<stem>.box.json), the new captions are placed exactly over
 that band; otherwise they sit lower-center.
 
-Style: bold white, heavy black outline, 3 words per line, all caps.
+Style: pro social captions — Arial Black scaled to the video, thick outline +
+soft shadow, 3 words per line, all caps, and the currently-spoken word popped
+in liitt gold (word-timed karaoke, CapCut-style).
 
 Usage: python recaption.py <files/video.mp4>
 Writes output/<stem>/captioned.mp4  +  Desktop/Subtitle Studio/<stem>-subtitled.mp4
@@ -25,12 +27,13 @@ ROOT = Path(__file__).resolve().parent
 READY_DIR = Path.home() / "Desktop" / "Subtitle Studio"
 
 WORDS_PER_LINE = 3
-FONT = "Arial"
-FONT_SIZE = 50
-OUTLINE = 3
-SHADOW = 2
-MARGIN_V = 230
-MARGIN_LR = 40
+FONT = "Arial Black"                 # heavy social-caption face; ships with Windows
+HILITE = "&H0042C5F5"                # liitt gold #F5C542 (ASS is &H00BBGGRR) — active word
+
+
+def cap_size(video_h: int) -> int:
+    """Caption font size scaled to the video (≈4.2% of height; 1920 → 81px)."""
+    return max(36, round(video_h * 0.042))
 
 
 def _register_cuda_dlls() -> None:
@@ -104,6 +107,7 @@ def band_margin(stem: str, video_h: int, video_w: int | None = None) -> int | No
     when that band is ALREADY in the lower part of the frame (so it looks native).
     If the old subtitles were mid-frame / high (over the face), placing the new ones
     there looks wrong — fall back to a proper lower-third position instead."""
+    size = cap_size(video_h)
     lower_third = int(video_h * 0.16)          # ~16% up from the bottom = standard caption line
     b = _box_for(stem, video_h, video_w or video_h)
     if b is None:
@@ -111,8 +115,8 @@ def band_margin(stem: str, video_h: int, video_w: int | None = None) -> int | No
     band_center = b["y"] + b["h"] / 2
     if band_center < video_h * 0.60:           # band is mid-frame or higher -> don't follow it
         return lower_third
-    margin = int(video_h - (b["y"] + b["h"]) + max(0, (b["h"] - FONT_SIZE * 1.4) / 2))
-    return max(lower_third, min(margin, video_h - FONT_SIZE - 30))
+    margin = int(video_h - (b["y"] + b["h"]) + max(0, (b["h"] - size * 1.4) / 2))
+    return max(lower_third, min(margin, video_h - size - 30))
 
 
 def _ass_time(t: float) -> str:
@@ -199,14 +203,42 @@ def group_lines(words: list[dict], translate: tuple[str, str] | None = None) -> 
             return text if tc in _NO_UPPERCASE else text.upper()
         return text.upper()
 
-    return [{"start": g[0]["start"], "end": g[-1]["end"], "text": render(g)} for g in out]
+    # keep the real per-word timing on each line so the burn can pop the active
+    # word (karaoke). Editors that only know {start,end,text} just ignore "words".
+    return [{"start": g[0]["start"], "end": g[-1]["end"], "text": render(g),
+             "words": [{"start": w["start"], "end": w["end"]} for w in g]} for g in out]
+
+
+def _word_windows(line: dict) -> list[tuple[str, float, float]]:
+    """(token, start, end) per word of a caption line. Uses the stored whisper word
+    times when they still match the (possibly edited/translated) text; otherwise
+    spreads the line's duration across the words proportional to their length."""
+    toks = line["text"].split()
+    stored = line.get("words") or []
+    if len(stored) == len(toks):
+        return [(t, w["start"], w["end"]) for t, w in zip(toks, stored)]
+    total = sum(len(t) for t in toks) or 1
+    t0, dur = line["start"], max(0.01, line["end"] - line["start"])
+    out, t = [], t0
+    for tok in toks:
+        d = dur * len(tok) / total
+        out.append((tok, t, t + d))
+        t += d
+    return out
 
 
 def build_ass(lines: list[dict], out_path: Path, video_w: int, video_h: int,
               margin_v: int | None = None, font: str = FONT) -> None:
-    """Write the .ass from editable caption lines ({start, end, text}). Text is burned
-    verbatim — whatever the user edited is exactly what appears."""
-    margin_v = margin_v if margin_v is not None else MARGIN_V
+    """Write the .ass from editable caption lines ({start, end, text[, words]}).
+    Text is burned verbatim — whatever the user edited is exactly what appears.
+    Pro style: heavy face scaled to the video, thick outline + soft shadow, and
+    (for Latin captions) the currently-spoken word popped in liitt gold."""
+    size = cap_size(video_h)
+    outline = max(3, round(size / 13))
+    shadow = max(2, round(size / 18))
+    m_lr = round(video_w * 0.055)
+    margin_v = margin_v if margin_v is not None else max(60, round(video_h * 0.12))
+    bold = 0 if font == FONT else -1     # Arial Black is already heavy; faux-bold clogs it
     header = f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: {video_w}
@@ -216,16 +248,32 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Cap,{font},{FONT_SIZE},&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,{OUTLINE},{SHADOW},2,{MARGIN_LR},{MARGIN_LR},{margin_v},1
+Style: Cap,{font},{size},&H00FFFFFF,&H00FFFFFF,&H00000000,&H96000000,{bold},0,0,0,100,100,0,0,1,{outline},{shadow},2,{m_lr},{m_lr},{margin_v},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
-    events = [
-        f"Dialogue: 0,{_ass_time(ln['start'])},{_ass_time(ln['end'])},Cap,,0,0,0,,"
-        + re.sub(r"\s*\n\s*", r"\\N", ln["text"].strip())   # allow manual line breaks
-        for ln in lines if ln.get("text", "").strip()
-    ]
+    karaoke = font == FONT               # non-Latin fonts (and RTL) burn as plain lines
+    events: list[str] = []
+    for ln in lines:
+        text = (ln.get("text") or "").strip()
+        if not text:
+            continue
+        win = _word_windows(ln) if karaoke and "\n" not in text else []
+        if len(win) < 2:                 # single word / manual breaks / non-Latin → plain line
+            events.append(f"Dialogue: 0,{_ass_time(ln['start'])},{_ass_time(ln['end'])},Cap,,0,0,0,,"
+                          + re.sub(r"\s*\n\s*", r"\\N", text))
+            continue
+        # one event per active word: full line each time, the spoken word in gold
+        # with a slight pop. Windows chain start→start so the line never flickers.
+        for i, (tok, w_start, _) in enumerate(win):
+            s = ln["start"] if i == 0 else w_start
+            e = ln["end"] if i == len(win) - 1 else win[i + 1][1]
+            if e <= s:
+                continue
+            parts = [("{\\1c" + HILITE + "\\fscx108\\fscy108}" + t + "{\\r}") if j == i else t
+                     for j, (t, _, _) in enumerate(win)]
+            events.append(f"Dialogue: 0,{_ass_time(s)},{_ass_time(e)},Cap,,0,0,0,," + " ".join(parts))
     out_path.write_text(header + "\n".join(events) + "\n", encoding="utf-8")
 
 
