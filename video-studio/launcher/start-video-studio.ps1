@@ -1,6 +1,8 @@
-# Video Studio launcher — boots the server hidden (if it isn't already running)
+# Video Studio launcher - boots the server hidden (if it isn't already running)
 # and opens the UI in its own app window. Safe to run twice: an already-healthy
 # server is reused, never doubled.
+# -ServerOnly: boot/ensure the server but do NOT open a window (login autostart).
+param([switch]$ServerOnly)
 $ErrorActionPreference = "SilentlyContinue"
 
 $Launcher = Split-Path -Parent $MyInvocation.MyCommand.Path   # ...\video-studio\launcher
@@ -20,7 +22,7 @@ function Test-PortBound {
 }
 
 if (-not (Test-Health)) {
-    # port already bound but not healthy yet = a server is BOOTING — never
+    # port already bound but not healthy yet = a server is BOOTING - never
     # double-spawn into that race, just wait for it below
     if (-not (Test-PortBound)) {
         if (-not (Test-Path $PyExe)) {
@@ -36,6 +38,8 @@ if (-not (Test-Health)) {
         Start-Sleep -Milliseconds 700
     }
 }
+
+if ($ServerOnly) { exit 0 }
 
 # open as a standalone app window (no browser chrome, own taskbar entry)
 $edge   = "${env:ProgramFiles(x86)}\Microsoft\Edge\Application\msedge.exe"
