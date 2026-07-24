@@ -20,13 +20,18 @@ $excludes = @(
     "*/.venv/*", "*/venv/*",            # python venvs - rebuilt by setup-machine.ps1
     "*/.git/*", "*/.github/*",          # repo history
     "*/__pycache__/*", "*.pyc",
-    "*/output/*",                        # renders, dubs, workspaces (private)
+    "*/output/*", "*/outputs/*",         # renders, dubs, workspaces (private)
+    "*/comfyui-output/*",
     "*/uploads/*",                       # source videos (private)
     "*/files/*",                         # subtitle-studio inputs (private)
     "*/jobs/*",                          # job logs
-    "*/.trash/*",
+    "*/.trash/*", "*/temp/*",
     "*/.env",                            # FAL_KEY - never ship a paid API key
-    "*/ComfyUI*/*"                       # optional local image AI - too big; VA can skip
+    "*/ComfyUI*/*",                      # optional local image AI - too big; VA can skip
+    "*/courses/*",                       # the user's PAID course videos - never ship
+    "*/tools/vsr/*",                     # legacy subtitle remover - unused by the app
+    "*/vsls/*",                          # produced ad videos (private)
+    "*.tar.gz"                           # stray archives
 ) | ForEach-Object { "--exclude"; $_ }
 
 & tar.exe -a -c -f $OutZip @excludes -C $Parent $Name
