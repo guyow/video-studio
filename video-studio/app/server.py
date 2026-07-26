@@ -4312,6 +4312,408 @@ def studio_run():
                     "results": results, "log": out[-3000:]})
 
 
+# ------------------------------------------------ B-Roll Factory
+# Reference b-roll in → shot recipe → ComfyUI still → motion → tagged bank entry.
+# Free and local end to end except the `fal` motion path, which is cost-gated
+# exactly like /api/i2v/run. Engine: app/engines/broll_factory.py.
+
+BROLL_ENGINE = APP_DIR / "engines" / "broll_factory.py"
+BROLL_OUT = ROOT / "output" / "broll"
+BROLL_REFS = BROLL_OUT / "_refs"
+BROLL_BANK = Path(CONFIG.get("banks_dir") or (ROOT / "banks")) / "broll.jsonl"
+BROLL_ASSETS = ROOT / "assets" / "broll"
+BROLL_REF_EXTS = {".mp4", ".mov", ".mkv", ".webm", ".m4v",
+                  ".jpg", ".jpeg", ".png", ".webp"}
+BROLL_MOTIONS = ("push_in", "pull_out", "pan_left", "pan_right",
+                 "tilt_up", "tilt_down", "drift", "static")
+# Dirs a /broll-file/ URL may read from. Everything else is refused.
+BROLL_SERVE_ROOTS = (BROLL_OUT, BROLL_ASSETS)
+
+
+def _cv_py() -> str:
+    return str(Path(CONFIG["venvs"]["cv"]))
+
+
+def rel_from_root(p: Path) -> str:
+    """Repo-relative, forward-slashed. Falls back to the absolute path for anything
+    outside ROOT so a stray reference still round-trips instead of raising."""
+    try:
+        return str(Path(p).resolve().relative_to(ROOT.resolve())).replace("\\", "/")
+    except ValueError:
+        return str(p).replace("\\", "/")
+
+
+def _broll_batch_dir(batch: str) -> Path:
+    d = (BROLL_OUT / batch).resolve()
+    if not str(d).startswith(str(BROLL_OUT.resolve())) or d == BROLL_OUT.resolve():
+        abort(400, "bad batch")
+    return d
+
+
+def _broll_rows() -> list[dict]:
+    if not BROLL_BANK.is_file():
+        return []
+    rows = []
+    for line in BROLL_BANK.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rows.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return rows
+
+
+def _broll_write_rows(rows: list[dict]) -> None:
+    tmp = BROLL_BANK.with_suffix(".jsonl.tmp")
+    tmp.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows),
+                   encoding="utf-8")
+    tmp.replace(BROLL_BANK)
+
+
+def _broll_url(rel: str | None) -> str | None:
+    """Map a repo-relative bank path to a servable URL, or None if unreadable."""
+    if not rel:
+        return None
+    p = (ROOT / str(rel).replace("\\", "/")).resolve()
+    for base in BROLL_SERVE_ROOTS:
+        b = base.resolve()
+        if str(p).startswith(str(b)) and p.is_file():
+            return "/broll-file/" + str(p.relative_to(ROOT.resolve())).replace("\\", "/")
+    return None
+
+
+@app.get("/broll")
+def page_broll():
+    return send_from_directory(STATIC, "broll.html")
+
+
+@app.get("/broll-file/<path:rel>")
+def broll_file(rel: str):
+    p = (ROOT / rel.replace("\\", "/")).resolve()
+    if not any(str(p).startswith(str(b.resolve())) for b in BROLL_SERVE_ROOTS):
+        abort(403, "outside the b-roll dirs")
+    if not p.is_file():
+        abort(404)
+    return send_file(str(p), conditional=True)
+
+
+@app.get("/api/broll/health")
+def api_broll_health():
+    """What the factory can do right now — ComfyUI reachability and installed models."""
+    try:
+        r = subprocess.run([_cv_py(), str(BROLL_ENGINE), "health"],
+                           capture_output=True, text=True, encoding="utf-8",
+                           errors="replace", timeout=45, env=job_env())
+        data = json.loads((r.stdout or "{}").strip().splitlines()[-1])
+    except Exception as exc:                                   # noqa: BLE001
+        return jsonify({"comfyui": False, "error": str(exc)[:200]})
+    data["claude"] = bool(CLAUDE_EXE)
+    return jsonify(data)
+
+
+@app.post("/api/broll/upload")
+def api_broll_upload():
+    f = request.files.get("file")
+    if not f or not f.filename:
+        abort(400, "no file")
+    ext = Path(f.filename).suffix.lower()
+    if ext not in BROLL_REF_EXTS:
+        abort(400, f"reference must be one of: {', '.join(sorted(BROLL_REF_EXTS))}")
+    BROLL_REFS.mkdir(parents=True, exist_ok=True)
+    base = secure_filename(Path(f.filename).stem).strip(".-_") or "ref"
+    name = f"{base}-{time.strftime('%H%M%S')}{ext}"
+    f.save(BROLL_REFS / name)
+    return jsonify({"name": name, "path": f"output/broll/_refs/{name}"})
+
+
+@app.get("/api/broll/refs")
+def api_broll_refs():
+    """Uploaded references plus anything already in the library, so a clip that is
+    on the box can be used as inspiration without re-uploading it."""
+    refs = []
+    if BROLL_REFS.is_dir():
+        for p in sorted(BROLL_REFS.iterdir(), key=lambda x: x.stat().st_mtime, reverse=True):
+            if p.is_file() and p.suffix.lower() in BROLL_REF_EXTS:
+                refs.append({"name": p.name, "path": f"output/broll/_refs/{p.name}",
+                             "kind": "upload", "size": p.stat().st_size})
+    lib = []
+    if UPLOADS.is_dir():
+        for p in sorted(UPLOADS.iterdir(), key=lambda x: x.stat().st_mtime, reverse=True):
+            if p.is_file() and p.suffix.lower() in BROLL_REF_EXTS:
+                lib.append({"name": p.name, "path": f"uploads/{p.name}",
+                            "kind": "library", "size": p.stat().st_size})
+    return jsonify({"refs": refs, "library": lib[:60]})
+
+
+@app.post("/api/broll/analyze")
+def api_broll_analyze():
+    b = request.get_json(force=True)
+    rels = [str(r).replace("\\", "/") for r in (b.get("refs") or []) if str(r).strip()]
+    if not rels:
+        abort(400, "pick at least one reference clip or still")
+    if not CLAUDE_EXE:
+        abort(500, "claude CLI not found — install Claude Code or add it to PATH")
+    srcs = []
+    for rel in rels:
+        p = (ROOT / rel).resolve()
+        ok = (str(p).startswith(str(BROLL_REFS.resolve()))
+              or str(p).startswith(str(UPLOADS.resolve()))
+              or str(p).startswith(str(BROLL_ASSETS.resolve())))
+        if not ok or not p.is_file():
+            abort(400, f"reference not readable: {rel}")
+        srcs.append(p)
+
+    shots = max(1, min(12, int(b.get("shots", 6))))
+    brief = (b.get("brief") or "").strip()
+    aspect = b.get("aspect", "9:16")
+    if aspect not in ("9:16", "1:1", "16:9"):
+        abort(400, "bad aspect")
+    batch = secure_filename(b.get("batch") or "").strip(".-_") or None
+
+    cmd = [_cv_py(), str(BROLL_ENGINE), "analyze", "--shots", str(shots),
+           "--aspect", aspect, "--frames-per-ref", str(max(2, min(10, int(b.get("frames", 6))))),
+           "--model", b.get("model") if b.get("model") in ("sonnet", "opus", "haiku") else "sonnet"]
+    for s in srcs:
+        cmd += ["--ref", str(s)]
+    if brief:
+        cmd += ["--brief", brief]
+    if b.get("brand"):
+        cmd.append("--brand")
+    if batch:
+        cmd += ["--batch", batch]
+
+    slug = batch or Path(srcs[0]).stem[:24]
+    job_id = jobs_create("broll-analyze", slug, f"B-roll analyze — {len(srcs)} reference(s)")
+    threading.Thread(target=run_job, args=(job_id, cmd), daemon=True).start()
+    return jsonify({"job_id": job_id})
+
+
+@app.get("/api/broll/batches")
+def api_broll_batches():
+    items = []
+    if BROLL_OUT.is_dir():
+        for d in sorted(BROLL_OUT.iterdir(), key=lambda x: x.stat().st_mtime, reverse=True):
+            if not d.is_dir() or d.name.startswith("_") or d.name == "singles":
+                continue
+            recipe = read_json(d / "recipe.json")
+            if not recipe:
+                continue
+            gen = read_json(d / "generated.json") or {}
+            clips = sorted((d / "clips").glob("*.mp4")) if (d / "clips").is_dir() else []
+            items.append({
+                "batch": d.name,
+                "brief": recipe.get("brief"),
+                "created": recipe.get("created"),
+                "aspect": recipe.get("aspect"),
+                "brand": recipe.get("brand"),
+                "style": recipe.get("style") or {},
+                "shot_count": len(recipe.get("shots") or []),
+                "clip_count": len(clips),
+                "failed": gen.get("failed") or [],
+                "references": [r.get("name") for r in (recipe.get("references") or [])],
+            })
+    return jsonify({"items": items})
+
+
+@app.get("/api/broll/recipe/<batch>")
+def api_broll_recipe_get(batch: str):
+    d = _broll_batch_dir(batch)
+    recipe = read_json(d / "recipe.json")
+    if not recipe:
+        abort(404, "no recipe for that batch")
+    gen = read_json(d / "generated.json") or {}
+    done = {e.get("shot_id"): e for e in (gen.get("generated") or [])}
+    for s in recipe.get("shots") or []:
+        made = done.get(s["id"])
+        clip = d / "clips" / f"{s['id']}.mp4"
+        still = d / "stills" / f"{s['id']}.png"
+        s["clip_url"] = _broll_url(rel_from_root(clip)) if clip.is_file() else None
+        s["still_url"] = _broll_url(rel_from_root(still)) if still.is_file() else None
+        s["bank_id"] = (made or {}).get("id")
+        s["style_ref_url"] = _broll_url(rel_from_root(Path(s["style_ref"]))) \
+            if s.get("style_ref") else None
+    for f in recipe.get("frames") or []:
+        f["url"] = _broll_url(rel_from_root(Path(f["path"])))
+    return jsonify(recipe)
+
+
+@app.post("/api/broll/recipe/<batch>")
+def api_broll_recipe_save(batch: str):
+    """Persist hand-edits to the shot list before generating."""
+    d = _broll_batch_dir(batch)
+    path = d / "recipe.json"
+    recipe = read_json(path)
+    if not recipe:
+        abort(404, "no recipe for that batch")
+    incoming = (request.get_json(force=True) or {}).get("shots")
+    if not isinstance(incoming, list) or not incoming:
+        abort(400, "send a non-empty shots array")
+    by_id = {s["id"]: s for s in recipe.get("shots") or []}
+    kept = []
+    for s in incoming:
+        base = by_id.get(s.get("id"))
+        if not base:
+            continue
+        mo = s.get("motion") or {}
+        if mo.get("type") in BROLL_MOTIONS:
+            base["motion"]["type"] = mo["type"]
+        try:
+            base["motion"]["intensity"] = max(0.03, min(0.35, float(mo.get(
+                "intensity", base["motion"]["intensity"]))))
+        except (TypeError, ValueError):
+            pass
+        try:
+            base["duration_s"] = max(2.0, min(12.0, float(s.get("duration_s",
+                                                                base["duration_s"]))))
+        except (TypeError, ValueError):
+            pass
+        for k in ("title", "prompt", "negative", "emotional_beat", "product_moment"):
+            if isinstance(s.get(k), str):
+                base[k] = s[k].strip()
+        for k in ("beat_tags", "avatar_fit"):
+            if isinstance(s.get(k), list):
+                base[k] = [str(t).strip() for t in s[k] if str(t).strip()]
+        kept.append(base)
+    if not kept:
+        abort(400, "none of those shot ids exist in this batch")
+    recipe["shots"] = kept
+    path.write_text(json.dumps(recipe, indent=2, ensure_ascii=False), encoding="utf-8")
+    return jsonify({"ok": True, "shots": len(kept)})
+
+
+def _broll_fal_estimate(recipe: dict, shot_ids: list[str], model: str) -> dict:
+    shots = [s for s in (recipe.get("shots") or [])
+             if not shot_ids or s["id"] in shot_ids]
+    m = I2V_MODELS.get(model) or I2V_MODELS["kling-2.1"]
+    segs = sum(max(1, round(float(s.get("duration_s") or 4.0) / m["seg"])) for s in shots)
+    total = round(segs * m["cost_per_seg"], 2)
+    return {"this_run": total, "segments": segs, "shots": len(shots),
+            "engine": "fal-i2v", "model": model,
+            "summary": f"{len(shots)} shot(s), {segs} × {m['seg']}s on "
+                       f"{m['label'].split(' — ')[0]} ≈ ${total:.2f}"}
+
+
+@app.post("/api/broll/generate")
+def api_broll_generate():
+    b = request.get_json(force=True)
+    batch = b.get("batch") or ""
+    d = _broll_batch_dir(batch)
+    recipe = read_json(d / "recipe.json")
+    if not recipe:
+        abort(404, "no recipe for that batch")
+
+    motion = b.get("motion", "ken")
+    if motion not in ("ken", "anim", "fal"):
+        abort(400, "motion must be ken, anim or fal")
+    style = b.get("style", "auto")
+    if style not in ("auto", "ipadapter", "controlnet", "text"):
+        abort(400, "bad style mode")
+    ids = [str(s).strip() for s in (b.get("shots") or []) if str(s).strip()]
+    known = {s["id"] for s in recipe.get("shots") or []}
+    unknown = [i for i in ids if i not in known]
+    if unknown:
+        abort(400, f"unknown shot id(s): {', '.join(unknown)}")
+
+    est = None
+    if motion == "fal":
+        model = b.get("fal_model", "kling-2.1")
+        if model not in I2V_MODELS:
+            abort(400, "unknown fal model")
+        est = _broll_fal_estimate(recipe, ids, model)
+        if not b.get("confirm_cost"):
+            return jsonify({"needs_confirm": True, "estimate": est}), 402
+
+    cmd = [_cv_py(), str(BROLL_ENGINE), "generate", "--recipe", str(d / "recipe.json"),
+           "--motion", motion, "--style", style,
+           "--steps", str(max(8, min(50, int(b.get("steps", 26))))),
+           "--fps", str(max(12, min(60, int(b.get("fps", 30))))),
+           "--grain", str(max(0, min(20, int(b.get("grain", 4)))))]
+    if ids:
+        cmd += ["--shots", ",".join(ids)]
+    if b.get("seed"):
+        cmd += ["--seed", str(int(b["seed"]))]
+    if b.get("no_upscale"):
+        cmd.append("--no-upscale")
+    if b.get("no_bank"):
+        cmd.append("--no-bank")
+    if motion == "fal":
+        cmd += ["--fal-model", b.get("fal_model", "kling-2.1")]
+
+    label = f"B-roll generate — {batch} [{motion}]"
+    job_id = jobs_create("broll-gen", batch, label)
+    if est:
+        threading.Thread(target=run_i2v_job, args=(job_id, cmd, batch, est),
+                         daemon=True).start()
+    else:
+        threading.Thread(target=run_job, args=(job_id, cmd), daemon=True).start()
+    return jsonify({"job_id": job_id, "estimate": est})
+
+
+@app.post("/api/broll/animate")
+def api_broll_animate():
+    """Animate a still that already exists — the six FLUX stills in the bank are all
+    tagged 'ken-burns source' and were never given a camera move."""
+    b = request.get_json(force=True)
+    rel = (b.get("still") or "").replace("\\", "/")
+    p = (ROOT / rel).resolve()
+    if not any(str(p).startswith(str(base.resolve())) for base in BROLL_SERVE_ROOTS) \
+            or not p.is_file():
+        abort(400, "still must be an image inside assets/broll or output/broll")
+    mtype = b.get("motion_type", "push_in")
+    if mtype not in BROLL_MOTIONS:
+        abort(400, "bad motion type")
+    aspect = b.get("aspect", "9:16")
+    if aspect not in ("9:16", "1:1", "16:9"):
+        abort(400, "bad aspect")
+    out = BROLL_OUT / "singles" / f"{p.stem}-{mtype}-{time.strftime('%H%M%S')}.mp4"
+    cmd = [_cv_py(), str(BROLL_ENGINE), "motion", "--still", str(p), "--out", str(out),
+           "--motion-type", mtype, "--aspect", aspect,
+           "--intensity", str(max(0.03, min(0.35, float(b.get("intensity", 0.12))))),
+           "--duration", str(max(2.0, min(12.0, float(b.get("duration", 4.0))))),
+           "--fps", str(max(12, min(60, int(b.get("fps", 30))))),
+           "--grain", str(max(0, min(20, int(b.get("grain", 4)))))]
+    if b.get("no_upscale"):
+        cmd.append("--no-upscale")
+    job_id = jobs_create("broll-motion", p.stem, f"Animate still — {p.name} [{mtype}]")
+    threading.Thread(target=run_job, args=(job_id, cmd), daemon=True).start()
+    return jsonify({"job_id": job_id, "out": rel_from_root(out)})
+
+
+@app.get("/api/broll/bank")
+def api_broll_bank():
+    rows = []
+    for r in _broll_rows():
+        f = r.get("file")
+        url = _broll_url(f)
+        is_video = str(f or "").lower().endswith((".mp4", ".mov", ".webm", ".mkv"))
+        rows.append({**r, "url": url, "still_url": _broll_url(r.get("still")),
+                     "is_video": is_video, "missing": url is None})
+    return jsonify({"rows": rows, "count": len(rows)})
+
+
+@app.post("/api/broll/bank/update")
+def api_broll_bank_update():
+    """Edit the tags/quality/status of one bank row, or retire it."""
+    b = request.get_json(force=True)
+    bid = (b.get("id") or "").strip()
+    if not bid:
+        abort(400, "no id")
+    rows = _broll_rows()
+    hit = next((r for r in rows if r.get("id") == bid), None)
+    if not hit:
+        abort(404, "no such bank id")
+    for k in ("shot", "emotional_beat", "product_moment", "quality", "status", "rights"):
+        if isinstance(b.get(k), str) and b[k].strip():
+            hit[k] = b[k].strip()
+    for k in ("beat_tags", "avatar_fit"):
+        if isinstance(b.get(k), list):
+            hit[k] = [str(t).strip() for t in b[k] if str(t).strip()]
+    _broll_write_rows(rows)
+    return jsonify({"ok": True, "row": hit})
+
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", CONFIG.get("port", 5181)))
     # bind to all interfaces (phone access) only when lan_access is on AND a PIN is set

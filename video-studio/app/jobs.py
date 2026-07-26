@@ -26,7 +26,10 @@ KEEP_JOBS = 300          # retention: newest N jobs survive in the index
 FLUSH_EVERY = 2.0        # seconds between persistence sweeps
 
 # engine scripts that need the GPU — detected from the job's command line
-GPU_MARKERS = ("transcribe.py", "caption.py", "recaption.py", "erase_subs.py", "local_dub.py")
+GPU_MARKERS = ("transcribe.py", "caption.py", "recaption.py", "erase_subs.py", "local_dub.py",
+               # b-roll generation drives ComfyUI, which owns the whole 4 GB card while
+               # it samples — serialize it with the rest or both jobs thrash.
+               "broll_factory.py")
 
 jobs: dict[str, dict] = {}
 jobs_lock = threading.Lock()

@@ -5,6 +5,7 @@
     ["🎬 Creator", "/", ["/"]],
     ["🎛 Editor β", "/editor", ["/editor"]],
     ["Image → Video", "/image-to-video", ["/image-to-video"]],
+    ["🎞 B-Roll Factory", "/broll", ["/broll"]],
     ["Voices", "/voices", ["/voices"]],
     ["Brand Studio", "/brand-studio", ["/brand-studio"]],
     ["Ads Factory", "/creator", ["/creator", "/mission", "/studio"]],

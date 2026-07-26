@@ -1,0 +1,496 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>B-Roll Factory — Video Studio</title>
+<link rel="stylesheet" href="/static/vs-creator.css">
+<link rel="stylesheet" href="/static/vs.css">
+<script src="/static/vs-nav.js" defer></script>
+<style>
+  main.bf { max-width:1500px; margin:0 auto; padding:18px 24px;
+            display:grid; grid-template-columns:370px 1fr; gap:18px; align-items:start; }
+  @media (max-width:1150px){ main.bf { grid-template-columns:1fr; } }
+  .drop-ref { border:2px dashed var(--line); border-radius:12px; min-height:96px; display:flex;
+    align-items:center; justify-content:center; text-align:center; color:var(--dim); cursor:pointer;
+    padding:14px; transition:.15s; }
+  .drop-ref:hover,.drop-ref.drag { border-color:var(--accent); color:var(--accent2);
+    background:rgba(124,92,255,.06); }
+  .chipbtn { background:var(--panel2); border:1px solid var(--line); color:var(--text);
+    border-radius:9px; padding:7px 13px; font-size:13px; cursor:pointer; }
+  .chipbtn.on { border-color:var(--accent); background:rgba(124,92,255,.16); }
+  .chiprow { display:flex; gap:7px; flex-wrap:wrap; }
+  .reflist { max-height:230px; overflow:auto; border:1px solid var(--line); border-radius:10px;
+    padding:6px; margin-top:8px; background:var(--panel2); }
+  .refrow { display:flex; align-items:center; gap:8px; padding:5px 7px; border-radius:7px;
+    font-size:12.5px; cursor:pointer; }
+  .refrow:hover { background:rgba(255,255,255,.04); }
+  .refrow.on { background:rgba(124,92,255,.16); }
+  .refrow .nm { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .refrow .kd { color:var(--dim); font-size:11px; }
+  .shot { border:1px solid var(--line); border-radius:12px; background:var(--panel);
+    padding:12px 13px; margin-bottom:11px; }
+  .shot.off { opacity:.45; }
+  .shot h4 { margin:0 0 7px; font-size:14px; display:flex; align-items:center; gap:9px; }
+  .shot h4 input[type=text] { flex:1; background:var(--panel2); border:1px solid var(--line);
+    color:var(--text); border-radius:7px; padding:5px 8px; font-size:13.5px; font-weight:600; }
+  .shot .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(128px,1fr)); gap:8px; margin-top:8px; }
+  .shot label { display:block; font-size:11px; color:var(--dim); margin-bottom:3px; }
+  .shot select, .shot input[type=number], .shot input.tag { width:100%; background:var(--panel2);
+    border:1px solid var(--line); color:var(--text); border-radius:7px; padding:5px 7px; font-size:12.5px; }
+  .shot textarea { width:100%; background:var(--panel2); border:1px solid var(--line); color:var(--text);
+    border-radius:8px; padding:7px 9px; font:12px/1.5 var(--mono); resize:vertical; }
+  .shot .media { display:flex; gap:9px; margin-top:9px; align-items:flex-start; }
+  .shot .media video, .shot .media img { width:118px; border-radius:8px; background:#000; display:block; }
+  .shot .ref { width:74px; border-radius:8px; opacity:.8; }
+  .badge { font-size:10.5px; padding:2px 7px; border-radius:99px; border:1px solid var(--line);
+    color:var(--dim); }
+  .badge.ok { border-color:#2c7; color:#4d9; }
+  .styleread { font-size:12.5px; color:var(--dim); line-height:1.65; }
+  .styleread b { color:var(--text); font-weight:600; }
+  .sw { display:inline-block; width:13px; height:13px; border-radius:3px; margin-right:4px;
+    vertical-align:-2px; border:1px solid rgba(255,255,255,.25); }
+  .gallery { display:grid; grid-template-columns:repeat(auto-fill,minmax(184px,1fr)); gap:11px; }
+  .bcard { background:var(--panel); border:1px solid var(--line); border-radius:11px; overflow:hidden; }
+  .bcard video, .bcard img { width:100%; display:block; background:#000; aspect-ratio:9/16; object-fit:cover; }
+  .bcard .m { padding:7px 9px; font-size:11.5px; color:var(--dim); line-height:1.5; }
+  .bcard .m b { color:var(--text); }
+  #log { background:#080b11; border:1px solid var(--line); border-radius:9px; padding:9px 11px;
+    margin-top:7px; font:11px/1.5 var(--mono); color:#b9c3d8; max-height:230px; overflow:auto;
+    white-space:pre-wrap; }
+  .hb { display:flex; gap:7px; flex-wrap:wrap; font-size:11.5px; margin-top:4px; }
+  .est { font-size:13px; color:var(--warn); font-weight:600; }
+</style>
+</head>
+<body>
+<header class="vs-head">
+  <h1>🎞 B-Roll <b>Factory</b></h1>
+  <div class="sub">drop reference b-roll → Claude reads its look → ComfyUI generates new shots in that style → camera move → tagged in your b-roll bank</div>
+</header>
+
+<main class="bf">
+  <section>
+    <div class="vs-panel">
+      <h3>1 · Inspiration</h3>
+      <label class="drop-ref" id="drop">
+        <input type="file" id="file" multiple style="display:none"
+               accept="video/mp4,video/quicktime,image/png,image/jpeg,image/webp,.mp4,.mov,.mkv,.webm,.m4v,.png,.jpg,.jpeg,.webp">
+        <span id="dropmsg">⬆ Drop reference b-roll (clips or stills)<br>
+          <span class="vs-hint">or pick from your library below</span></span>
+      </label>
+      <div class="reflist" id="reflist"><div class="vs-hint">loading…</div></div>
+      <div class="vs-hint" id="refcount" style="margin-top:6px">nothing selected</div>
+    </div>
+
+    <div class="vs-panel">
+      <h3>2 · What do you want out of it?</h3>
+      <textarea class="vs-ta" id="brief" rows="3"
+        placeholder="e.g. calm evening wind-down shots for a mushroom wellness ad — no faces to camera"></textarea>
+      <div class="vs-row" style="margin-top:10px;align-items:center;gap:10px">
+        <label class="vs-hint" style="margin:0">Shots</label>
+        <input type="number" id="shots" value="6" min="1" max="12"
+               style="width:64px;background:var(--panel2);border:1px solid var(--line);
+                      color:var(--text);border-radius:7px;padding:5px 7px">
+        <label style="display:flex;align-items:center;gap:6px;font-size:12.5px;cursor:pointer">
+          <input type="checkbox" id="brand" checked> brand style
+        </label>
+      </div>
+      <div class="vs-hint" style="margin-top:6px">
+        Brand style takes palette &amp; grade from your liitt kit; the reference still drives
+        composition, framing and pacing.
+      </div>
+      <div class="vs-hint" style="margin-top:10px">Aspect</div>
+      <div class="chiprow" id="asp" style="margin-top:5px">
+        <button class="chipbtn on" data-a="9:16">9:16</button>
+        <button class="chipbtn" data-a="1:1">1:1</button>
+        <button class="chipbtn" data-a="16:9">16:9</button>
+      </div>
+      <div class="vs-row" style="margin-top:12px">
+        <button class="vs-btn primary" id="analyze" disabled>🔎 Read the reference</button>
+      </div>
+    </div>
+
+    <div class="vs-panel">
+      <h3>3 · How it renders</h3>
+      <div class="vs-hint">Camera motion</div>
+      <div class="chiprow" id="mot" style="margin-top:5px">
+        <button class="chipbtn on" data-m="ken">Ken Burns · free</button>
+        <button class="chipbtn" data-m="anim">AnimateDiff · free</button>
+        <button class="chipbtn" data-m="fal">fal.ai · $</button>
+      </div>
+      <div class="vs-hint" id="mothint" style="margin-top:7px">
+        Programmatic push/pan over a generated still. No GPU, full 1080×1920, ~3s a clip.
+      </div>
+      <div class="vs-hint" style="margin-top:11px">Style match</div>
+      <select class="vs-sel" id="style" style="width:100%;margin-top:5px">
+        <option value="auto">Auto — IPAdapter if installed</option>
+        <option value="text">Text prompt only</option>
+        <option value="controlnet">ControlNet — copy the composition</option>
+        <option value="ipadapter">Force IPAdapter</option>
+      </select>
+      <div class="hb" id="health"></div>
+      <div class="vs-row" style="margin-top:12px;align-items:center">
+        <button class="vs-btn primary" id="gen" disabled>🎬 Generate selected shots</button>
+        <span class="est" id="est"></span>
+      </div>
+      <div id="prog" style="display:none">
+        <div class="vs-hint" id="proglbl">starting…</div>
+        <div id="log"></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="vs-panel">
+      <h3>Recipe
+        <span class="r"><select class="vs-sel" id="batch" style="min-width:230px"></select></span>
+      </h3>
+      <div class="styleread" id="styleread">
+        Read a reference on the left and the shot list lands here — editable before you spend a single GPU second.
+      </div>
+      <div class="vs-row" style="margin-top:10px">
+        <button class="vs-btn" id="selall">select all</button>
+        <button class="vs-btn" id="selnone">none</button>
+        <button class="vs-btn" id="save" disabled>💾 Save edits</button>
+      </div>
+      <div id="shots-wrap" style="margin-top:12px"></div>
+    </div>
+
+    <div class="vs-panel">
+      <h3>B-roll bank <span class="r vs-hint" id="bankcount"></span></h3>
+      <div class="chiprow" id="bankfilter" style="margin-bottom:10px">
+        <button class="chipbtn on" data-f="all">all</button>
+        <button class="chipbtn" data-f="video">clips</button>
+        <button class="chipbtn" data-f="still">stills</button>
+      </div>
+      <div class="gallery" id="bank"><div class="vs-hint">loading…</div></div>
+    </div>
+  </section>
+</main>
+
+<script src="/static/js/vs-core.js"></script>
+<script>
+(async () => {
+  const $ = s => document.querySelector(s);
+  const MOTIONS = ["push_in","pull_out","pan_left","pan_right","tilt_up","tilt_down","drift","static"];
+  const MOTHINT = {
+    ken:  "Programmatic push/pan over a generated still. No GPU, full 1080×1920, ~3s a clip.",
+    anim: "Real generated motion via AnimateDiff, then interpolated and ping-ponged. Slow on a 4 GB card and stylised.",
+    fal:  "Real image→video on fal.ai. Best quality, costs money — you approve the exact amount first.",
+  };
+  let selectedRefs = new Set(), aspect = "9:16", motion = "ken";
+  let recipe = null, busy = false, bankFilter = "all", health = {};
+
+  // ---------------------------------------------------------------- health
+  try {
+    health = await VS.api("/api/broll/health");
+    const bits = [];
+    bits.push(pill(health.comfyui, health.comfyui ? "ComfyUI up" : "ComfyUI down — start run_nvidia_gpu.bat"));
+    if (health.comfyui) {
+      bits.push(pill(health.ipadapter, health.ipadapter ? "IPAdapter" : "no IPAdapter (text-only styling)"));
+      bits.push(pill((health.upscalers||[]).length, "ESRGAN"));
+      bits.push(pill((health.motion_modules||[]).length, "AnimateDiff"));
+    }
+    bits.push(pill(health.claude, health.claude ? "Claude vision" : "claude CLI missing"));
+    $("#health").innerHTML = bits.join("");
+  } catch (e) { $("#health").innerHTML = pill(false, "health check failed"); }
+  function pill(ok, txt) {
+    return `<span class="badge${ok ? " ok" : ""}">${ok ? "✓" : "○"} ${VS.esc(txt)}</span>`;
+  }
+
+  // ---------------------------------------------------------------- refs
+  async function loadRefs() {
+    try {
+      const d = await VS.api("/api/broll/refs");
+      const all = [...d.refs, ...d.library];
+      if (!all.length) { $("#reflist").innerHTML = '<div class="vs-hint">nothing yet — drop a clip above</div>'; return; }
+      $("#reflist").innerHTML = "";
+      all.forEach(r => {
+        const el = document.createElement("div");
+        el.className = "refrow" + (selectedRefs.has(r.path) ? " on" : "");
+        el.innerHTML = `<input type="checkbox" ${selectedRefs.has(r.path) ? "checked" : ""}>
+          <span class="nm">${VS.esc(r.name)}</span>
+          <span class="kd">${r.kind === "upload" ? "dropped" : "library"} · ${VS.fmtSize(r.size)}</span>`;
+        el.onclick = ev => {
+          if (ev.target.tagName !== "INPUT") el.querySelector("input").checked = !el.querySelector("input").checked;
+          if (el.querySelector("input").checked) selectedRefs.add(r.path); else selectedRefs.delete(r.path);
+          el.classList.toggle("on", el.querySelector("input").checked);
+          refreshAnalyze();
+        };
+        $("#reflist").appendChild(el);
+      });
+    } catch (e) { $("#reflist").innerHTML = '<div class="vs-hint">could not load references</div>'; }
+  }
+  function refreshAnalyze() {
+    $("#refcount").textContent = selectedRefs.size
+      ? `${selectedRefs.size} reference${selectedRefs.size > 1 ? "s" : ""} selected`
+      : "nothing selected";
+    $("#analyze").disabled = busy || !selectedRefs.size;
+  }
+  await loadRefs(); refreshAnalyze();
+
+  const drop = $("#drop"), file = $("#file");
+  drop.onclick = () => file.click();
+  file.onchange = e => upload([...e.target.files]);
+  drop.addEventListener("dragover", e => { e.preventDefault(); drop.classList.add("drag"); });
+  drop.addEventListener("dragleave", () => drop.classList.remove("drag"));
+  drop.addEventListener("drop", e => { e.preventDefault(); drop.classList.remove("drag");
+    upload([...e.dataTransfer.files]); });
+
+  async function upload(files) {
+    if (!files.length) return;
+    $("#dropmsg").textContent = `uploading ${files.length} file(s)…`;
+    for (const f of files) {
+      const fd = new FormData(); fd.append("file", f);
+      try {
+        const r = await fetch("/api/broll/upload", {method: "POST", body: fd});
+        if (!r.ok) throw new Error((await r.text()).slice(0, 120));
+        selectedRefs.add((await r.json()).path);
+      } catch (e) { VS.toast("Upload failed: " + e.message); }
+    }
+    $("#dropmsg").innerHTML = "⬆ Drop reference b-roll (clips or stills)<br><span class=\"vs-hint\">or pick from your library below</span>";
+    await loadRefs(); refreshAnalyze();
+  }
+
+  // ---------------------------------------------------------------- pickers
+  $("#asp").onclick = e => { if (!e.target.dataset.a) return; aspect = e.target.dataset.a;
+    document.querySelectorAll("#asp .chipbtn").forEach(b => b.classList.toggle("on", b === e.target)); };
+  $("#mot").onclick = e => { if (!e.target.dataset.m) return; motion = e.target.dataset.m;
+    document.querySelectorAll("#mot .chipbtn").forEach(b => b.classList.toggle("on", b === e.target));
+    $("#mothint").textContent = MOTHINT[motion]; $("#est").textContent = ""; };
+
+  // ---------------------------------------------------------------- analyze
+  $("#analyze").onclick = async () => {
+    const body = {refs: [...selectedRefs], brief: $("#brief").value.trim(),
+                  shots: +$("#shots").value || 6, aspect, brand: $("#brand").checked};
+    try {
+      const r = await VS.post("/api/broll/analyze", body);
+      startProg("🔎 Reading the reference frames — a minute or two");
+      await watch(r.job_id);
+      await loadBatches(true);
+    } catch (e) { VS.toast("Error: " + e.message); }
+  };
+
+  // ---------------------------------------------------------------- batches
+  async function loadBatches(selectNewest) {
+    try {
+      const d = await VS.api("/api/broll/batches");
+      const sel = $("#batch"), cur = sel.value;
+      sel.innerHTML = d.items.map(b =>
+        `<option value="${VS.esc(b.batch)}">${VS.esc(b.batch)} — ${b.shot_count} shot(s)${
+          b.clip_count ? `, ${b.clip_count} made` : ""}</option>`).join("")
+        || '<option value="">no batches yet</option>';
+      if (selectNewest && d.items.length) sel.value = d.items[0].batch;
+      else if (cur) sel.value = cur;
+      if (sel.value) await loadRecipe(sel.value);
+    } catch (e) { /* ignore */ }
+  }
+  $("#batch").onchange = e => e.target.value && loadRecipe(e.target.value);
+
+  async function loadRecipe(batch) {
+    try { recipe = await VS.api(`/api/broll/recipe/${encodeURIComponent(batch)}`); }
+    catch (e) { VS.toast("Could not load recipe: " + e.message); return; }
+    const st = recipe.style || {};
+    $("#styleread").innerHTML =
+      `<b>What it read:</b> ${VS.esc(st.summary || "—")}<br>
+       ${(st.palette || []).map(c => `<span class="sw" style="background:${VS.esc(c)}"></span>`).join("")}
+       ${(st.palette || []).length ? "<br>" : ""}
+       <b>lighting</b> ${VS.esc(st.lighting || "—")} · <b>camera</b> ${VS.esc(st.camera || "—")}<br>
+       <b>grade</b> ${VS.esc(st.grade || "—")} · <b>pacing</b> ${VS.esc(st.pacing || "—")}<br>
+       <span class="vs-hint">from ${VS.esc((recipe.references || []).map(r => r.name).join(", "))}${
+         recipe.brand ? " · brand palette applied" : ""}</span>`;
+    renderShots();
+    $("#save").disabled = false;
+    refreshGen();
+  }
+
+  function renderShots() {
+    const w = $("#shots-wrap"); w.innerHTML = "";
+    (recipe.shots || []).forEach(s => {
+      const el = document.createElement("div");
+      el.className = "shot"; el.dataset.id = s.id;
+      el.innerHTML = `
+        <h4><input type="checkbox" class="pick" checked>
+            <input type="text" class="title" value="${VS.esc(s.title)}">
+            <span class="badge${s.clip_url ? " ok" : ""}">${s.clip_url ? "made" : s.id}</span></h4>
+        <textarea class="prompt" rows="3">${VS.esc(s.prompt)}</textarea>
+        <div class="grid">
+          <div><label>motion</label><select class="mtype">${
+            MOTIONS.map(m => `<option ${m === s.motion.type ? "selected" : ""}>${m}</option>`).join("")}</select></div>
+          <div><label>intensity</label><input type="number" class="mint" step="0.01" min="0.03" max="0.35"
+               value="${s.motion.intensity}"></div>
+          <div><label>seconds</label><input type="number" class="dur" step="0.5" min="2" max="12"
+               value="${s.duration_s}"></div>
+          <div><label>beat</label><input type="text" class="tag beat" value="${VS.esc(s.emotional_beat || "")}"></div>
+          <div><label>moment</label><input type="text" class="tag moment" value="${VS.esc(s.product_moment || "")}"></div>
+          <div><label>avatar fit</label><input type="text" class="tag avatar"
+               value="${VS.esc((s.avatar_fit || []).join(", "))}"></div>
+        </div>
+        <div class="media">
+          ${s.style_ref_url ? `<img class="ref" src="${s.style_ref_url}" title="style reference">` : ""}
+          ${s.still_url ? `<img src="${s.still_url}">` : ""}
+          ${s.clip_url ? `<video src="${s.clip_url}" controls muted preload="none"></video>` : ""}
+          ${s.bank_id ? `<span class="badge ok">${VS.esc(s.bank_id)}</span>` : ""}
+        </div>`;
+      el.querySelector(".pick").onchange = ev => {
+        el.classList.toggle("off", !ev.target.checked); refreshGen();
+      };
+      w.appendChild(el);
+    });
+    refreshGen();
+  }
+
+  function picked() {
+    return [...document.querySelectorAll(".shot")]
+      .filter(el => el.querySelector(".pick").checked).map(el => el.dataset.id);
+  }
+  function harvest() {
+    return [...document.querySelectorAll(".shot")].map(el => ({
+      id: el.dataset.id,
+      title: el.querySelector(".title").value,
+      prompt: el.querySelector(".prompt").value,
+      duration_s: +el.querySelector(".dur").value,
+      emotional_beat: el.querySelector(".beat").value,
+      product_moment: el.querySelector(".moment").value,
+      avatar_fit: el.querySelector(".avatar").value.split(",").map(x => x.trim()).filter(Boolean),
+      motion: {type: el.querySelector(".mtype").value, intensity: +el.querySelector(".mint").value},
+    }));
+  }
+  $("#selall").onclick = () => { document.querySelectorAll(".shot").forEach(el => {
+    el.querySelector(".pick").checked = true; el.classList.remove("off"); }); refreshGen(); };
+  $("#selnone").onclick = () => { document.querySelectorAll(".shot").forEach(el => {
+    el.querySelector(".pick").checked = false; el.classList.add("off"); }); refreshGen(); };
+
+  $("#save").onclick = async () => {
+    try {
+      await VS.post(`/api/broll/recipe/${encodeURIComponent(recipe.batch)}`, {shots: harvest()});
+      VS.toast("💾 Recipe saved");
+      await loadRecipe(recipe.batch);
+    } catch (e) { VS.toast("Error: " + e.message); }
+  };
+
+  function refreshGen() {
+    const n = recipe ? picked().length : 0;
+    $("#gen").disabled = busy || !n;
+    $("#gen").textContent = n ? `🎬 Generate ${n} shot${n > 1 ? "s" : ""}` : "🎬 Generate selected shots";
+  }
+
+  // ---------------------------------------------------------------- generate
+  $("#gen").onclick = async () => {
+    if (!recipe) return;
+    try { await VS.post(`/api/broll/recipe/${encodeURIComponent(recipe.batch)}`, {shots: harvest()}); }
+    catch (e) { VS.toast("Could not save edits: " + e.message); return; }
+    const body = {batch: recipe.batch, shots: picked(), motion, style: $("#style").value};
+    let est = null;
+    try {
+      const r = await fetch("/api/broll/generate", {method: "POST",
+        headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+      if (r.status === 402) est = (await r.json()).estimate;
+      else if (!r.ok) throw new Error((await r.text()).slice(0, 200));
+      else { await run(await r.json()); return; }
+    } catch (e) { VS.toast("Error: " + e.message); return; }
+    $("#est").textContent = est.summary;
+    if (!confirm(`⚠ This spends money on fal.ai:\n\n${est.summary}\n\n≈ $${est.this_run.toFixed(2)}\n\nApprove and generate? (Cancel = nothing charged)`)) {
+      VS.toast("Cancelled — nothing charged"); return;
+    }
+    try { await run(await VS.post("/api/broll/generate", Object.assign({confirm_cost: true}, body))); }
+    catch (e) { VS.toast("Error: " + e.message); }
+  };
+
+  async function run(r) {
+    startProg(motion === "ken" ? "🎬 Generating — still, upscale, camera move per shot"
+                               : "🎬 Generating — this is the slow path");
+    await watch(r.job_id);
+    await loadRecipe(recipe.batch);
+    await loadBank();
+  }
+
+  // ---------------------------------------------------------------- job log
+  function startProg(msg) {
+    busy = true; refreshGen(); refreshAnalyze();
+    $("#prog").style.display = ""; $("#log").textContent = ""; $("#proglbl").textContent = msg;
+    VS.toast(msg);
+  }
+  async function watch(jobId) {
+    let off = 0, status = "running";
+    while (status === "running") {
+      await new Promise(r => setTimeout(r, 2000));
+      let j; try { j = await VS.api(`/api/job/${jobId}?offset=${off}`); } catch (e) { continue; }
+      for (const line of (j.lines || [])) {
+        const d = document.createElement("div");
+        d.textContent = line;
+        if (/fail|error|traceback/i.test(line)) d.style.color = "var(--bad)";
+        else if (/^\s*→|^Done|^Banked/.test(line)) d.style.color = "#4d9";
+        $("#log").appendChild(d);
+      }
+      $("#log").scrollTop = $("#log").scrollHeight;
+      off = j.next_offset != null ? j.next_offset : off + (j.lines || []).length;
+      status = j.status;
+    }
+    busy = false; refreshGen(); refreshAnalyze();
+    $("#proglbl").textContent = status === "done" ? "✅ done" : "❌ " + status;
+    VS.toast(status === "done" ? "✅ Done" : "Job " + status + " — see the log");
+    return status;
+  }
+
+  // ---------------------------------------------------------------- bank
+  $("#bankfilter").onclick = e => { if (!e.target.dataset.f) return; bankFilter = e.target.dataset.f;
+    document.querySelectorAll("#bankfilter .chipbtn").forEach(b => b.classList.toggle("on", b === e.target));
+    loadBank(); };
+
+  async function loadBank() {
+    try {
+      const d = await VS.api("/api/broll/bank");
+      const rows = d.rows.filter(r => bankFilter === "all"
+        || (bankFilter === "video" ? r.is_video : !r.is_video));
+      $("#bankcount").textContent = `${d.count} entr${d.count === 1 ? "y" : "ies"}`;
+      const g = $("#bank");
+      if (!rows.length) { g.innerHTML = '<div class="vs-hint">nothing here yet</div>'; return; }
+      g.innerHTML = "";
+      rows.forEach(r => {
+        const el = document.createElement("div");
+        el.className = "bcard";
+        const media = r.missing
+          ? `<div style="padding:34px 10px;text-align:center;color:var(--dim);font-size:11.5px">file missing</div>`
+          : (r.is_video
+              ? `<video src="${r.url}" controls muted preload="none"></video>`
+              : `<img src="${r.url}" loading="lazy">`);
+        el.innerHTML = media + `<div class="m">
+            <b>${VS.esc(r.id)}</b> ${r.duration_s ? `· ${(+r.duration_s).toFixed(1)}s` : "· still"}
+            ${r.motion_engine ? `· ${VS.esc(r.motion_engine)}` : ""}<br>
+            ${VS.esc((r.shot || "").slice(0, 84))}<br>
+            <span style="color:var(--accent2)">${VS.esc(r.emotional_beat || "")}</span>
+            ${r.product_moment ? "· " + VS.esc(r.product_moment) : ""}
+            ${!r.missing && r.is_video ? `<br><a href="#" data-send="${VS.esc(r.file)}">send to Desktop</a>
+              · <a href="${r.url}" download>download</a>` : ""}
+            ${!r.missing && !r.is_video ? `<br><a href="#" data-anim="${VS.esc(r.file)}">＋ add camera move</a>` : ""}
+          </div>`;
+        const send = el.querySelector("[data-send]");
+        if (send) send.onclick = async ev => {
+          ev.preventDefault();
+          try { const x = await VS.post("/api/exports/send", {path: send.dataset.send});
+            VS.toast("📤 Saved to " + x.saved_to); } catch (e) { VS.toast("Error: " + e.message); }
+        };
+        const anim = el.querySelector("[data-anim]");
+        if (anim) anim.onclick = async ev => {
+          ev.preventDefault();
+          if (busy) { VS.toast("A job is already running"); return; }
+          try {
+            const x = await VS.post("/api/broll/animate", {still: anim.dataset.anim,
+              motion_type: "push_in", intensity: 0.12, duration: 4});
+            startProg("🎥 Adding a camera move to " + anim.dataset.anim.split("/").pop());
+            await watch(x.job_id);
+            await loadBank();
+          } catch (e) { VS.toast("Error: " + e.message); }
+        };
+        g.appendChild(el);
+      });
+    } catch (e) { $("#bank").innerHTML = '<div class="vs-hint">could not load the bank</div>'; }
+  }
+
+  await loadBatches(true);
+  await loadBank();
+})();
+</script>
+</body>
+</html>
