@@ -122,6 +122,8 @@
         </select>
         <select class="vs-sel" id="bvt2v" style="width:auto"></select>
         <label class="vs-hint"><input type="checkbox" id="bvbrand" checked> liitt brand look</label>
+        <label class="vs-hint" title="TikTok-style white text boxes that tell the story with the sound off">
+          <input type="checkbox" id="bvtags" checked> ✏️ story tags on screen</label>
       </div>
       <div class="vs-row" style="gap:10px;flex-wrap:wrap;margin-top:8px">
         <select class="vs-sel" id="bvstyle" style="width:auto">
@@ -277,7 +279,10 @@
           + `<div class="meta">${VS.esc((c.prompt || "").slice(0, 70))}<br>
              ${VS.esc(c.model_label || "")} · ${c.aspect || ""} · ${c.seconds || "?"}s · ~$${(c.est_cost || 0).toFixed(2)}
              ${c.ready ? `· <a href="#" data-send="${VS.esc(c.clip)}">send to Desktop</a>
-               · <a href="/media/${c.clip}" download>download</a>` : ""}</div>`;
+               · <a href="/media/${c.clip}" download>download</a>
+               · <a href="#" data-tags="${VS.esc(c.slug)}">✏️ story tags</a>` : ""}</div>`;
+        const tg = el.querySelector("[data-tags]");
+        if (tg) tg.onclick = ev => { ev.preventDefault(); openTags(tg.dataset.tags); };
         const send = el.querySelector("[data-send]");
         if (send) send.onclick = async ev => {
           ev.preventDefault();
@@ -293,6 +298,80 @@
 
   try { const s = await VS.api("/api/spend"); $("#falspend").textContent = `fal spend $${s.total.toFixed(2)}`; }
   catch (e) { /* ignore */ }
+
+  /* ═══ Story tags editor — works on ANY finished clip, free, no re-generation ═══ */
+  window.openTags = async function (slug) {
+    let box = document.getElementById("tagwrap");
+    if (!box) {
+      box = document.createElement("div");
+      box.id = "tagwrap";
+      box.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,.72);z-index:400;"
+        + "display:flex;align-items:center;justify-content:center;padding:24px";
+      box.innerHTML = `<div class="vs-panel" style="max-width:560px;width:100%;max-height:86vh;overflow:auto">
+        <h3>✏️ Story tags <span class="r vs-hint" id="tgslug"></span></h3>
+        <div class="vs-hint" style="margin-bottom:8px">The white text boxes that carry the story with the
+          sound off. Written from your script — edit any line, then burn. Free, and it never re-generates
+          the footage.</div>
+        <div class="vs-row" style="gap:8px;margin-bottom:8px">
+          <button class="vs-btn" id="tgwrite">✨ Write from the script</button>
+          <label class="vs-hint">position
+            <input type="range" id="tgy" min="5" max="70" value="16" style="width:90px;vertical-align:middle">
+          </label>
+          <span class="vs-hint" id="tgmsg"></span>
+        </div>
+        <div id="tglist"></div>
+        <div class="vs-row" style="margin-top:10px">
+          <button class="vs-btn primary" id="tgburn">🔥 Burn onto the video</button>
+          <button class="vs-btn" id="tgclose">Close</button>
+        </div></div>`;
+      document.body.appendChild(box);
+      box.addEventListener("click", e => { if (e.target === box) box.remove(); });
+    }
+    box.style.display = "flex";
+    const $$ = s => box.querySelector(s);
+    $$("#tgslug").textContent = slug;
+    $$("#tgclose").onclick = () => box.remove();
+    let tags = [];
+    const draw = () => {
+      $$("#tglist").innerHTML = tags.length ? tags.map((t, i) =>
+        `<div style="display:flex;gap:8px;align-items:center;margin-bottom:6px">
+           <span class="vs-hint" style="width:74px;flex:none">${t.start}-${t.end}s</span>
+           <input class="vs-in tgl" data-i="${i}" data-l="0" value="${VS.esc((t.lines || [])[0] || "")}"
+             placeholder="line 1 (e.g. me:)" style="flex:1">
+           <input class="vs-in tgl" data-i="${i}" data-l="1" value="${VS.esc((t.lines || [])[1] || "")}"
+             placeholder="line 2 (optional)" style="flex:1">
+         </div>`).join("")
+        : `<div class="vs-hint">No tags yet — press “Write from the script”.</div>`;
+      box.querySelectorAll(".tgl").forEach(inp => inp.oninput = () => {
+        const t = tags[+inp.dataset.i];
+        t.lines = t.lines || [];
+        t.lines[+inp.dataset.l] = inp.value;
+        t.lines = t.lines.filter(x => (x || "").trim());
+      });
+    };
+    try { tags = (await VS.api("/api/tags/" + encodeURIComponent(slug))).tags || []; }
+    catch (e) { tags = []; }
+    draw();
+    $$("#tgwrite").onclick = async () => {
+      const b = $$("#tgwrite"); b.disabled = true; $$("#tgmsg").textContent = "✨ writing the story… (~30s)";
+      try {
+        const d = await VS.post("/api/tags/suggest", {slug, script: $("#bvscript") ? $("#bvscript").value.trim() : ""});
+        tags = d.tags || []; draw(); $$("#tgmsg").textContent = "✓ edit any line, then burn";
+      } catch (e) { $$("#tgmsg").textContent = ""; VS.toast("Couldn't write tags: " + e.message); }
+      b.disabled = false;
+    };
+    $$("#tgburn").onclick = async () => {
+      const b = $$("#tgburn"); b.disabled = true; $$("#tgmsg").textContent = "🔥 burning…";
+      try {
+        const d = await VS.post("/api/tags/burn",
+          {slug, tags, y: (+$$("#tgy").value || 16) / 100});
+        $$("#tgmsg").textContent = "✅ done";
+        VS.toast("✅ Tagged video ready"); loadClips();
+        window.open("/media/" + d.video + "?v=" + d.mtime, "_blank");
+      } catch (e) { $$("#tgmsg").textContent = ""; VS.toast("Burn failed: " + e.message); }
+      b.disabled = false;
+    };
+  };
 
   /* ═══ Video → new video from a script ═══
      upload → transcribe → new script → shot list → clips → narrated video */
@@ -366,7 +445,7 @@
     const sty = $("#bvstyle").value;
     const body = {script, file: bvFile || "", shots: +$("#bvshots").value || 6,
       motion: $("#bvmotion").value, t2v_model: $("#bvt2v").value || "veo3-fast",
-      aspect, brand: $("#bvbrand").checked,
+      aspect, brand: $("#bvbrand").checked, tags: $("#bvtags").checked,
       ugc: sty !== "cine", preset: sty === "ugc10" ? "ugc10" : ""};
     const hdr = {"Content-Type": "application/json"};
     bvBusy = true; $("#bvgo").disabled = true; $("#bvmsg").textContent = "";

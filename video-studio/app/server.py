@@ -3931,9 +3931,114 @@ def api_brollvid_run():
           "--ds-app", str(Path(CONFIG["dubbing_studio"]) / "app.py")]
          + (["--ref-video", str(ref)] if ref else [])),
     ]
+    if b.get("tags") and CLAUDE_EXE:
+        # on-screen story text so the ad reads with the sound off
+        steps += [
+            ("story tags — write the on-screen text from the script",
+             [cv_py, str(BROLLVID_ENGINE), "tags", "--recipe", str(work / "recipe.json"),
+              "--script", script[:4000], "--claude", str(CLAUDE_EXE), "--model", "sonnet"]),
+            ("burn tags onto the video",
+             [cv_py, str(TAG_ENGINE), "--video", str(out_dir / "clip.mp4"),
+              "--recipe", str(work / "recipe.json"), "--out", str(out_dir / "clip-tagged.mp4")]),
+        ]
     job_id = jobs_create("brollvid", batch, f"Script → b-roll video — {batch} [{motion}]")
     threading.Thread(target=run_chain_job, args=(job_id, steps, est, batch), daemon=True).start()
     return jsonify({"job_id": job_id, "batch": batch, "slug": out_dir.name, "estimate": est})
+
+
+# ── Story tags: TikTok-style on-screen text, written from the script ────────
+# Works on any finished clip (free, no re-generation) or as a step in the
+# pipeline. Suggest -> you edit the lines -> burn.
+TAG_ENGINE = APP_DIR / "engines" / "tag_overlay.py"
+
+
+def _tag_batch_dir(slug: str) -> tuple[Path, Path]:
+    """Resolve a finished clip's output dir + the b-roll batch that made it."""
+    out_dir = (I2V_OUT / Path(slug).name).resolve()
+    if not str(out_dir).startswith(str(I2V_OUT.resolve())) or not out_dir.is_dir():
+        abort(400, "unknown clip")
+    info = read_json(out_dir / "i2v.json") or {}
+    batch = info.get("batch")
+    if not batch:
+        abort(400, "this clip wasn't made from a shot list, so it has no story beats to tag")
+    bdir = (BROLL_OUT / Path(batch).name).resolve()
+    if not bdir.is_dir():
+        abort(400, "the shot list for this clip is gone")
+    return out_dir, bdir
+
+
+def _tag_timings(recipe: dict, total: float) -> list[dict]:
+    """One tag per shot, timed by shot duration, rescaled to the real length."""
+    shots = recipe.get("shots") or []
+    planned = sum(float(s.get("duration_s") or 0) for s in shots) or 1.0
+    scale = (total / planned) if total > 0 else 1.0
+    out, t = [], 0.0
+    for s in shots:
+        dur = float(s.get("duration_s") or 0) * scale
+        tag = s.get("tag")
+        lines = ([tag] if isinstance(tag, str) else list(tag)) if tag else []
+        out.append({"id": s.get("id"), "start": round(t, 2), "end": round(t + dur, 2),
+                    "lines": lines})
+        t += dur
+    return out
+
+
+@app.post("/api/tags/suggest")
+def api_tags_suggest():
+    """Write story tags from the script into the clip's recipe, return them to edit."""
+    b = request.get_json(force=True)
+    out_dir, bdir = _tag_batch_dir((b.get("slug") or "").strip())
+    if not CLAUDE_EXE:
+        abort(500, "the Claude CLI isn't available — it writes the story tags")
+    cmd = [_cv_py(), str(BROLLVID_ENGINE), "tags", "--recipe", str(bdir / "recipe.json"),
+           "--claude", str(CLAUDE_EXE), "--model", "sonnet"]
+    script = (b.get("script") or "").strip()
+    if script:
+        cmd += ["--script", script[:4000]]
+    r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
+                       errors="replace", timeout=900, env=job_env(), cwd=str(ROOT))
+    if r.returncode != 0:
+        abort(502, f"tag writing failed: {(r.stderr or r.stdout or '')[-300:]}")
+    recipe = read_json(bdir / "recipe.json") or {}
+    clip = out_dir / "clip.mp4"
+    return jsonify({"tags": _tag_timings(recipe, _probe_seconds(clip) if clip.is_file() else 0)})
+
+
+@app.get("/api/tags/<path:slug>")
+def api_tags_get(slug):
+    """Whatever tags this clip already has (so the editor reopens with them)."""
+    out_dir, bdir = _tag_batch_dir(slug)
+    recipe = read_json(bdir / "recipe.json") or {}
+    clip = out_dir / "clip.mp4"
+    return jsonify({"tags": _tag_timings(recipe, _probe_seconds(clip) if clip.is_file() else 0),
+                    "tagged": (out_dir / "clip-tagged.mp4").is_file()})
+
+
+@app.post("/api/tags/burn")
+def api_tags_burn():
+    """Burn the (possibly edited) tags onto the finished clip. Free, local, fast."""
+    b = request.get_json(force=True)
+    out_dir, _ = _tag_batch_dir((b.get("slug") or "").strip())
+    clip = out_dir / "clip.mp4"
+    if not clip.is_file():
+        abort(400, "this clip has no finished video yet")
+    tags = [t for t in (b.get("tags") or [])
+            if t.get("lines") and float(t.get("end", 0)) > float(t.get("start", 0))]
+    if not tags:
+        abort(400, "no tag lines to burn")
+    try:
+        y = max(0.02, min(0.8, float(b.get("y", 0.16))))
+    except (TypeError, ValueError):
+        y = 0.16
+    out = out_dir / "clip-tagged.mp4"
+    cmd = [_cv_py(), str(TAG_ENGINE), "--video", str(clip), "--out", str(out),
+           "--y", str(y), "--tags", json.dumps(tags)]
+    r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
+                       errors="replace", timeout=900, env=job_env(), cwd=str(ROOT))
+    if r.returncode != 0 or not out.is_file():
+        abort(502, f"burning tags failed: {(r.stderr or r.stdout or '')[-300:]}")
+    return jsonify({"ok": True, "video": f"output/i2v/{out_dir.name}/clip-tagged.mp4",
+                    "mtime": out.stat().st_mtime})
 
 
 @app.get("/image-to-video")
