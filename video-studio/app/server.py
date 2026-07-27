@@ -3710,6 +3710,71 @@ def api_fit_run():
     return jsonify({"job_id": job_id, "stem": stem, "estimate": est})
 
 
+# ── Text-to-Video: continue a copied clip ───────────────────────────────────
+# Keep a chosen segment of an uploaded video, then AI-generate footage that
+# continues from it (fal.ai). Reuses the i2v estimate, cost gate, spend ledger,
+# and output dir, so the result shows under Media like any Image->Video clip.
+T2V_ENGINE = APP_DIR / "engines" / "t2v_continue.py"
+
+
+def run_t2v_job(job_id: str, cmd: list[str], slug: str, est: dict) -> None:
+    run_job(job_id, cmd)
+    job = jobs[job_id]
+    if job["status"] != "done":
+        return
+    try:
+        res = record_spend(slug, est)
+        with jobs_lock:
+            job["lines"].append("")
+            job["lines"].append(f"💰 This clip cost ~${res['this_run']:.2f} on fal.ai  ({est['summary']})")
+            job["lines"].append(f"🧾 Total spent on fal.ai so far: ${res['total']:.2f}")
+        job["cost"] = {"this_run": res["this_run"], "total": res["total"], "summary": est["summary"]}
+    except Exception as exc:                      # noqa: BLE001
+        with jobs_lock:
+            job["lines"].append(f"(cost tracking skipped: {exc})")
+
+
+@app.post("/api/t2v/continue")
+def api_t2v_continue():
+    b = request.get_json(force=True)
+    name = (b.get("file") or "").strip()
+    src = (UPLOADS / name).resolve()
+    if not str(src).startswith(str(UPLOADS.resolve())) or not src.is_file():
+        abort(400, "pick a source video from your library first")
+    prompt = (b.get("prompt") or "").strip()
+    if len(prompt) < 3:
+        abort(400, "write what the continuation should show / do")
+    model = b.get("model", "kling-2.1")
+    aspect = b.get("aspect", "9:16")
+    if model not in I2V_MODELS:
+        abort(400, "unknown model")
+    if aspect not in ("9:16", "16:9", "1:1"):
+        abort(400, "bad aspect")
+    seconds = int(b.get("seconds", 10))
+    if not (5 <= seconds <= 60):
+        abort(400, "generate 5-60 seconds")
+    try:
+        start = max(0.0, float(b.get("start") or 0))
+        end = float(b.get("end") or 0)
+    except (TypeError, ValueError):
+        abort(400, "bad start/end times")
+    est = _i2v_estimate(model, seconds)
+    if not b.get("confirm_cost"):
+        return jsonify({"needs_confirm": True, "estimate": est}), 402
+    slug = f"{src.stem}-cont-{time.strftime('%H%M%S')}"
+    work = I2V_OUT / slug
+    work.mkdir(parents=True, exist_ok=True)
+    cv_py = CONFIG["venvs"]["cv"]
+    seg = I2V_MODELS[model]["seg"]
+    cmd = [cv_py, str(T2V_ENGINE), "--source", str(src), "--start", str(start),
+           "--end", str(end), "--work", str(work), "--name", slug, "--cv-py", cv_py,
+           "--i2v", str(I2V_ENGINE), "--env-file", str(FAL_ENV_FILE), "--model", model,
+           "--aspect", aspect, "--seconds", str(seconds), "--seg", str(seg), "--prompt", prompt]
+    job_id = jobs_create("t2v", slug, f"Text->Video continue - {slug} [{model}]")
+    threading.Thread(target=run_t2v_job, args=(job_id, cmd, slug, est), daemon=True).start()
+    return jsonify({"job_id": job_id, "slug": slug, "estimate": est})
+
+
 @app.get("/image-to-video")
 def image_to_video_page():
     return send_from_directory(STATIC, "image-to-video.html")
@@ -4605,8 +4670,8 @@ def api_broll_generate():
         abort(404, "no recipe for that batch")
 
     motion = b.get("motion", "ken")
-    if motion not in ("ken", "anim", "fal"):
-        abort(400, "motion must be ken, anim or fal")
+    if motion not in ("ken", "anim", "fal", "ltx"):
+        abort(400, "motion must be ken, anim, fal or ltx")
     style = b.get("style", "auto")
     if style not in ("auto", "ipadapter", "controlnet", "text"):
         abort(400, "bad style mode")
@@ -4664,19 +4729,27 @@ def api_broll_animate():
     mtype = b.get("motion_type", "push_in")
     if mtype not in BROLL_MOTIONS:
         abort(400, "bad motion type")
+    engine = b.get("engine", "ken")
+    if engine not in ("ken", "ltx"):
+        abort(400, "engine must be ken or ltx")
+    if engine == "ltx" and len((b.get("prompt") or "").strip()) < 3:
+        abort(400, "the ltx engine needs a prompt describing the scene/motion")
     aspect = b.get("aspect", "9:16")
     if aspect not in ("9:16", "1:1", "16:9"):
         abort(400, "bad aspect")
-    out = BROLL_OUT / "singles" / f"{p.stem}-{mtype}-{time.strftime('%H%M%S')}.mp4"
+    out = BROLL_OUT / "singles" / f"{p.stem}-{engine}-{mtype}-{time.strftime('%H%M%S')}.mp4"
     cmd = [_cv_py(), str(BROLL_ENGINE), "motion", "--still", str(p), "--out", str(out),
-           "--motion-type", mtype, "--aspect", aspect,
+           "--engine", engine, "--motion-type", mtype, "--aspect", aspect,
            "--intensity", str(max(0.03, min(0.35, float(b.get("intensity", 0.12))))),
            "--duration", str(max(2.0, min(12.0, float(b.get("duration", 4.0))))),
            "--fps", str(max(12, min(60, int(b.get("fps", 30))))),
            "--grain", str(max(0, min(20, int(b.get("grain", 4)))))]
+    if engine == "ltx":
+        cmd += ["--prompt", b["prompt"].strip()]
     if b.get("no_upscale"):
         cmd.append("--no-upscale")
-    job_id = jobs_create("broll-motion", p.stem, f"Animate still — {p.name} [{mtype}]")
+    job_id = jobs_create("broll-motion", p.stem,
+                         f"Animate still — {p.name} [{engine}:{mtype}]")
     threading.Thread(target=run_job, args=(job_id, cmd), daemon=True).start()
     return jsonify({"job_id": job_id, "out": rel_from_root(out)})
 

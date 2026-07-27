@@ -226,8 +226,49 @@
           <a class="ed-run" style="display:block;text-align:center;text-decoration:none" href="/image-to-video">🎬 Open Image→Video ↗</a>
           <div class="ed-note">finished clips appear under Media as “AI CLIP”.</div>`;
       } else if (c === "t2v") {
-        body.innerHTML = `<div class="ed-note" style="margin-bottom:8px">Text-to-video shot generation (Seedance / Wan / Kling / Hailuo) runs per product inside the Ads Factory shot pipeline.</div>
-          <a class="ed-run ghostly" style="display:block;text-align:center;text-decoration:none" href="/creator">Open Ads Factory ↗</a>`;
+        const v = ED.video;
+        if (!v) {
+          body.innerHTML = `<div class="ed-note">Pick (or Import) a video in <b>Media</b> first. Text→Video copies a piece of it, then AI-generates new footage that continues from your new script.</div>`;
+          return;
+        }
+        body.innerHTML = `
+          <div class="ed-note" style="margin-bottom:8px">Keep a piece of <b>${VS.esc(v.title || v.name)}</b>, then fal.ai generates new footage that continues from its last frame following your script. Stitched into one clip.</div>
+          <div class="ed-field"><label>Copy from → to (seconds · blank = whole clip)</label>
+            <div style="display:flex;gap:8px">
+              <input type="number" id="t2-start" placeholder="0" min="0" step="0.5">
+              <input type="number" id="t2-end" placeholder="end" min="0" step="0.5"></div></div>
+          <div class="ed-field"><label>New script — what the new footage shows / does</label>
+            <textarea id="t2-prompt" rows="3" placeholder="e.g. she smiles and holds up the pouch, slow push-in, warm morning light"></textarea></div>
+          <div class="ed-field"><label>Generate seconds</label>
+            <select id="t2-secs"><option>5</option><option selected>10</option><option>15</option><option>20</option><option>30</option></select></div>
+          <div class="ed-field"><label>Generator (fal.ai)</label>
+            <select id="t2-model"><option value="kling-2.1">Kling 2.1 — balanced</option><option value="hailuo-02">Hailuo 02 — great motion</option><option value="kling-2.1-pro">Kling 2.1 Pro — best quality</option><option value="wan-2.2">Wan 2.2 — budget</option></select></div>
+          <div class="ed-field"><label>Aspect</label><select id="t2-aspect"><option>9:16</option><option>16:9</option><option>1:1</option></select></div>
+          <button class="ed-run" id="t2-go">⚡ Copy &amp; continue</button>
+          <div class="ed-cost paid">💰 fal.ai — you approve the exact cost first</div>
+          <div class="ed-note" id="t2-out"></div>`;
+        const go = $("#t2-go", root);
+        go.onclick = async () => {
+          const prompt = $("#t2-prompt", root).value.trim();
+          if (!prompt) { VS.toast("Describe the new footage first"); return; }
+          const payload = extra => JSON.stringify({file: v.name,
+            start: +($("#t2-start", root).value || 0), end: +($("#t2-end", root).value || 0),
+            prompt, model: $("#t2-model", root).value, aspect: $("#t2-aspect", root).value,
+            seconds: +$("#t2-secs", root).value, ...(extra || {})});
+          const hdr = {"Content-Type": "application/json"};
+          go.disabled = true;
+          try {
+            let r = await fetch("/api/t2v/continue", {method: "POST", headers: hdr, body: payload()});
+            if (r.status === 402) {
+              const d = await r.json();
+              if (!confirm(`⚠ This generates footage on fal.ai (spends money).\n\n${d.estimate.summary}\n\nApprove and start?`)) { go.disabled = false; return; }
+              r = await fetch("/api/t2v/continue", {method: "POST", headers: hdr, body: payload({confirm_cost: true})});
+            }
+            if (!r.ok) throw new Error((await r.text()).slice(0, 180));
+            VS.toast("⚡ Copying + generating on fal.ai — watch the timeline"); renderTimeline();
+            $("#t2-out", root).innerHTML = "⚡ working… the finished clip lands under <b>Media</b> as an AI CLIP when done.";
+          } catch (e) { VS.toast("Couldn't start: " + e.message); go.disabled = false; }
+        };
       } else {
         body.innerHTML = `<div class="ed-tiles"><div class="ed-tile"><span class="soon">SOON</span><span class="big">🎞</span>Multiframe</div></div>
           <div class="ed-note">keyframe-to-keyframe video is on the roadmap.</div>`;

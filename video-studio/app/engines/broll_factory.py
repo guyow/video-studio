@@ -63,7 +63,8 @@ COMFY_URL = CONFIG.get("comfyui", "127.0.0.1:8188")
 sys.path.insert(0, str(ROOT / "scripts"))
 from comfyui_client import ComfyUIClient, ComfyUIError          # noqa: E402
 from comfyui_workflows import (build_txt2img, build_upscale,     # noqa: E402
-                               build_controlnet_keyframe, build_animatediff)
+                               build_controlnet_keyframe, build_animatediff,
+                               build_ltx2_i2v)
 
 BASE_NEGATIVE = ("text, watermark, signature, logo, low quality, blurry, jpeg artifacts, "
                  "deformed hands, extra fingers, extra limbs, duplicate subject, "
@@ -73,6 +74,21 @@ BASE_NEGATIVE = ("text, watermark, signature, logo, low quality, blurry, jpeg ar
 # and does not duplicate subjects at high aspect ratios.
 GEN_DIMS = {"9:16": (448, 800), "1:1": (640, 640), "16:9": (800, 448)}
 OUT_DIMS = {"9:16": (1080, 1920), "1:1": (1080, 1080), "16:9": (1920, 1080)}
+# LTX-2.3 render dims: divisible by 64 (pass 1 samples at half size, /32 latents).
+# Kept modest — the 22B model already crawls on this machine at any size.
+LTX_DIMS = {"9:16": (576, 1024), "1:1": (768, 768), "16:9": (1024, 576)}
+LTX_FPS = 25
+LTX_MODELS = {
+    "checkpoint":   "ltx-2.3-22b-dev-fp8.safetensors",
+    "text_encoder": "gemma_3_12B_it_fp4_mixed.safetensors",
+    "upsampler":    "ltx-2.3-spatial-upscaler-x2-1.1.safetensors",
+}
+# Optional distilled LoRA — either name unlocks the fast 8+3-step schedule.
+# The blueprint ships rank-384; ComfyUI's template browser wants the newer 1.1.
+LTX_LORAS = (
+    "ltx_2.3_22b_distilled_1.1_lora_dynamic_fro09_avg_rank_111_bf16.safetensors",
+    "ltx-2.3-22b-distilled-lora-384.safetensors",
+)
 MOTION_TYPES = ("push_in", "pull_out", "pan_left", "pan_right",
                 "tilt_up", "tilt_down", "drift", "static")
 VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v"}
@@ -242,6 +258,22 @@ def comfy_caps(c: ComfyUIClient) -> dict:
         caps["clip_vision"] = c.clip_visions()
     except Exception:                                          # noqa: BLE001
         pass
+    # LTX-2.3 video: needs the 22B checkpoint + gemma text encoder + the x2
+    # latent upsampler, all served by native nodes on this ComfyUI (0.27+).
+    try:
+        text_encoders = c._combo("LTXAVTextEncoderLoader", "text_encoder")
+        latent_ups = c._combo("LatentUpscaleModelLoader", "model_name")
+        loras = c._combo("LoraLoaderModelOnly", "lora_name")
+    except Exception:                                          # noqa: BLE001
+        text_encoders, latent_ups, loras = [], [], []
+    caps["ltx"] = {
+        "checkpoint": LTX_MODELS["checkpoint"] in caps["checkpoints"],
+        "text_encoder": LTX_MODELS["text_encoder"] in text_encoders,
+        "upsampler": LTX_MODELS["upsampler"] in latent_ups,
+        # the installed LoRA's actual name (or None) — truthy check still works
+        "lora": next((l for l in LTX_LORAS if l in loras), None),
+    }
+    caps["ltx"]["ready"] = all(caps["ltx"][k] for k in ("checkpoint", "text_encoder", "upsampler"))
     return caps
 
 
@@ -649,6 +681,56 @@ def fal_clip(still: Path, out: Path, *, prompt: str, aspect: str, seconds: int,
     shutil.move(str(made), str(out))
 
 
+def _ltx_length(duration: float) -> int:
+    """Frame count for LTX: 8k+1 at 25 fps, floor 9, cap ~9.6s."""
+    n = int(round((duration * LTX_FPS - 1) / 8)) * 8 + 1
+    return max(9, min(241, n))
+
+
+def ltx_clip(c: ComfyUIClient, caps: dict, still: Path, out: Path, *, prompt: str,
+             negative: str, duration: float, aspect: str, seed: int, work: Path,
+             fps_out: int) -> None:
+    """LTX-2.3 image→video on the local GPU: two-pass sampling with the
+    spatial-upscaler-x2 doubling the latent between passes. Free but VERY slow
+    on this machine — the 22B fp8 weights stream from disk on every step."""
+    ltx = caps.get("ltx") or {}
+    if not ltx.get("ready"):
+        missing = [k for k in ("checkpoint", "text_encoder", "upsampler") if not ltx.get(k)]
+        raise RuntimeError(f"LTX-2.3 models missing in ComfyUI: {', '.join(missing)}")
+    w, h = LTX_DIMS[aspect]
+    length = _ltx_length(duration)
+    lora = ltx.get("lora") or None
+    log(f"    LTX-2.3 {w}x{h} × {length}f @ {LTX_FPS}fps"
+        + (" + distilled LoRA (fast 8+3-step schedule)" if lora else
+           " (no distilled LoRA — full 24-step base sampling w/ CFG, ~2.5x slower;"
+           " install the LoRA for the fast path)"))
+    log("    ⚠ 22B model on a 4 GB card: weights stream from RAM/disk — this can take"
+        " tens of minutes to hours per clip. Ken Burns and fal stay the fast paths.")
+    name = c.upload_image(still)
+    wf = build_ltx2_i2v(
+        checkpoint=LTX_MODELS["checkpoint"], text_encoder=LTX_MODELS["text_encoder"],
+        upscale_model=LTX_MODELS["upsampler"], image_name=name,
+        positive=prompt, negative=negative, width=w, height=h, length=length,
+        fps=LTX_FPS, seed=seed, lora=lora, filename_prefix="broll/ltx")
+    files = c.run(wf, poll=5.0, max_wait=4 * 3600)
+    vids = [f for f in files if str(f.get("filename", "")).lower().endswith(".mp4")]
+    if not vids:
+        raise RuntimeError(f"LTX run produced no mp4 (outputs: "
+                           f"{[f.get('filename') for f in files][:4]})")
+    raw = work / "ltx_raw.mp4"
+    c.download(vids[0], raw)
+
+    ow, oh = OUT_DIMS[aspect]
+    out.parent.mkdir(parents=True, exist_ok=True)
+    run([ff("ffmpeg"), "-y", "-v", "error", "-i", str(raw),
+         "-vf", (f"scale={ow}:{oh}:force_original_aspect_ratio=increase:flags=lanczos,"
+                 f"crop={ow}:{oh},fps={fps_out},format=yuv420p"),
+         "-c:v", "libx264", "-crf", "18", "-preset", "medium",
+         "-movflags", "+faststart", "-an", str(out)],
+        "LTX finishing pass")
+    raw.unlink(missing_ok=True)
+
+
 # -------------------------------------------------------------------- generate
 
 def make_still(c: ComfyUIClient, caps: dict, shot: dict, *, checkpoint: str, positive: str,
@@ -750,6 +832,11 @@ def cmd_generate(a: argparse.Namespace) -> None:
     if motion_engine == "anim" and not caps["motion_modules"]:
         log("  No AnimateDiff motion module installed — using ken-burns instead.")
         motion_engine = "ken"
+    if motion_engine == "ltx" and not (caps.get("ltx") or {}).get("ready"):
+        miss = [k for k in ("checkpoint", "text_encoder", "upsampler")
+                if not (caps.get("ltx") or {}).get(k)]
+        log(f"  LTX-2.3 models missing ({', '.join(miss)}) — using ken-burns instead.")
+        motion_engine = "ken"
 
     log(f"Batch {batch} · {len(shots)} shot(s) · {aspect} {out_w}x{out_h} · "
         f"still={style_mode} · motion={motion_engine} · {checkpoint}")
@@ -810,6 +897,18 @@ def cmd_generate(a: argparse.Namespace) -> None:
                                  positive=positive, negative=negative, out=clip,
                                  duration=dur, fps=a.fps, width=out_w, height=out_h,
                                  seed=seed, steps=max(16, a.steps - 6), work=work)
+            elif motion_engine == "ltx":
+                # LTX animates the shot's OWN still, so the motion prompt is the
+                # shot prompt + the recipe's camera move spelled out in words.
+                move = {"push_in": "slow cinematic push in", "pull_out": "slow pull back",
+                        "pan_left": "slow pan left", "pan_right": "slow pan right",
+                        "tilt_up": "slow tilt up", "tilt_down": "slow tilt down",
+                        "drift": "gentle handheld drift", "static": "locked-off static shot"
+                        }.get(mo.get("type", "push_in"), "slow cinematic push in")
+                ltx_clip(c, caps, still, clip,
+                         prompt=f"{shot['prompt']}, {move}, subtle natural motion",
+                         negative=negative, duration=dur, aspect=aspect, seed=seed,
+                         work=work, fps_out=a.fps)
             else:
                 fal_clip(still, clip, prompt=shot["prompt"], aspect=aspect,
                          seconds=int(round(dur)), model=a.fal_model, work=work)
@@ -877,6 +976,19 @@ def cmd_motion(a: argparse.Namespace) -> None:
     work = out.parent
     work.mkdir(parents=True, exist_ok=True)
 
+    if a.engine == "ltx":
+        if not a.prompt:
+            raise SystemExit("--engine ltx needs --prompt describing the scene/motion")
+        c = comfy()
+        caps = comfy_caps(c)
+        seed = zlib.crc32(still.name.encode()) % 2_000_000_000
+        ltx_clip(c, caps, still, out, prompt=a.prompt,
+                 negative=BASE_NEGATIVE, duration=a.duration, aspect=aspect,
+                 seed=seed, work=work, fps_out=a.fps)
+        info = media_info(out)
+        log(f"→ {out}  ({info['w']}x{info['h']}, {info['duration']:.1f}s)")
+        return
+
     src = still
     if not a.no_upscale:
         c = comfy()
@@ -923,7 +1035,7 @@ def main() -> int:
     ge = sub.add_parser("generate", help="recipe.json -> stills -> clips -> bank")
     ge.add_argument("--recipe", required=True)
     ge.add_argument("--shots", default="", help="comma-separated shot ids (default: all)")
-    ge.add_argument("--motion", default="ken", choices=["ken", "anim", "fal"])
+    ge.add_argument("--motion", default="ken", choices=["ken", "anim", "fal", "ltx"])
     ge.add_argument("--style", default="auto", choices=["auto", "ipadapter", "controlnet", "text"])
     ge.add_argument("--aspect", default=None, choices=list(GEN_DIMS))
     ge.add_argument("--steps", type=int, default=26)
@@ -942,6 +1054,8 @@ def main() -> int:
     mo = sub.add_parser("motion", help="one still -> one clip")
     mo.add_argument("--still", required=True)
     mo.add_argument("--out", default=None)
+    mo.add_argument("--engine", default="ken", choices=["ken", "ltx"])
+    mo.add_argument("--prompt", default="", help="scene/motion description (ltx engine)")
     mo.add_argument("--motion-type", default="push_in", choices=list(MOTION_TYPES))
     mo.add_argument("--intensity", type=float, default=0.12)
     mo.add_argument("--duration", type=float, default=4.0)

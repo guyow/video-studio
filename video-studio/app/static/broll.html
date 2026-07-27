@@ -116,6 +116,7 @@
       <div class="chiprow" id="mot" style="margin-top:5px">
         <button class="chipbtn on" data-m="ken">Ken Burns · free</button>
         <button class="chipbtn" data-m="anim">AnimateDiff · free</button>
+        <button class="chipbtn" data-m="ltx">LTX-2.3 · free · slow</button>
         <button class="chipbtn" data-m="fal">fal.ai · $</button>
       </div>
       <div class="vs-hint" id="mothint" style="margin-top:7px">
@@ -176,6 +177,7 @@
   const MOTHINT = {
     ken:  "Programmatic push/pan over a generated still. No GPU, full 1080×1920, ~3s a clip.",
     anim: "Real generated motion via AnimateDiff, then interpolated and ping-ponged. Slow on a 4 GB card and stylised.",
+    ltx:  "Real image→video with the LTX-2.3 22B model + your spatial upscaler, all local and free. ⚠ On this machine the weights stream from disk — expect tens of minutes to HOURS per clip. Overnight material.",
     fal:  "Real image→video on fal.ai. Best quality, costs money — you approve the exact amount first.",
   };
   let selectedRefs = new Set(), aspect = "9:16", motion = "ken";
@@ -190,6 +192,10 @@
       bits.push(pill(health.ipadapter, health.ipadapter ? "IPAdapter" : "no IPAdapter (text-only styling)"));
       bits.push(pill((health.upscalers||[]).length, "ESRGAN"));
       bits.push(pill((health.motion_modules||[]).length, "AnimateDiff"));
+      const ltx = health.ltx || {};
+      bits.push(pill(ltx.ready, ltx.ready
+        ? ("LTX-2.3" + (ltx.lora ? "" : " (no distilled LoRA)"))
+        : "LTX-2.3 models missing"));
     }
     bits.push(pill(health.claude, health.claude ? "Claude vision" : "claude CLI missing"));
     $("#health").innerHTML = bits.join("");
