@@ -356,6 +356,12 @@ def cmd_storyboard(a: argparse.Namespace) -> int:
 
 
 # ─────────────────────────────────────────────── assemble (clips + VO -> video)
+def _shot_num(sid: str) -> tuple[int, str]:
+    """Natural order: s2 before s10 (plain string sort puts s10 second)."""
+    m = re.search(r"(\d+)", sid or "")
+    return (int(m.group(1)) if m else 10**6, sid or "")
+
+
 def _ordered_clips(batch: Path) -> list[Path]:
     root = batch.parents[2]                       # output/broll/<batch> -> repo root
     gen = batch / "generated.json"
@@ -363,8 +369,12 @@ def _ordered_clips(batch: Path) -> list[Path]:
     if gen.is_file():
         try:
             data = json.loads(gen.read_text(encoding="utf-8"))
-            for e in sorted(data.get("generated") or [], key=lambda x: x.get("shot_id", "")):
-                f = root / (e.get("file") or "")
+            for e in sorted(data.get("generated") or [],
+                            key=lambda x: _shot_num(x.get("shot_id", ""))):
+                raw = e.get("file") or ""
+                f = Path(raw)
+                if not f.is_absolute():           # engines write rel-to-root or absolute
+                    f = root / raw
                 if f.is_file():
                     clips.append(f)
         except json.JSONDecodeError:
@@ -372,8 +382,15 @@ def _ordered_clips(batch: Path) -> list[Path]:
     if not clips:                                  # fallback: whatever is in clips/
         cdir = batch / "clips"
         if cdir.is_dir():
-            clips = sorted(cdir.glob("*.mp4"), key=lambda p: p.stem)
+            clips = sorted(cdir.glob("*.mp4"), key=lambda p: _shot_num(p.stem))
     return clips
+
+
+def has_audio(p: Path) -> bool:
+    r = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "a",
+                        "-show_entries", "stream=codec_type", "-of", "csv=p=0", str(p)],
+                       capture_output=True, text=True, encoding="utf-8", errors="replace")
+    return "audio" in (r.stdout or "")
 
 
 def cmd_assemble(a: argparse.Namespace) -> int:
@@ -394,24 +411,37 @@ def cmd_assemble(a: argparse.Namespace) -> int:
     # 1) narration (optional): clone the reference video's voice, speak the script
     vo = None
     vo_sec = 0.0
-    if script and (a.ref_video or a.voice) and a.ds_py and a.ds_app:
-        cmd = [a.ds_py, a.ds_app, "--cli", "--script", script, "--no-fit", "--device", "auto", "--language", "en"]
-        if a.ref_video:
-            cmd += ["--video", a.ref_video]
-        if a.voice:
-            cmd += ["--reference", a.voice]
-        log("narrating the script with the cloned voice (XTTS)...")
-        so = run(cmd, "XTTS narration", timeout=3600)
-        wav = None
-        for line in so.splitlines():
-            if line.strip().lower().startswith("audio:"):
-                wav = Path(line.split(":", 1)[1].strip())
-        if wav and wav.is_file():
-            vo = out_dir / "vo.mp3"
-            ff(["-i", str(wav), "-c:a", "libmp3lame", "-b:a", "192k", str(vo)], "save narration")
-            vo_sec = probe_sec(vo)
+    # Narration is a BONUS, never a blocker: the shot clips are already paid for,
+    # so any voice problem downgrades to a silent cut instead of losing the video.
+    voice_src = a.voice or a.ref_video
+    if script and voice_src and a.ds_py and a.ds_app:
+        if a.voice or has_audio(Path(a.ref_video)):
+            cmd = [a.ds_py, a.ds_app, "--cli", "--script", script, "--no-fit",
+                   "--device", "auto", "--language", "en"]
+            if a.ref_video:
+                cmd += ["--video", a.ref_video]
+            if a.voice:
+                cmd += ["--reference", a.voice]
+            log("narrating the script with the cloned voice (XTTS)...")
+            try:
+                so = run(cmd, "XTTS narration", timeout=3600)
+                wav = None
+                for line in so.splitlines():
+                    if line.strip().lower().startswith("audio:"):
+                        wav = Path(line.split(":", 1)[1].strip())
+                if wav and wav.is_file():
+                    vo = out_dir / "vo.mp3"
+                    ff(["-i", str(wav), "-c:a", "libmp3lame", "-b:a", "192k", str(vo)], "save narration")
+                    vo_sec = probe_sec(vo)
+                else:
+                    log("  narration produced no audio — assembling the video silent")
+            except SystemExit:
+                vo = None
+                log("  narration failed — assembling the video SILENT so the shots aren't lost")
+                log("  (add a voice later: pick a Voice Bank voice, or use a reference clip that has speech)")
         else:
-            log("  (narration produced no audio — assembling silent b-roll)")
+            log(f"  reference '{Path(a.ref_video).name}' has no audio track — nothing to clone a voice from.")
+            log("  assembling silent; pick a Voice Bank voice to narrate it.")
 
     # 2) normalize + concat the shots in order
     norm = (f"scale={w}:{h}:force_original_aspect_ratio=decrease,"
