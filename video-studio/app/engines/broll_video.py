@@ -217,6 +217,75 @@ NEW SCRIPT (this is what the new video must say and show):
 """
 
 
+TAGS_PROMPT = """Write the ON-SCREEN TEXT for a UGC ad — the white sticker-text boxes viewers read while it plays.
+
+Most people watch with the sound OFF, so these tags must carry the STORY on their own: read top to bottom they should make someone understand the whole before -> shift -> after arc without hearing a word.
+
+Style (copy this exactly - it is the native TikTok look):
+- 1 or 2 SHORT lines per shot, each line its own box. Line 1 is often a label ("Me:", "Day 1:", "2 weeks later:"), line 2 the beat ("Before Fairy Flame", "still exhausted").
+- Max ~5 words a line. Lower case or sentence case, casual, first person, like a real person typed it.
+- No hashtags, no emojis, no quote marks, no ALL CAPS shouting, no exclamation spam.
+- Do NOT narrate what is visibly happening ("folding laundry"). Say what she is FEELING or what has CHANGED.
+- The product beat is the turn - name it plainly once (e.g. "then I tried Fairy Flame").
+- The last shot is the payoff + a soft nudge to the link below. Never write a URL.
+- No medical claims, never promise a high; "clearer", "lighter", "like myself again" are the register.
+
+Here are the shots in order (id · seconds · emotional beat · what happens):
+{shots}
+{script_block}
+Respond with ONLY a JSON object mapping every shot id to its lines:
+{{"s1": ["Me:", "before Fairy Flame"], "s2": ["still foggy by 10am"]}}
+Every shot id must appear. No markdown, no code fences, no commentary.
+"""
+
+
+def cmd_tags(a: argparse.Namespace) -> int:
+    """Write the on-screen story tags into an existing recipe's shots."""
+    recipe_path = Path(a.recipe).resolve()
+    if not recipe_path.is_file():
+        die(f"no recipe at {recipe_path}")
+    recipe = json.loads(recipe_path.read_text(encoding="utf-8"))
+    shots = recipe.get("shots") or []
+    if not shots:
+        die("the recipe has no shots")
+    lines = []
+    for s in shots:
+        scene = s.get("prompt", "")
+        scene = scene.split("no makeup look. ")[-1].split(". Shot on iPhone")[0]
+        lines.append(f"  {s['id']} · {s.get('duration_s')}s · {s.get('emotional_beat') or '-'} · "
+                     f"{(s.get('title') or scene)[:70]}")
+    script = (a.script or recipe.get("script") or "").strip()
+    script_block = f"\nThe voiceover says:\n{script[:1200]}\n" if script else ""
+    prompt = TAGS_PROMPT.format(shots="\n".join(lines), script_block=script_block)
+
+    log(f"writing on-screen story tags for {len(shots)} shots...")
+    out = run([a.claude or "claude", "-p", "--model", a.model or "sonnet",
+               "--disallowedTools", "Write,Edit,Bash,NotebookEdit,WebFetch,WebSearch"],
+              "Claude tags", timeout=600, stdin=prompt)
+    m = re.search(r"\{.*\}", out, re.S)
+    if not m:
+        die(f"Claude did not return JSON:\n{out[:300]}")
+    try:
+        data = json.loads(m.group(0))
+    except json.JSONDecodeError as e:
+        die(f"could not parse tag JSON: {e}")
+
+    n = 0
+    for s in shots:
+        v = data.get(s["id"])
+        if not v:
+            continue
+        s["tag"] = [str(x).strip() for x in (v if isinstance(v, list) else [v]) if str(x).strip()][:2]
+        n += 1
+    recipe_path.write_text(json.dumps(recipe, indent=1), encoding="utf-8")
+    log("")
+    log(f"OK {n} shots tagged — the story reads with the sound off:")
+    for s in shots:
+        if s.get("tag"):
+            log(f"  {s['id']:<4} {' / '.join(s['tag'])}")
+    return 0
+
+
 def extract_keyframes(video: Path, out_dir: Path, n: int = 6) -> list[Path]:
     """Evenly sample n frames across the reference so Claude can see its whole arc."""
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -517,6 +586,12 @@ def main() -> int:
     sb.add_argument("--claude", help="path to the claude CLI")
     sb.add_argument("--model", default="sonnet", choices=("sonnet", "opus", "haiku"))
 
+    tg = sub.add_parser("tags")
+    tg.add_argument("--recipe", required=True, help="recipe.json to write on-screen tags into")
+    tg.add_argument("--script", default="")
+    tg.add_argument("--claude")
+    tg.add_argument("--model", default="sonnet")
+
     asm = sub.add_parser("assemble")
     asm.add_argument("--batch", required=True, help="output/broll/<batch> (already generated)")
     asm.add_argument("--out-dir", dest="out_dir", required=True, help="output/i2v/<slug>")
@@ -529,6 +604,8 @@ def main() -> int:
     a = ap.parse_args()
     if a.mode == "storyboard":
         return cmd_storyboard(a)
+    if a.mode == "tags":
+        return cmd_tags(a)
     return cmd_assemble(a)
 
 
