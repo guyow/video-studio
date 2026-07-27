@@ -84,6 +84,51 @@
   </section>
 
   <section>
+    <div class="vs-panel" style="border-color:var(--accent)">
+      <h3>🎬 Video → new video from a script</h3>
+      <div class="vs-hint" style="margin-bottom:10px">Upload a video, transcribe its words, replace them with your
+        new script — and AI builds a brand-new video: a shot for every beat, stitched together and narrated in the
+        uploaded speaker's cloned voice.</div>
+
+      <div class="vs-hint">1 · Source video <span style="opacity:.7">(gives the transcript + the narration voice)</span></div>
+      <label class="drop-img" id="vdrop" style="min-height:96px;margin-top:5px">
+        <input type="file" id="vfile" accept="video/*,.mp4,.mov,.mkv,.webm,.m4v" style="display:none">
+        <span id="vdropmsg">⬆ Drop a video or click to upload<br><span class="vs-hint">mp4 · mov · mkv · webm</span></span>
+      </label>
+      <div class="vs-row" style="margin-top:8px">
+        <button class="vs-btn" id="vtrans" disabled>📝 Transcribe it</button>
+        <span class="vs-hint" id="vtransmsg"></span>
+      </div>
+
+      <div class="vs-hint" style="margin-top:14px">2 · The new script <span style="opacity:.7">(this becomes the narration)</span></div>
+      <textarea class="vs-ta" id="bvscript" rows="6" style="margin-top:5px"
+        placeholder="transcribe above to load the original words, then rewrite them — or just paste your new script here"></textarea>
+
+      <div class="vs-hint" style="margin-top:12px">3 · How it renders</div>
+      <div class="vs-row" style="gap:10px;flex-wrap:wrap;margin-top:5px">
+        <label class="vs-hint">shots
+          <input type="number" id="bvshots" value="6" min="2" max="12" style="width:58px;margin-left:5px"></label>
+        <select class="vs-sel" id="bvmotion" style="width:auto">
+          <option value="ken">Ken Burns — free, local</option>
+          <option value="anim">AnimateDiff — free, local GPU</option>
+          <option value="ltx">LTX-2.3 — free, local GPU (slow)</option>
+          <option value="fal">fal.ai — real motion (paid)</option>
+        </select>
+        <label class="vs-hint"><input type="checkbox" id="bvbrand" checked> liitt brand look</label>
+      </div>
+      <div class="vs-row" style="margin-top:12px">
+        <button class="vs-btn primary" id="bvgo">✨ Create the video</button>
+        <span class="vs-hint" id="bvmsg"></span>
+      </div>
+      <div class="vs-hint" id="bvhealth" style="margin-top:8px"></div>
+      <div id="bvprog" style="display:none;margin-top:10px">
+        <div class="vs-hint" id="bvproglbl">starting…</div>
+        <div id="bvlog" style="background:#080b11;border:1px solid var(--line);border-radius:9px;
+          padding:9px 11px;margin-top:6px;font:11px/1.5 var(--mono);color:#b9c3d8;max-height:220px;
+          overflow:auto;white-space:pre-wrap"></div>
+      </div>
+    </div>
+
     <div class="vs-panel">
       <h3>Your clips <span class="r vs-hint" id="falspend"></span></h3>
       <div class="gallery" id="gallery"><div class="vs-hint">no clips yet — make your first one →</div></div>
@@ -231,6 +276,114 @@
 
   try { const s = await VS.api("/api/spend"); $("#falspend").textContent = `fal spend $${s.total.toFixed(2)}`; }
   catch (e) { /* ignore */ }
+
+  /* ═══ Video → new video from a script ═══
+     upload → transcribe → new script → shot list → clips → narrated video */
+  let bvFile = null, bvBusy = false;
+
+  const bvDrop = $("#vdrop"), bvInput = $("#vfile");
+  ["dragover", "dragleave", "drop"].forEach(ev => bvDrop.addEventListener(ev, e => {
+    e.preventDefault();
+    bvDrop.classList.toggle("drag", ev === "dragover");
+    if (ev === "drop" && e.dataTransfer.files[0]) bvUpload(e.dataTransfer.files[0]);
+  }));
+  bvInput.addEventListener("change", e => { if (e.target.files[0]) bvUpload(e.target.files[0]); });
+
+  async function bvUpload(f) {
+    $("#vdropmsg").textContent = "⬆ uploading…";
+    const fd = new FormData(); fd.append("file", f);
+    try {
+      const r = await fetch("/api/upload", {method: "POST", body: fd});
+      if (!r.ok) throw new Error((await r.text()).slice(0, 140));
+      const d = await r.json();
+      bvFile = d.name;
+      $("#vdropmsg").innerHTML = `✓ <b>${VS.esc(d.name)}</b><br><span class="vs-hint">click to replace</span>`;
+      $("#vtrans").disabled = false;
+      $("#vtransmsg").textContent = "ready — transcribe to load its words";
+    } catch (e) { $("#vdropmsg").textContent = "⬆ Drop a video or click"; VS.toast("Upload failed: " + e.message); }
+  }
+
+  $("#vtrans").onclick = async () => {
+    if (!bvFile) return;
+    const btn = $("#vtrans"), msg = $("#vtransmsg");
+    btn.disabled = true; msg.textContent = "📝 transcribing (local whisper, ~1 min)…";
+    const stem = bvFile.replace(/\.[^.]+$/, "");
+    try {
+      await VS.post("/api/run", {action: "transcribe", file: bvFile});
+    } catch (e) { msg.textContent = ""; VS.toast("Couldn't start: " + e.message); btn.disabled = false; return; }
+    for (let i = 0; i < 90; i++) {
+      await new Promise(r => setTimeout(r, 3000));
+      try {
+        const s = await VS.api("/api/script/" + encodeURIComponent(stem));
+        if (s.text && s.text.trim()) {
+          $("#bvscript").value = s.text.trim();
+          msg.textContent = `✓ ${s.text.trim().split(/\s+/).length} words — now rewrite them`;
+          btn.disabled = false; return;
+        }
+      } catch (e) { /* still running */ }
+    }
+    msg.textContent = "still working — check the Creator's job list";
+    btn.disabled = false;
+  };
+
+  try {
+    const h = await VS.api("/api/broll/health");
+    if (!h.checkpoints || !h.checkpoints.length)
+      $("#bvhealth").innerHTML = "⚠ ComfyUI isn't running — it paints each shot. Start it (run_nvidia_lowvram.bat), then reload.";
+  } catch (e) { $("#bvhealth").textContent = "⚠ couldn't reach the image engine — is ComfyUI running?"; }
+
+  $("#bvgo").onclick = async () => {
+    if (bvBusy) return;
+    const script = $("#bvscript").value.trim();
+    if (script.split(/\s+/).filter(Boolean).length < 5) { VS.toast("Write or transcribe a script first"); return; }
+    const body = {script, file: bvFile || "", shots: +$("#bvshots").value || 6,
+      motion: $("#bvmotion").value, aspect, brand: $("#bvbrand").checked};
+    const hdr = {"Content-Type": "application/json"};
+    bvBusy = true; $("#bvgo").disabled = true; $("#bvmsg").textContent = "";
+    try {
+      let r = await fetch("/api/brollvid/run", {method: "POST", headers: hdr, body: JSON.stringify(body)});
+      if (r.status === 402) {
+        const d = await r.json();
+        if (!confirm(`⚠ This generates footage on fal.ai (spends money).\n\n${d.estimate.summary}\n\nApprove and start?`)) {
+          bvBusy = false; $("#bvgo").disabled = false; return;
+        }
+        r = await fetch("/api/brollvid/run", {method: "POST", headers: hdr,
+          body: JSON.stringify(Object.assign({confirm_cost: true}, body))});
+      }
+      if (!r.ok) throw new Error((await r.text()).replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 160));
+      const d = await r.json();
+      $("#bvprog").style.display = "block";
+      $("#bvmsg").textContent = "shot list → clips → narration…";
+      bvWatch(d.job_id);
+    } catch (e) { VS.toast("Couldn't start: " + e.message); bvBusy = false; $("#bvgo").disabled = false; }
+  };
+
+  async function bvWatch(jobId) {
+    let off = 0, status = "running";
+    const box = $("#bvlog");
+    while (status === "running" || status === "queued") {
+      await new Promise(r => setTimeout(r, 2500));
+      let j; try { j = await VS.api(`/api/job/${jobId}?offset=${off}`); } catch (e) { continue; }
+      status = j.status;
+      if (j.lines && j.lines.length) {
+        off += j.lines.length;
+        box.textContent += (box.textContent ? "\n" : "") + j.lines.join("\n");
+        box.scrollTop = box.scrollHeight;
+        const step = [...j.lines].reverse().find(l => l.startsWith("=== step"));
+        if (step) $("#bvproglbl").textContent = step.replace(/=/g, "").trim();
+      }
+    }
+    bvBusy = false; $("#bvgo").disabled = false;
+    if (status === "done") {
+      $("#bvproglbl").textContent = "✅ done";
+      $("#bvmsg").textContent = "✓ your video is in Your clips below";
+      VS.toast("✅ Video ready"); loadClips();
+    } else {
+      $("#bvproglbl").textContent = "❌ " + status;
+      $("#bvmsg").textContent = "see the log above";
+      VS.toast("Failed — " + status);
+    }
+  }
 })();
 </script>
 </body>

@@ -3775,6 +3775,107 @@ def api_t2v_continue():
     return jsonify({"job_id": job_id, "slug": slug, "estimate": est})
 
 
+# ── Script -> AI b-roll VIDEO (upload -> transcribe -> new script -> video) ──
+# One button, three chained steps on the existing B-Roll Factory:
+#   storyboard (Claude: script -> shot list)  ->  generate (a clip per shot)
+#   -> assemble (concat + cloned-voice narration) -> output/i2v/<slug> (Media).
+BROLLVID_ENGINE = APP_DIR / "engines" / "broll_video.py"
+
+
+def run_chain_job(job_id: str, steps: list[tuple[str, list[str]]], est: dict | None = None,
+                  slug: str = "") -> None:
+    """Run several engine steps inside ONE job. run_job marks the job done after
+    each command, so intermediate successes are flipped back to running."""
+    last = len(steps) - 1
+    for i, (label, cmd) in enumerate(steps):
+        with jobs_lock:
+            jobs[job_id]["lines"].append("")
+            jobs[job_id]["lines"].append(f"=== step {i + 1}/{len(steps)}: {label} ===")
+        run_job(job_id, cmd)
+        if jobs[job_id]["status"] != "done":
+            return                     # failed / stopped — leave the state as-is
+        if i != last:
+            with jobs_lock:
+                jobs[job_id]["status"] = "running"
+                jobs[job_id]["ended"] = None
+    if est:
+        try:
+            res = record_spend(slug, est)
+            with jobs_lock:
+                jobs[job_id]["lines"].append("")
+                jobs[job_id]["lines"].append(f"💰 ~${res['this_run']:.2f} on fal.ai ({est['summary']})")
+            jobs[job_id]["cost"] = {"this_run": res["this_run"], "total": res["total"],
+                                    "summary": est["summary"]}
+        except Exception as exc:                      # noqa: BLE001
+            with jobs_lock:
+                jobs[job_id]["lines"].append(f"(cost tracking skipped: {exc})")
+
+
+@app.post("/api/brollvid/run")
+def api_brollvid_run():
+    b = request.get_json(force=True)
+    script = (b.get("script") or "").strip()
+    if len(script.split()) < 5:
+        abort(400, "write (or transcribe) a script first")
+    if not CLAUDE_EXE:
+        abort(500, "the Claude CLI isn't available — it writes the shot list")
+    aspect = b.get("aspect", "9:16")
+    if aspect not in ("9:16", "1:1", "16:9"):
+        abort(400, "bad aspect")
+    motion = b.get("motion", "ken")
+    if motion not in ("ken", "anim", "ltx", "fal"):
+        abort(400, "bad motion engine")
+    shots = max(2, min(12, int(b.get("shots") or 6)))
+    # optional reference video (from the library) — clones its voice for narration
+    ref = None
+    name = (b.get("file") or "").strip()
+    if name:
+        cand = (UPLOADS / name).resolve()
+        if not str(cand).startswith(str(UPLOADS.resolve())) or not cand.is_file():
+            abort(400, "reference video not found")
+        ref = cand
+
+    est = None
+    if motion == "fal":
+        # priced before the shot list exists: assume ~1 segment per shot
+        m = I2V_MODELS.get(b.get("fal_model", "kling-2.1")) or I2V_MODELS["kling-2.1"]
+        total = round(shots * m["cost_per_seg"], 2)
+        est = {"this_run": total, "engine": "fal-i2v", "model": b.get("fal_model", "kling-2.1"),
+               "summary": f"~{shots} shots on {m['label'].split(' — ')[0]} ≈ ${total:.2f} (approx — "
+                          f"the real shot list is written first)"}
+        if not b.get("confirm_cost"):
+            return jsonify({"needs_confirm": True, "estimate": est}), 402
+
+    stamp = time.strftime("%m%d-%H%M%S")
+    batch = f"script-{stamp}"
+    work = BROLL_OUT / batch
+    work.mkdir(parents=True, exist_ok=True)
+    (work / "script.txt").write_text(script + "\n", encoding="utf-8")
+    out_dir = I2V_OUT / f"brollvid-{stamp}"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    cv_py = _cv_py()
+
+    steps: list[tuple[str, list[str]]] = [
+        ("storyboard — Claude turns the script into a shot list",
+         [cv_py, str(BROLLVID_ENGINE), "storyboard", "--script", str(work / "script.txt"),
+          "--work", str(work), "--aspect", aspect, "--shots", str(shots),
+          "--claude", str(CLAUDE_EXE), "--model", "sonnet"]
+         + (["--brand"] if b.get("brand", True) else [])),
+        ("generate — render a clip for every shot",
+         [cv_py, str(BROLL_ENGINE), "generate", "--recipe", str(work / "recipe.json"),
+          "--motion", motion, "--style", "auto", "--aspect", aspect, "--no-bank"]
+         + (["--fal-model", b.get("fal_model", "kling-2.1")] if motion == "fal" else [])),
+        ("assemble — stitch the shots and narrate the script",
+         [cv_py, str(BROLLVID_ENGINE), "assemble", "--batch", str(work),
+          "--out-dir", str(out_dir), "--ds-py", str(DUB_VENV_PY),
+          "--ds-app", str(Path(CONFIG["dubbing_studio"]) / "app.py")]
+         + (["--ref-video", str(ref)] if ref else [])),
+    ]
+    job_id = jobs_create("brollvid", batch, f"Script → b-roll video — {batch} [{motion}]")
+    threading.Thread(target=run_chain_job, args=(job_id, steps, est, batch), daemon=True).start()
+    return jsonify({"job_id": job_id, "batch": batch, "slug": out_dir.name, "estimate": est})
+
+
 @app.get("/image-to-video")
 def image_to_video_page():
     return send_from_directory(STATIC, "image-to-video.html")
