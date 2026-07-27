@@ -3780,6 +3780,24 @@ def api_t2v_continue():
 #   storyboard (Claude: script -> shot list)  ->  generate (a clip per shot)
 #   -> assemble (concat + cloned-voice narration) -> output/i2v/<slug> (Media).
 BROLLVID_ENGINE = APP_DIR / "engines" / "broll_video.py"
+T2V_FAL_ENGINE = APP_DIR / "engines" / "t2v_fal.py"
+# mirror of t2v_fal.MODELS for the pre-storyboard estimate (min billable length
+# per shot x $/s). Endpoints verified against fal's live OpenAPI schemas.
+T2V_FAL_MODELS = {
+    "veo3":             {"label": "Veo 3 — best quality, native audio",      "min_s": 4, "cost_per_s": 0.40},
+    "veo3-fast":        {"label": "Veo 3 Fast — Veo quality, cheaper",       "min_s": 4, "cost_per_s": 0.15},
+    "sora-2":           {"label": "Sora 2 — OpenAI, strong realism",         "min_s": 4, "cost_per_s": 0.30},
+    "kling-2.5-pro":    {"label": "Kling 2.5 Turbo Pro — great motion",      "min_s": 5, "cost_per_s": 0.07},
+    "kling-2.1-master": {"label": "Kling 2.1 Master — cinematic",            "min_s": 5, "cost_per_s": 0.09},
+    "seedance-pro":     {"label": "Seedance 1.0 Pro — 1080p, flexible",      "min_s": 3, "cost_per_s": 0.12},
+    "hailuo-02":        {"label": "MiniMax Hailuo 02 — lively, cheap",       "min_s": 6, "cost_per_s": 0.05},
+    "wan-2.2":          {"label": "Wan 2.2 — budget",                        "min_s": 5, "cost_per_s": 0.04},
+}
+
+
+@app.get("/api/t2v/models")
+def api_t2v_models():
+    return jsonify({"models": [{"key": k, **v} for k, v in T2V_FAL_MODELS.items()]})
 
 
 def run_chain_job(job_id: str, steps: list[tuple[str, list[str]]], est: dict | None = None,
@@ -3823,8 +3841,11 @@ def api_brollvid_run():
     if aspect not in ("9:16", "1:1", "16:9"):
         abort(400, "bad aspect")
     motion = b.get("motion", "ken")
-    if motion not in ("ken", "anim", "ltx", "fal"):
+    if motion not in ("ken", "anim", "ltx", "fal", "fal-t2v"):
         abort(400, "bad motion engine")
+    t2v_model = b.get("t2v_model", "veo3-fast")
+    if motion == "fal-t2v" and t2v_model not in T2V_FAL_MODELS:
+        abort(400, "unknown text-to-video model")
     shots = max(2, min(12, int(b.get("shots") or 6)))
     # optional reference video (from the library) — clones its voice for narration
     ref = None
@@ -3835,6 +3856,21 @@ def api_brollvid_run():
             abort(400, "reference video not found")
         ref = cand
 
+    # preflight: the ComfyUI-based engines paint their still locally, so check it
+    # is reachable BEFORE the job spends a minute writing a shot list. fal
+    # text-to-video needs no ComfyUI at all, so it skips this entirely.
+    if motion != "fal-t2v":
+        try:
+            hc = subprocess.run([_cv_py(), str(BROLL_ENGINE), "health"], capture_output=True,
+                                text=True, timeout=60, env=job_env())
+            comfy_up = (json.loads(hc.stdout or "{}") or {}).get("comfyui")
+        except (subprocess.SubprocessError, json.JSONDecodeError, OSError):
+            comfy_up = True       # never let a flaky probe block a run
+        if not comfy_up:
+            abort(503, "ComfyUI isn't reachable — it paints every shot for the local engines. "
+                       "Start it (run_nvidia_gpu.bat) and wait for it to load, or switch to a "
+                       "fal.ai text-to-video model, which needs no local GPU at all.")
+
     est = None
     if motion == "fal":
         # priced before the shot list exists: assume ~1 segment per shot
@@ -3843,8 +3879,14 @@ def api_brollvid_run():
         est = {"this_run": total, "engine": "fal-i2v", "model": b.get("fal_model", "kling-2.1"),
                "summary": f"~{shots} shots on {m['label'].split(' — ')[0]} ≈ ${total:.2f} (approx — "
                           f"the real shot list is written first)"}
-        if not b.get("confirm_cost"):
-            return jsonify({"needs_confirm": True, "estimate": est}), 402
+    elif motion == "fal-t2v":
+        m = T2V_FAL_MODELS[t2v_model]
+        total = round(shots * m["min_s"] * m["cost_per_s"], 2)
+        est = {"this_run": total, "engine": "fal-t2v", "model": t2v_model,
+               "summary": f"~{shots} shots x {m['min_s']}s on {m['label'].split(' — ')[0]} "
+                          f"≈ ${total:.2f} (estimate — the real shot list is written first)"}
+    if est and not b.get("confirm_cost"):
+        return jsonify({"needs_confirm": True, "estimate": est}), 402
 
     stamp = time.strftime("%m%d-%H%M%S")
     batch = f"script-{stamp}"
@@ -3863,7 +3905,12 @@ def api_brollvid_run():
          + (["--brand"] if b.get("brand", True) else [])
          + (["--ugc"] if b.get("ugc", True) else [])
          + (["--preset", "ugc10"] if b.get("preset") == "ugc10" else [])),
+        # fal text-to-video goes prompt -> clip with no ComfyUI in the loop;
+        # the local engines still paint their still in ComfyUI first.
         ("generate — render a clip for every shot",
+         [cv_py, str(T2V_FAL_ENGINE), "--recipe", str(work / "recipe.json"),
+          "--model", t2v_model, "--aspect", aspect, "--env-file", str(FAL_ENV_FILE)]
+         if motion == "fal-t2v" else
          [cv_py, str(BROLL_ENGINE), "generate", "--recipe", str(work / "recipe.json"),
           "--motion", motion, "--style", "auto", "--aspect", aspect, "--no-bank"]
          + (["--fal-model", b.get("fal_model", "kling-2.1")] if motion == "fal" else [])),

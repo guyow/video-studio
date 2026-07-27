@@ -109,11 +109,17 @@
         <label class="vs-hint">shots
           <input type="number" id="bvshots" value="6" min="2" max="12" style="width:58px;margin-left:5px"></label>
         <select class="vs-sel" id="bvmotion" style="width:auto">
-          <option value="ken">Ken Burns — free, local</option>
-          <option value="anim">AnimateDiff — free, local GPU</option>
-          <option value="ltx">LTX-2.3 — free, local GPU (slow)</option>
-          <option value="fal">fal.ai — real motion (paid)</option>
+          <optgroup label="Paid — best quality, no local GPU needed">
+            <option value="fal-t2v" selected>☁ fal.ai text→video (recommended)</option>
+            <option value="fal">☁ fal.ai image→video (needs ComfyUI for the still)</option>
+          </optgroup>
+          <optgroup label="Free — local, needs ComfyUI running">
+            <option value="ken">Ken Burns — free, fast</option>
+            <option value="anim">AnimateDiff — free, local GPU</option>
+            <option value="ltx">LTX-2.3 — 22B on a 4GB card, very slow</option>
+          </optgroup>
         </select>
+        <select class="vs-sel" id="bvt2v" style="width:auto"></select>
         <label class="vs-hint"><input type="checkbox" id="bvbrand" checked> liitt brand look</label>
       </div>
       <div class="vs-row" style="gap:10px;flex-wrap:wrap;margin-top:8px">
@@ -336,11 +342,21 @@
     btn.disabled = false;
   };
 
+  // paid text->video models (no local GPU) + show/hide with the engine picker
+  try {
+    const t = await VS.api("/api/t2v/models");
+    $("#bvt2v").innerHTML = t.models.map(m =>
+      `<option value="${m.key}"${m.key === "veo3-fast" ? " selected" : ""}>${VS.esc(m.label)}</option>`).join("");
+  } catch (e) { $("#bvt2v").innerHTML = '<option value="veo3-fast">Veo 3 Fast</option>'; }
+  const syncEngine = () => { $("#bvt2v").style.display = $("#bvmotion").value === "fal-t2v" ? "" : "none"; };
+  $("#bvmotion").addEventListener("change", syncEngine); syncEngine();
+
   try {
     const h = await VS.api("/api/broll/health");
-    if (!h.checkpoints || !h.checkpoints.length)
-      $("#bvhealth").innerHTML = "⚠ ComfyUI isn't running — it paints each shot. Start it (run_nvidia_lowvram.bat), then reload.";
-  } catch (e) { $("#bvhealth").textContent = "⚠ couldn't reach the image engine — is ComfyUI running?"; }
+    if (!h.comfyui)
+      $("#bvhealth").innerHTML = "ⓘ ComfyUI isn't running, so the <b>free local</b> engines are unavailable. "
+        + "The fal.ai text→video models above work without it.";
+  } catch (e) { /* health is advisory only */ }
 
   $("#bvgo").onclick = async () => {
     if (bvBusy) return;
@@ -348,7 +364,8 @@
     if (script.split(/\s+/).filter(Boolean).length < 5) { VS.toast("Write or transcribe a script first"); return; }
     const sty = $("#bvstyle").value;
     const body = {script, file: bvFile || "", shots: +$("#bvshots").value || 6,
-      motion: $("#bvmotion").value, aspect, brand: $("#bvbrand").checked,
+      motion: $("#bvmotion").value, t2v_model: $("#bvt2v").value || "veo3-fast",
+      aspect, brand: $("#bvbrand").checked,
       ugc: sty !== "cine", preset: sty === "ugc10" ? "ugc10" : ""};
     const hdr = {"Content-Type": "application/json"};
     bvBusy = true; $("#bvgo").disabled = true; $("#bvmsg").textContent = "";
