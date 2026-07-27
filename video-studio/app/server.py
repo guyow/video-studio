@@ -3847,14 +3847,20 @@ def api_brollvid_run():
     if motion == "fal-t2v" and t2v_model not in T2V_FAL_MODELS:
         abort(400, "unknown text-to-video model")
     shots = max(2, min(12, int(b.get("shots") or 6)))
-    # optional reference video (from the library) — clones its voice for narration
+    # optional reference video: its STRUCTURE is modelled (keyframes -> Claude vision)
+    # and its voice is cloned for the narration.
     ref = None
+    ref_words = ""
     name = (b.get("file") or "").strip()
     if name:
         cand = (UPLOADS / name).resolve()
         if not str(cand).startswith(str(UPLOADS.resolve())) or not cand.is_file():
             abort(400, "reference video not found")
         ref = cand
+        try:                        # its transcript teaches the hook + pacing
+            ref_words = transcript_plain_text(cand.stem) or ""
+        except Exception:           # noqa: BLE001
+            ref_words = ""
 
     # preflight: the ComfyUI-based engines paint their still locally, so check it
     # is reachable BEFORE the job spends a minute writing a shot list. fal
@@ -3898,13 +3904,18 @@ def api_brollvid_run():
     cv_py = _cv_py()
 
     steps: list[tuple[str, list[str]]] = [
-        ("storyboard — Claude turns the script into a shot list",
+        # with a reference video this becomes a CLONE: Claude reads its keyframes,
+        # learns the structure/pacing that made it work, and rebuilds it for this script.
+        ("storyboard — " + ("model the reference video for your script" if ref
+                            else "Claude turns the script into a shot list"),
          [cv_py, str(BROLLVID_ENGINE), "storyboard", "--script", str(work / "script.txt"),
           "--work", str(work), "--aspect", aspect, "--shots", str(shots),
           "--claude", str(CLAUDE_EXE), "--model", "sonnet"]
          + (["--brand"] if b.get("brand", True) else [])
          + (["--ugc"] if b.get("ugc", True) else [])
-         + (["--preset", "ugc10"] if b.get("preset") == "ugc10" else [])),
+         + (["--preset", "ugc10"] if b.get("preset") == "ugc10" else [])
+         + (["--ref", str(ref)] if ref else [])
+         + (["--ref-script", ref_words[:4000]] if ref and ref_words else [])),
         # fal text-to-video goes prompt -> clip with no ComfyUI in the loop;
         # the local engines still paint their still in ComfyUI first.
         ("generate — render a clip for every shot",

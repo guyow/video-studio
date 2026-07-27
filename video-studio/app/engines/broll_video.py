@@ -93,10 +93,12 @@ def die(m: str) -> None:
     sys.exit(1)
 
 
-def run(cmd: list[str], label: str, timeout: int | None = None, stdin: str | None = None) -> str:
+def run(cmd: list[str], label: str, timeout: int | None = None, stdin: str | None = None,
+        cwd: Path | None = None) -> str:
     log(f"  {label}...")
     r = subprocess.run([str(c) for c in cmd], capture_output=True, text=True,
-                       encoding="utf-8", errors="replace", timeout=timeout, input=stdin)
+                       encoding="utf-8", errors="replace", timeout=timeout, input=stdin,
+                       cwd=str(cwd) if cwd else None)
     if r.returncode != 0:
         die(f"{label} failed:\n{(r.stderr or r.stdout or '')[-1400:]}")
     return r.stdout or ""
@@ -188,6 +190,52 @@ SCRIPT:
 """
 
 
+CLONE_PROMPT = """You are reverse-engineering a UGC ad that ALREADY WORKS, then rebuilding it for a different product.
+
+The keyframes of the reference video are on disk - READ THEM with the Read tool before answering:
+{frames}
+{ref_words}
+Step 1 - study the reference: how it opens, how many shots, how fast it cuts, the settings and wardrobe, what the person is physically doing in each beat, where the product appears, how it closes.
+
+Step 2 - rebuild that SAME structure for the NEW SCRIPT below. Same shot count and rhythm, same kind of settings and energy, same beat order - but the content follows the new script. This is modelling a winner, NOT copying it: never reproduce the reference's on-screen text, logos, or exact wording.
+
+For each shot write ONLY the `prompt` as a SCENE ACTION LINE: what she is physically doing, where, and the mess around her. 8-20 words.
+- Do NOT describe her appearance, the camera, the lens, the lighting, or the film look - those are added automatically. Writing them ruins the shot.
+- Banned words: cinematic, beautiful, stunning, perfect, elegant, golden hour, bokeh, studio, professional, model.
+- Real life only: dishes in the sink, unmade bed, laundry on the floor, charger cables, a half-drunk mug. She is never posing for the camera.
+- Product beats stay CASUAL - she uses it while doing something else, never presents it to camera.
+- `duration_s` 2.0-3.0 (fast cuts), matched to how long that beat's words take to say.
+- `motion.type` from: push_in, pull_out, pan_left, pan_right, tilt_up, tilt_down, drift, static. Prefer static and drift. `motion.intensity` 0.03-0.12.
+- Tag `emotional_beat` (pain_mirror|agitation|hope|proof|calm|desire|resolution) and `product_moment` (before_state|during|after_state|product_hero|lifestyle).
+- No text or words in the image - captions are added later in the editor.
+
+Respond with ONLY a JSON object: {{"style": {{"summary": "what makes the reference work", "pacing": "...", "structure": "the beat order you copied"}}, "shots": [{{"title": "...", "prompt": "...", "motion": {{"type": "static", "intensity": 0.06}}, "duration_s": 2.5, "emotional_beat": "", "product_moment": "", "beat_tags": [], "avatar_fit": []}}]}}
+No markdown, no code fences, no commentary.
+
+NEW SCRIPT (this is what the new video must say and show):
+{script}
+"""
+
+
+def extract_keyframes(video: Path, out_dir: Path, n: int = 6) -> list[Path]:
+    """Evenly sample n frames across the reference so Claude can see its whole arc."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    dur = probe_sec(video)
+    if dur <= 0:
+        die(f"could not read the reference video: {video}")
+    frames = []
+    for i in range(n):
+        t = dur * (i + 0.5) / n
+        dest = out_dir / f"ref-{i + 1:02d}.jpg"
+        ff(["-ss", f"{t:.2f}", "-i", str(video), "-frames:v", "1",
+            "-vf", "scale='min(768,iw)':-2", "-q:v", "3", str(dest)], f"keyframe {i + 1}/{n}")
+        if dest.is_file():
+            frames.append(dest)
+    if not frames:
+        die("could not extract any keyframes from the reference video")
+    return frames
+
+
 def cmd_storyboard(a: argparse.Namespace) -> int:
     script = Path(a.script).read_text(encoding="utf-8", errors="replace").strip() if Path(a.script).is_file() else a.script
     if not script or len(script.split()) < 5:
@@ -225,17 +273,33 @@ def cmd_storyboard(a: argparse.Namespace) -> int:
                 "beat_tags": ["ugc", "handheld"], "avatar_fit": [],
             })
     else:
-        shots_rule = (f"Aim for about {want} shots total (merge or split beats to land near that)."
-                      if want else "Use as many shots as the beats need (typically 4-10).")
-        tmpl = UGC_STORYBOARD_PROMPT if ugc else STORYBOARD_PROMPT
-        prompt = (tmpl.format(shots_rule=shots_rule, script=script) if ugc else
-                  tmpl.format(shots_rule=shots_rule, brand_block=(BRAND_BLOCK if a.brand else ""), script=script))
-
+        ref = Path(a.ref).resolve() if getattr(a, "ref", None) else None
         claude = a.claude or "claude"
-        log(f"storyboarding the script with Claude{' (UGC realism)' if ugc else ''}...")
-        out = run([claude, "-p", "--model", a.model or "sonnet",
-                   "--disallowedTools", "Write,Edit,Bash,NotebookEdit,WebFetch,WebSearch"],
-                  "Claude storyboard", timeout=900, stdin=prompt)
+        tools = ["--disallowedTools", "Write,Edit,Bash,NotebookEdit,WebFetch,WebSearch"]
+
+        if ref and ref.is_file():
+            # CLONE a proven UGC ad: read its visual DNA + structure, rebuild for this script
+            log(f"studying the reference video: {ref.name}")
+            frames = extract_keyframes(ref, work / "refs", n=max(4, min(10, a.frames or 6)))
+            ref_words = ""
+            rt = (a.ref_script or "").strip()
+            if rt:
+                ref_words = ("\nThe reference says (its transcript - study its hook and pacing, "
+                             f"do NOT reuse its words):\n{rt[:1500]}\n")
+            prompt = CLONE_PROMPT.format(
+                frames="\n".join(f"  {f}" for f in frames), ref_words=ref_words, script=script)
+            tools = ["--allowedTools", "Read"] + tools
+            log("rebuilding its structure for your script (Claude vision)...")
+        else:
+            shots_rule = (f"Aim for about {want} shots total (merge or split beats to land near that)."
+                          if want else "Use as many shots as the beats need (typically 4-10).")
+            tmpl = UGC_STORYBOARD_PROMPT if ugc else STORYBOARD_PROMPT
+            prompt = (tmpl.format(shots_rule=shots_rule, script=script) if ugc else
+                      tmpl.format(shots_rule=shots_rule, brand_block=(BRAND_BLOCK if a.brand else ""), script=script))
+            log(f"storyboarding the script with Claude{' (UGC realism)' if ugc else ''}...")
+
+        out = run([claude, "-p", "--model", a.model or "sonnet", *tools],
+                  "Claude storyboard", timeout=900, stdin=prompt, cwd=work)
         m = re.search(r"\{.*\}", out, re.S)
         if not m:
             die(f"Claude did not return JSON:\n{out[:400]}")
@@ -416,6 +480,10 @@ def main() -> int:
                     help="UGC realism: handheld phone look, consistent character, 2-3s fast cuts")
     sb.add_argument("--preset", default="", choices=("", "ugc10"),
                     help="ugc10 = the 10-scene reference ladder, verbatim (skips Claude)")
+    sb.add_argument("--ref", help="a proven UGC video to model: its structure/pacing is rebuilt for this script")
+    sb.add_argument("--ref-script", dest="ref_script", default="",
+                    help="the reference's transcript (its hook/pacing informs the rebuild)")
+    sb.add_argument("--frames", type=int, default=6, help="keyframes to sample from the reference")
     sb.add_argument("--claude", help="path to the claude CLI")
     sb.add_argument("--model", default="sonnet", choices=("sonnet", "opus", "haiku"))
 
