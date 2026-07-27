@@ -39,6 +39,50 @@ for _s in (sys.stdout, sys.stderr):
 MOTION_TYPES = ("push_in", "pull_out", "pan_left", "pan_right", "tilt_up", "tilt_down", "drift", "static")
 WPS = 2.5  # spoken words per second, for timing shots to the narration
 
+# ── UGC realism ─────────────────────────────────────────────────────────────
+# The AI look comes from three things: too-perfect lighting, static tripod
+# framing, and waxy skin. Real UGC is handheld, messy, phone-shot. Every shot
+# prompt is composed as:  CHARACTER + scene action + REALISM  — so the face
+# stays consistent and the phone-camera look is never left to chance. The
+# anti-gloss terms also go in the NEGATIVE, where the sampler actually obeys.
+UGC_CHARACTER = ("A woman in her late 30s, shoulder-length wavy light-brown hair with subtle "
+                 "blonde ends, pearl stud earrings, cream ribbed oversized knit sweater, visible "
+                 "skin texture and pores, faint under-eye shadows, no makeup look.")
+UGC_REALISM = ("Shot on iPhone 15 front camera, vertical 9:16, handheld with subtle natural camera "
+               "shake, amateur framing slightly off-center, natural window light with soft shadows, "
+               "slight motion blur on movement, realistic skin texture, muted colors, mild sensor "
+               "grain, cluttered lived-in home in background, candid documentary UGC style, not "
+               "cinematic, no bokeh, no studio lighting.")
+UGC_NEGATIVE = ("cinematic, film still, studio lighting, softbox, rim light, bokeh, shallow depth of "
+                "field, waxy skin, airbrushed, plastic skin, beauty filter, flawless complexion, "
+                "perfect symmetry, model pose, posing for camera, locked-off tripod shot, color "
+                "graded, teal and orange, HDR, oversaturated, glossy, stock photo, 3d render, cgi, "
+                "text, watermark, logo")
+# The reference ladder — a full pain -> shift -> relief arc, already messy and candid.
+# Scene 6 is deliberately un-staged: AI models love turning product moments into
+# commercials, so she eats it while doing something else.
+UGC_SCENES = [
+    "Lying in bed under a duvet scrolling her phone, dull expression, morning light through curtains, blinks slowly",
+    "Leaning close to a messy bathroom mirror, toothbrush in hand, sighs, water spots on mirror",
+    "Sitting on the floor surrounded by a real messy laundry pile, hand on forehead, clothes actually wrinkled and tangled",
+    "In kitchen mid-task, closes eyes and pinches bridge of nose, dishes stacked in sink behind her",
+    "At laptop gripping a coffee mug, jaw tight, rubbing one eye, papers and charger cable on table",
+    "Picks up a small red gummy from a jar on the counter, casual, eats it while doing something else - not presenting it to camera",
+    "Journaling at a table, small natural smile, hair slightly messy, plant leaves clipping frame edge",
+    "Making the bed with quick efficient movements, slight smile, one pillow still on the floor",
+    "Folding laundry from the same pile, relaxed, folds are imperfect",
+    "Laughing mid-conversation across a kitchen counter, caught mid-gesture, other person blurry in foreground",
+]
+UGC_BEATS = ["pain_mirror", "pain_mirror", "agitation", "agitation", "agitation",
+             "hope", "proof", "proof", "calm", "resolution"]
+UGC_MOTION = ["static", "drift", "static", "drift", "push_in",
+              "push_in", "drift", "static", "drift", "static"]
+
+
+def ugc_prompt(scene: str) -> str:
+    """CHARACTER + scene action + REALISM — the composition that kills the AI look."""
+    return f"{UGC_CHARACTER} {scene.strip().rstrip('.')}. {UGC_REALISM}"
+
 
 def log(m: str) -> None:
     print(m, flush=True)
@@ -114,6 +158,35 @@ SCRIPT:
 BRAND_BLOCK = """- Brand = liitt / Fairy Flame (premium mushroom-gummy wellness, A24-cinematic, warm, NOT stoner culture). Deep indigo "before" world; gold glow = the after-state; deep-magenta flame-shaped gummy is the hero. Avoid candy-bright and trippy cliches.
 """
 
+# UGC mode: Claude writes ONLY the scene action; the engine wraps it in the
+# character + realism blocks. Asking a model for "cinematic" anything is what
+# produces the AI look, so the vocabulary is banned from its half of the prompt.
+UGC_STORYBOARD_PROMPT = """You are directing REAL-LOOKING UGC b-roll for a short vertical ad. The footage must look like a normal woman filmed it on her phone at home - NOT an ad, NOT cinematic.
+
+Turn the SCRIPT below into a shot list, one shot per beat, in order. {shots_rule}
+
+For each shot write ONLY the `prompt` as a SCENE ACTION LINE: what she is physically doing, where, and the mess around her. 8-20 words.
+- Do NOT describe her appearance, the camera, the lens, the lighting, the film look, or the colour grade. Those are added automatically - if you write them the shot is ruined.
+- Banned words in your scene lines: cinematic, beautiful, stunning, perfect, elegant, golden hour, bokeh, studio, professional, model.
+- Real life only: dishes in the sink, unmade bed, laundry on the floor, charger cables, plant leaves clipping the frame, a half-drunk mug. Candid - she is never posing for the camera.
+- If a beat is about the product, she uses it CASUALLY while doing something else (picks a small red gummy from a jar and eats it mid-task) - never presents it to camera, never a commercial product shot.
+- `duration_s` MUST be between 2.0 and 3.0 - fast cuts. Long AI shots drift into uncanny.
+- Choose `motion.type` from: push_in, pull_out, pan_left, pan_right, tilt_up, tilt_down, drift, static. Prefer static and drift (a phone is handheld, not on a slider). `motion.intensity` 0.03-0.12.
+- Tag `emotional_beat` (pain_mirror|agitation|hope|proof|calm|desire|resolution) and `product_moment` (before_state|during|after_state|product_hero|lifestyle).
+- No text or words anywhere in the image - captions get added later in the editor.
+
+Good scene lines, for calibration:
+  "Lying in bed under a duvet scrolling her phone, dull expression, blinks slowly"
+  "In kitchen mid-task, closes eyes and pinches bridge of nose, dishes stacked in sink behind her"
+  "Folding laundry from the same pile, relaxed, folds are imperfect"
+
+Respond with ONLY a JSON object: {{"style": {{"summary": "...", "pacing": "..."}}, "shots": [{{"title": "...", "prompt": "...", "motion": {{"type": "static", "intensity": 0.06}}, "duration_s": 2.5, "emotional_beat": "", "product_moment": "", "beat_tags": [], "avatar_fit": []}}]}}
+No markdown, no code fences, no commentary.
+
+SCRIPT:
+{script}
+"""
+
 
 def cmd_storyboard(a: argparse.Namespace) -> int:
     script = Path(a.script).read_text(encoding="utf-8", errors="replace").strip() if Path(a.script).is_file() else a.script
@@ -122,54 +195,92 @@ def cmd_storyboard(a: argparse.Namespace) -> int:
     work = Path(a.work).resolve()
     work.mkdir(parents=True, exist_ok=True)
 
-    shots_rule = f"Aim for about {a.shots} shots total (merge or split beats to land near that)." if a.shots else "Use as many shots as the beats need (typically 4–10)."
-    prompt = STORYBOARD_PROMPT.format(
-        shots_rule=shots_rule, brand_block=(BRAND_BLOCK if a.brand else ""), script=script)
+    ugc = bool(getattr(a, "ugc", False)) or a.preset == "ugc10"
+    dur_lo, dur_hi = (2.0, 3.0) if ugc else (2.0, 12.0)
+    # with 2-3s cuts, cover the narration: words/2.5 wps / ~2.5s per shot
+    words = len(script.split())
+    want = a.shots or (max(4, min(14, round(words / WPS / 2.5))) if ugc else 0)
 
-    claude = a.claude or "claude"
-    log("storyboarding the script with Claude...")
-    out = run([claude, "-p", "--model", a.model or "sonnet",
-               "--disallowedTools", "Write,Edit,Bash,NotebookEdit,WebFetch,WebSearch"],
-              "Claude storyboard", timeout=900, stdin=prompt)
-    m = re.search(r"\{.*\}", out, re.S)
-    if not m:
-        die(f"Claude did not return JSON:\n{out[:400]}")
-    try:
-        data = json.loads(m.group(0))
-    except json.JSONDecodeError as e:
-        die(f"could not parse Claude JSON: {e}")
+    if a.preset == "ugc10":
+        # the reference ladder, verbatim — no Claude, fully deterministic
+        n = min(want or len(UGC_SCENES), len(UGC_SCENES))
+        # sample ACROSS the ladder (not the first n) so the pain -> shift -> relief
+        # arc survives a short script; scene 6 (the casual product beat) is forced in.
+        if n >= len(UGC_SCENES):
+            picks = list(range(len(UGC_SCENES)))
+        else:
+            picks = sorted({round(i * (len(UGC_SCENES) - 1) / (n - 1)) for i in range(n)} | {5})
+            while len(picks) > n:                      # trimming keeps 0, 5 and the last
+                picks.remove(next(p for p in picks if p not in (0, 5, picks[-1])))
+        log(f"UGC preset: {len(picks)} scenes from the reference ladder (no Claude needed)")
+        shots, style = [], {"summary": "handheld iPhone UGC, messy lived-in home, candid documentary",
+                            "pacing": "fast 2-3s cuts"}
+        for i, idx in enumerate(picks, 1):
+            shots.append({
+                "id": f"s{i}", "title": UGC_SCENES[idx][:60], "prompt": ugc_prompt(UGC_SCENES[idx]),
+                "negative": UGC_NEGATIVE, "style_ref": "",
+                "motion": {"type": UGC_MOTION[idx], "intensity": 0.06},
+                "duration_s": 2.5, "emotional_beat": UGC_BEATS[idx],
+                "product_moment": "product_hero" if idx == 5 else ("before_state" if idx < 5 else "after_state"),
+                "beat_tags": ["ugc", "handheld"], "avatar_fit": [],
+            })
+    else:
+        shots_rule = (f"Aim for about {want} shots total (merge or split beats to land near that)."
+                      if want else "Use as many shots as the beats need (typically 4-10).")
+        tmpl = UGC_STORYBOARD_PROMPT if ugc else STORYBOARD_PROMPT
+        prompt = (tmpl.format(shots_rule=shots_rule, script=script) if ugc else
+                  tmpl.format(shots_rule=shots_rule, brand_block=(BRAND_BLOCK if a.brand else ""), script=script))
 
-    raw = data.get("shots") or []
-    shots = []
-    for i, s in enumerate(raw, 1):
-        p = (s.get("prompt") or "").strip()
-        if not p:
-            continue
-        mo = s.get("motion") or {}
-        mtype = mo.get("type") if mo.get("type") in MOTION_TYPES else "push_in"
+        claude = a.claude or "claude"
+        log(f"storyboarding the script with Claude{' (UGC realism)' if ugc else ''}...")
+        out = run([claude, "-p", "--model", a.model or "sonnet",
+                   "--disallowedTools", "Write,Edit,Bash,NotebookEdit,WebFetch,WebSearch"],
+                  "Claude storyboard", timeout=900, stdin=prompt)
+        m = re.search(r"\{.*\}", out, re.S)
+        if not m:
+            die(f"Claude did not return JSON:\n{out[:400]}")
         try:
-            inten = max(0.03, min(0.35, float(mo.get("intensity", 0.12))))
-        except (TypeError, ValueError):
-            inten = 0.12
-        try:
-            dur = max(2.0, min(12.0, float(s.get("duration_s", 4.0))))
-        except (TypeError, ValueError):
-            dur = 4.0
-        shots.append({
-            "id": f"s{i}", "title": (s.get("title") or f"Shot {i}")[:80], "prompt": p,
-            "negative": (s.get("negative") or "").strip(), "style_ref": "",
-            "motion": {"type": mtype, "intensity": inten}, "duration_s": round(dur, 1),
-            "emotional_beat": s.get("emotional_beat") or "", "product_moment": s.get("product_moment") or "",
-            "beat_tags": s.get("beat_tags") or [], "avatar_fit": s.get("avatar_fit") or [],
-        })
-    if not shots:
-        die("Claude returned no usable shots")
+            data = json.loads(m.group(0))
+        except json.JSONDecodeError as e:
+            die(f"could not parse Claude JSON: {e}")
+
+        raw = data.get("shots") or []
+        style = data.get("style") or {}
+        shots = []
+        for i, s in enumerate(raw, 1):
+            p = (s.get("prompt") or "").strip()
+            if not p:
+                continue
+            mo = s.get("motion") or {}
+            mtype = mo.get("type") if mo.get("type") in MOTION_TYPES else ("static" if ugc else "push_in")
+            try:
+                inten = max(0.03, min(0.12 if ugc else 0.35, float(mo.get("intensity", 0.06 if ugc else 0.12))))
+            except (TypeError, ValueError):
+                inten = 0.06 if ugc else 0.12
+            try:
+                dur = max(dur_lo, min(dur_hi, float(s.get("duration_s", 2.5 if ugc else 4.0))))
+            except (TypeError, ValueError):
+                dur = 2.5 if ugc else 4.0
+            neg = (s.get("negative") or "").strip()
+            shots.append({
+                "id": f"s{i}", "title": (s.get("title") or f"Shot {i}")[:80],
+                # UGC: wrap the scene action in the character + realism blocks
+                "prompt": ugc_prompt(p) if ugc else p,
+                "negative": (UGC_NEGATIVE + (", " + neg if neg else "")) if ugc else neg,
+                "style_ref": "", "motion": {"type": mtype, "intensity": inten},
+                "duration_s": round(dur, 1),
+                "emotional_beat": s.get("emotional_beat") or "", "product_moment": s.get("product_moment") or "",
+                "beat_tags": (s.get("beat_tags") or []) + (["ugc"] if ugc else []),
+                "avatar_fit": s.get("avatar_fit") or [],
+            })
+        if not shots:
+            die("Claude returned no usable shots")
 
     recipe = {
         "batch": work.name, "created": time.time(), "brief": f"[from script] {script[:120]}",
-        "brand": bool(a.brand), "aspect": a.aspect, "from_script": True,
+        "brand": bool(a.brand), "aspect": a.aspect, "from_script": True, "ugc": ugc,
         "script": script, "references": [], "frames": [],
-        "style": data.get("style") or {}, "shots": shots,
+        "style": style, "shots": shots,
     }
     (work / "recipe.json").write_text(json.dumps(recipe, indent=1), encoding="utf-8")
     (work / "script.txt").write_text(script + "\n", encoding="utf-8")
@@ -299,8 +410,12 @@ def main() -> int:
     sb.add_argument("--script", required=True, help="script text or a path to a .txt")
     sb.add_argument("--work", required=True, help="batch dir: output/broll/<batch>")
     sb.add_argument("--aspect", default="9:16", choices=("9:16", "1:1", "16:9"))
-    sb.add_argument("--shots", type=int, default=0, help="target shot count (0 = let Claude decide)")
+    sb.add_argument("--shots", type=int, default=0, help="target shot count (0 = auto)")
     sb.add_argument("--brand", action="store_true")
+    sb.add_argument("--ugc", action="store_true",
+                    help="UGC realism: handheld phone look, consistent character, 2-3s fast cuts")
+    sb.add_argument("--preset", default="", choices=("", "ugc10"),
+                    help="ugc10 = the 10-scene reference ladder, verbatim (skips Claude)")
     sb.add_argument("--claude", help="path to the claude CLI")
     sb.add_argument("--model", default="sonnet", choices=("sonnet", "opus", "haiku"))
 

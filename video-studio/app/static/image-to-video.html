@@ -116,6 +116,16 @@
         </select>
         <label class="vs-hint"><input type="checkbox" id="bvbrand" checked> liitt brand look</label>
       </div>
+      <div class="vs-row" style="gap:10px;flex-wrap:wrap;margin-top:8px">
+        <select class="vs-sel" id="bvstyle" style="width:auto">
+          <option value="ugc">📱 UGC realism — handheld phone, messy home, 2–3s cuts</option>
+          <option value="ugc10">📱 UGC — the 10-scene ladder (fixed, no AI writing)</option>
+          <option value="cine">🎬 Cinematic — polished b-roll</option>
+        </select>
+      </div>
+      <div class="vs-hint" style="margin-top:6px;opacity:.8">UGC mode locks a consistent character + iPhone look
+        into every shot and keeps cuts short (long AI shots go uncanny). Add captions afterwards in the editor —
+        text is deliberately never baked into the footage.</div>
       <div class="vs-row" style="margin-top:12px">
         <button class="vs-btn primary" id="bvgo">✨ Create the video</button>
         <span class="vs-hint" id="bvmsg"></span>
@@ -336,8 +346,10 @@
     if (bvBusy) return;
     const script = $("#bvscript").value.trim();
     if (script.split(/\s+/).filter(Boolean).length < 5) { VS.toast("Write or transcribe a script first"); return; }
+    const sty = $("#bvstyle").value;
     const body = {script, file: bvFile || "", shots: +$("#bvshots").value || 6,
-      motion: $("#bvmotion").value, aspect, brand: $("#bvbrand").checked};
+      motion: $("#bvmotion").value, aspect, brand: $("#bvbrand").checked,
+      ugc: sty !== "cine", preset: sty === "ugc10" ? "ugc10" : ""};
     const hdr = {"Content-Type": "application/json"};
     bvBusy = true; $("#bvgo").disabled = true; $("#bvmsg").textContent = "";
     try {

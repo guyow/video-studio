@@ -3860,7 +3860,9 @@ def api_brollvid_run():
          [cv_py, str(BROLLVID_ENGINE), "storyboard", "--script", str(work / "script.txt"),
           "--work", str(work), "--aspect", aspect, "--shots", str(shots),
           "--claude", str(CLAUDE_EXE), "--model", "sonnet"]
-         + (["--brand"] if b.get("brand", True) else [])),
+         + (["--brand"] if b.get("brand", True) else [])
+         + (["--ugc"] if b.get("ugc", True) else [])
+         + (["--preset", "ugc10"] if b.get("preset") == "ugc10" else [])),
         ("generate — render a clip for every shot",
          [cv_py, str(BROLL_ENGINE), "generate", "--recipe", str(work / "recipe.json"),
           "--motion", motion, "--style", "auto", "--aspect", aspect, "--no-bank"]
