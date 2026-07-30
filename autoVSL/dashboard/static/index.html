@@ -1,0 +1,602 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mission Control — VSL Auto</title>
+<style>
+  :root {
+    --bg:#07080c; --panel:rgba(20,24,36,.72); --panel2:#141926; --line:#2a3350;
+    --text:#f2f4fb; --dim:#8d97ad; --gold:#d9b36a; --accent:#8b6cff; --accent2:#5fd4f5;
+    --ok:#3ddc84; --bad:#ff5c72; --warn:#ffb454; --radius:16px;
+    --mono:ui-monospace,'Cascadia Code',Consolas,monospace;
+  }
+  * { box-sizing:border-box; margin:0; }
+  body { background:
+      radial-gradient(1000px 420px at 78% -10%, rgba(139,108,255,.13) 0%, transparent 60%),
+      radial-gradient(800px 420px at 8% 112%, rgba(217,179,106,.07) 0%, transparent 60%), var(--bg);
+    color:var(--text); font:14px/1.55 'Segoe UI',system-ui,sans-serif; min-height:100vh; }
+  a { color:var(--accent2); text-decoration:none; }
+  header { display:flex; align-items:center; gap:12px; padding:14px 26px; border-bottom:1px solid var(--line);
+    position:sticky; top:0; background:rgba(7,8,12,.85); backdrop-filter:blur(14px); z-index:30; }
+  .wordmark { font-weight:800; letter-spacing:2.5px; font-size:15px;
+    background:linear-gradient(90deg,var(--gold),var(--accent),var(--accent2));
+    -webkit-background-clip:text; background-clip:text; color:transparent; }
+  header .sub { color:var(--dim); font-size:11.5px; }
+  .nav { margin-left:auto; display:flex; gap:7px; align-items:center; }
+  .nav a, .badge { border:1px solid var(--line); padding:5px 13px; border-radius:18px; font-size:12px;
+    font-weight:600; background:rgba(20,25,38,.6); cursor:pointer; color:var(--text); }
+  .nav a:hover, .badge:hover { border-color:var(--gold); color:var(--gold); }
+  .badge.money { border-color:rgba(217,179,106,.5); color:var(--gold); }
+
+  #jobstrip { display:none; align-items:center; gap:12px; padding:8px 26px; font-size:12.5px;
+    background:rgba(139,108,255,.09); border-bottom:1px solid var(--accent); position:sticky; top:55px; z-index:29; }
+  #jobstrip.on { display:flex; }
+  #jobstrip .bar { flex:1; max-width:440px; height:8px; background:var(--panel2); border:1px solid var(--line); border-radius:6px; overflow:hidden; }
+  #jobstrip .bar i { display:block; height:100%; width:0%; background:linear-gradient(90deg,var(--gold),var(--accent)); transition:width .5s; }
+  .spin { width:11px; height:11px; border:2px solid var(--gold); border-top-color:transparent; border-radius:50%; animation:sp .8s linear infinite; flex:none; }
+  @keyframes sp { to{transform:rotate(360deg);} }
+
+  main { display:grid; grid-template-columns:290px 1fr 310px; gap:18px; padding:18px 26px; align-items:start; }
+  @media (max-width:1250px){ main{grid-template-columns:1fr;} }
+  .card { background:var(--panel); backdrop-filter:blur(10px); border:1px solid var(--line);
+    border-radius:var(--radius); padding:16px; margin-bottom:16px; }
+  .card h2 { font-size:11px; text-transform:uppercase; letter-spacing:1.6px; color:var(--gold); margin-bottom:11px;
+    display:flex; align-items:center; gap:8px; }
+  .card h2 .r { margin-left:auto; font-weight:400; text-transform:none; letter-spacing:0; font-size:11px; color:var(--dim); }
+  button { background:var(--panel2); color:var(--text); border:1px solid var(--line); border-radius:10px;
+    padding:8px 14px; font:inherit; font-size:12.5px; cursor:pointer; transition:.14s; }
+  button:hover { border-color:var(--accent); color:var(--accent2); }
+  button.gold { background:linear-gradient(120deg,#caa25a,#8b6cff); border:none; color:#0b0d13; font-weight:800; }
+  button.gold:hover { filter:brightness(1.12); color:#0b0d13; }
+  button.mini { padding:3px 9px; font-size:11px; border-radius:7px; }
+  button.danger:hover { border-color:var(--bad); color:var(--bad); }
+  button:disabled { opacity:.4; cursor:not-allowed; }
+  input, select, textarea { background:var(--panel2); border:1px solid var(--line); color:var(--text);
+    border-radius:9px; padding:7px 10px; font:inherit; font-size:12.5px; }
+  input:focus, select:focus, textarea:focus { border-color:var(--gold); outline:none; }
+  .hint { font-size:11.5px; color:var(--dim); }
+  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+
+  /* left rail */
+  .product { border:1px solid var(--line); border-radius:12px; padding:11px; background:rgba(20,25,38,.5); margin-bottom:9px; }
+  .product .nm { font-weight:700; font-size:13px; margin-bottom:6px; display:flex; gap:6px; align-items:center; }
+  .stagebar { display:flex; gap:3px; margin-bottom:7px; }
+  .stagebar i { flex:1; height:5px; border-radius:3px; background:var(--line); }
+  .stagebar i.done { background:linear-gradient(90deg,var(--gold),var(--accent)); }
+  .slist { display:flex; flex-direction:column; gap:2px; max-height:170px; overflow-y:auto; }
+  .slist a { color:var(--text); font-size:12px; padding:3px 7px; border-radius:7px; cursor:pointer;
+    overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .slist a:hover { background:rgba(139,108,255,.13); }
+  .vslrow { display:flex; gap:8px; align-items:center; padding:8px 10px; border:1px solid var(--line);
+    border-radius:11px; background:rgba(20,25,38,.5); margin-bottom:7px; font-size:12.5px; cursor:pointer; }
+  .vslrow:hover { border-color:var(--gold); }
+  .bankgrid { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+  .bank { background:rgba(20,25,38,.5); border:1px solid var(--line); border-radius:11px; padding:9px 11px; cursor:pointer; }
+  .bank:hover { border-color:var(--gold); }
+  .bank .n { font-size:19px; font-weight:800; color:var(--gold); }
+  .bank .t { font-size:10px; color:var(--dim); text-transform:uppercase; letter-spacing:.8px; }
+  details.acc summary { cursor:pointer; list-style:none; }
+  details.acc summary::-webkit-details-marker { display:none; }
+
+  /* library grid */
+  .chips { display:flex; gap:7px; flex-wrap:wrap; margin-bottom:12px; }
+  .chip { border:1px solid var(--line); color:var(--dim); border-radius:15px; padding:3px 12px; font-size:11.5px;
+    cursor:pointer; background:rgba(20,25,38,.5); }
+  .chip.on { border-color:var(--gold); color:var(--gold); }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(168px,1fr)); gap:13px; }
+  .vcard { background:var(--panel2); border:1px solid var(--line); border-radius:14px; overflow:hidden;
+    cursor:pointer; transition:.15s; position:relative; }
+  .vcard:hover { border-color:var(--gold); transform:translateY(-2px); box-shadow:0 10px 26px rgba(0,0,0,.4); }
+  .vcard img { width:100%; aspect-ratio:9/13; object-fit:cover; display:block; background:#000; }
+  .vcard .b { padding:8px 10px; }
+  .vcard .t { font-size:11.5px; font-weight:700; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .vcard .m { font-size:10px; color:var(--dim); }
+  .vcard .k { position:absolute; top:7px; left:7px; background:rgba(7,8,12,.8); border-radius:8px;
+    padding:1px 8px; font-size:10px; font-weight:700; color:var(--gold); }
+
+  /* editor view */
+  #editor { display:none; }
+  #editor video { width:100%; max-height:52vh; background:#000; border-radius:14px; display:block; }
+  .toolrail { display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr)); gap:11px; margin-top:14px; }
+  .tool { border:1px solid var(--line); border-radius:13px; background:rgba(20,25,38,.55); padding:12px 13px; }
+  .tool h4 { font-size:12px; margin-bottom:8px; color:var(--accent2); display:flex; gap:6px; align-items:center; }
+  .tool label { font-size:11px; color:var(--dim); display:flex; align-items:center; gap:6px; margin-bottom:6px; }
+  .tool input[type=number] { width:76px; }
+  .tool input[type=range] { flex:1; accent-color:var(--gold); }
+  #rendersum { border:1px solid rgba(217,179,106,.45); background:rgba(217,179,106,.07); border-radius:12px;
+    padding:11px 14px; margin-top:13px; display:flex; gap:12px; align-items:center; flex-wrap:wrap; font-size:12.5px; }
+
+  /* right rail */
+  table.probe { width:100%; border-collapse:collapse; font-size:12px; }
+  table.probe td { padding:3px 5px; border-bottom:1px solid rgba(42,51,80,.5); }
+  table.probe td:first-child { color:var(--dim); width:44%; }
+  .job { display:flex; align-items:center; gap:7px; font-size:11.5px; padding:6px 8px; border-radius:9px;
+    background:rgba(20,25,38,.5); border:1px solid var(--line); margin-bottom:6px; cursor:pointer; flex-wrap:wrap; }
+  .job .status { margin-left:auto; font-size:10.5px; color:var(--dim); }
+  .job .jbar { flex-basis:100%; height:4px; background:var(--panel2); border-radius:3px; overflow:hidden; }
+  .job .jbar i { display:block; height:100%; background:linear-gradient(90deg,var(--gold),var(--accent)); }
+  .dot { width:7px; height:7px; border-radius:50%; flex:none; }
+  .dot.ok{background:var(--ok);} .dot.bad{background:var(--bad);} .dot.warn{background:var(--warn);}
+  #log { background:#04050a; border:1px solid var(--line); border-radius:11px; padding:10px; font-family:var(--mono);
+    font-size:10.5px; line-height:1.5; height:190px; overflow-y:auto; white-space:pre-wrap; word-break:break-word; color:#aeb9cf; }
+  #log .err { color:var(--bad); }
+
+  /* modal + toast + agent */
+  .modal { position:fixed; inset:0; background:rgba(4,5,9,.75); display:none; align-items:center; justify-content:center; z-index:50; padding:26px; }
+  .modal.open { display:flex; }
+  .modal .box { background:#0d1019; border:1px solid var(--line); border-radius:16px; max-width:860px; width:100%;
+    max-height:86vh; display:flex; flex-direction:column; }
+  .modal .box header { position:static; background:none; border-bottom:1px solid var(--line); padding:12px 18px; }
+  .modal .body { padding:18px; overflow-y:auto; font-size:13px; }
+  .modal .body pre { font-family:var(--mono); font-size:12px; white-space:pre-wrap; }
+  .toast { position:fixed; bottom:20px; left:50%; transform:translateX(-50%); background:var(--panel2);
+    border:1px solid var(--gold); padding:10px 20px; border-radius:12px; z-index:70; display:none; max-width:80vw; }
+  #agent { display:none; position:fixed; top:60px; right:16px; width:420px; max-width:95vw; height:min(580px,76vh); z-index:45;
+    background:#0d1019; border:1px solid var(--accent); border-radius:16px; box-shadow:0 18px 50px rgba(0,0,0,.6);
+    flex-direction:column; overflow:hidden; }
+</style>
+</head>
+<body>
+<header>
+  <div><span class="wordmark">VSL AUTO</span> · <b>Mission Control</b>
+    <div class="sub">build → generate → edit → ship · the full production desk</div></div>
+  <div class="nav">
+    <button class="badge" onclick="toggleAgent()" title="Your research & brand strategist">🧠 Agent</button>
+    <span class="badge money" id="spend" onclick="showSpend()" title="Total estimated fal.ai spend — click for breakdown">💰 $0.00</span>
+    <a href="/">🎬 Creator</a><a href="/subtitles">💬 Subtitles</a><a href="/qc">🔬 QC</a><a href="/dubbing">🎙 Dubbing</a>
+  </div>
+</header>
+<div id="jobstrip"><span class="spin"></span><b id="js-label"></b><div class="bar"><i id="js-fill"></i></div>
+  <span id="js-pct"></span><button class="mini danger" id="js-stop" onclick="stopJob(this.dataset.id)">⏹ Stop</button></div>
+
+<main>
+  <!-- LEFT: project rail -->
+  <section>
+    <div class="card">
+      <h2>Products & scripts <span class="r"><button class="mini" onclick="newProduct()">＋ new</button></span></h2>
+      <div id="products" class="hint">loading…</div>
+    </div>
+    <div class="card">
+      <h2>🏗 Build a VSL <span class="r">Claude writes the package</span></h2>
+      <div style="display:flex;flex-direction:column;gap:8px">
+        <select id="bproduct" onchange="builderProduct()"></select>
+        <select id="bscript"></select>
+        <select id="bmodel"></select>
+        <input id="bname" placeholder="VSL name e.g. wine-angle-v1">
+        <details class="acc"><summary class="hint" style="color:var(--accent2)">▸ research context (<span id="bdocsn">0</span> docs)</summary>
+          <div id="bdocs" style="display:flex;flex-direction:column;gap:3px;max-height:130px;overflow-y:auto;margin-top:6px;font-size:11.5px"></div>
+        </details>
+        <button class="gold" onclick="buildVsl()">🏗 Build package (free)</button>
+      </div>
+      <div id="vsls" style="margin-top:12px"></div>
+    </div>
+    <div class="card">
+      <h2>Research banks</h2>
+      <div class="bankgrid" id="banks"></div>
+    </div>
+  </section>
+
+  <!-- CENTER: library / editor -->
+  <section>
+    <div class="card" id="library">
+      <h2>🎞 Library — every video you've made <span class="r" id="libcount"></span></h2>
+      <div class="chips" id="libchips"></div>
+      <div class="grid" id="libgrid"><span class="hint">loading…</span></div>
+    </div>
+
+    <div class="card" id="editor">
+      <h2><button class="mini" onclick="closeEditor()">← Library</button>
+        <span id="ed-name" style="text-transform:none;letter-spacing:0;color:var(--text);font-size:13px"></span>
+        <span class="r" id="ed-meta"></span></h2>
+      <video id="ed-vid" controls playsinline ontimeupdate="edTick(this)"></video>
+      <div class="hint" style="margin:6px 2px">Playhead: <b id="ed-now" style="color:var(--gold)">0.0s</b>
+        · set your cut with the buttons below, stack tools, then render — the original is never touched.</div>
+
+      <div class="toolrail">
+        <div class="tool"><h4>✂ Trim</h4>
+          <label>Start <input type="number" id="t-start" value="0" min="0" step="0.1">
+            <button class="mini" onclick="$('#t-start').value=(+$('#ed-vid').currentTime).toFixed(1)">⌖ here</button></label>
+          <label>End <input type="number" id="t-end" value="0" min="0" step="0.1">
+            <button class="mini" onclick="$('#t-end').value=(+$('#ed-vid').currentTime).toFixed(1)">⌖ here</button></label>
+        </div>
+        <div class="tool"><h4>🔍 Zoom · ⏩ Speed</h4>
+          <label>Zoom <input type="range" id="t-zoom" min="1" max="3" step="0.05" value="1" oninput="edSum()"><b id="t-zoomv">×1</b></label>
+          <label>Speed <input type="range" id="t-speed" min="0.5" max="2" step="0.05" value="1" oninput="edSum()"><b id="t-speedv">×1</b></label>
+        </div>
+        <div class="tool"><h4>📝 Text overlay</h4>
+          <label><input id="t-text" placeholder="text on the video…" style="flex:1" oninput="edSum()"></label>
+          <label>Position <select id="t-pos" onchange="edSum()"><option value="bottom">bottom</option>
+            <option value="center">center</option><option value="top">top</option></select></label>
+        </div>
+        <div class="tool"><h4>🔊 Audio · ➕ Join</h4>
+          <label>Volume <input type="range" id="t-vol" min="0" max="2" step="0.1" value="1" oninput="edSum()"><b id="t-volv">×1</b></label>
+          <label>Append <select id="t-join" style="flex:1"><option value="">— nothing —</option></select></label>
+        </div>
+      </div>
+
+      <div id="rendersum">
+        <b style="color:var(--gold)" id="sum-text">—</b>
+        <span style="flex:1"></span>
+        <button class="gold" onclick="renderEdit()">🎬 Render edit (free, local)</button>
+      </div>
+
+      <div class="row" style="margin-top:12px">
+        <button onclick="location.href='/subtitles'">💬 Subtitles</button>
+        <button onclick="location.href='/qc?path='+encodeURIComponent(edCur.path)">🔬 QC</button>
+        <button onclick="toDesktop(edCur.path)">💾 Desktop</button>
+        <button onclick="renameOut(edCur.path,edCur.name)">✎ Rename</button>
+        <button class="danger" onclick="trashOut(edCur.path,edCur.name)">🗑 Trash</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- RIGHT: inspector + activity -->
+  <section>
+    <div class="card">
+      <h2>Inspector <span class="r" id="insp-name"></span></h2>
+      <div id="inspector" class="hint">open a video from the library</div>
+    </div>
+    <div class="card">
+      <h2>Activity <span class="r" id="jobhint">idle</span></h2>
+      <div id="joblist"></div>
+      <div id="log">Jobs you run appear here live.</div>
+    </div>
+    <div class="card">
+      <h2>🗑 Trash <span class="r" id="trashn"></span></h2>
+      <div id="trash" class="hint">empty</div>
+    </div>
+  </section>
+</main>
+
+<div class="modal" id="modal"><div class="box">
+  <header style="display:flex"><h3 id="modaltitle" style="font-size:14px"></h3>
+    <button class="mini" style="margin-left:auto" onclick="closeModal()">✕</button></header>
+  <div class="body" id="modalbody"></div>
+</div></div>
+<div class="toast" id="toast"></div>
+
+<div id="agent">
+  <div style="display:flex;gap:8px;align-items:center;padding:11px 14px;border-bottom:1px solid var(--line)">
+    <b>🧠 Research & Brand Agent</b><span class="hint" style="flex:1">knows your banks & brand</span>
+    <button class="mini" onclick="agentSession=null;$('#alog').innerHTML=''">new</button>
+    <button class="mini" onclick="toggleAgent()">✕</button></div>
+  <div id="alog" style="flex:1;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:8px;background:#04050a"></div>
+  <div style="display:flex;gap:7px;padding:10px;border-top:1px solid var(--line)">
+    <textarea id="ain" rows="2" placeholder="new hooks, angles, niches… or teach me a product fact" style="flex:1;resize:none"></textarea>
+    <button class="gold" id="asend" onclick="agentSend()">➤</button></div>
+</div>
+
+<script>
+const $=s=>document.querySelector(s);
+const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const fmtB=b=>b>1e6?(b/1e6).toFixed(1)+' MB':Math.round(b/1e3)+' KB';
+const fmtT=t=>new Date(t*1000).toLocaleString();
+function toast(m){const t=$('#toast');t.textContent=m;t.style.display='block';clearTimeout(t._t);t._t=setTimeout(()=>t.style.display='none',4200);}
+async function api(p,o){const r=await fetch(p,o);if(!r.ok)throw new Error((await r.text()).replace(/<[^>]+>/g,' ').trim().slice(0,170));return r.json();}
+const post=(p,b)=>api(p,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});
+
+let state=null, jobs=[], activeJob=null, logOffset=0, libFilter='all', edCur=null;
+const VIDEO_MODELS={'seedance-480p':0.05,'seedance-720p':0.11,'seedance-1080p':0.24,'wan-5b-720p':0.15,
+  'wan-480p':0.20,'hailuo-768p':0.27,'wan-580p':0.30,'kling-turbo':0.35,'wan-720p':0.40};
+
+// ================= data =================
+async function refresh(){
+  try{ state=await api('/api/overview'); }catch(e){ return; }
+  $('#spend').textContent=`💰 $${(state.fal_spend||0).toFixed(2)}`;
+  renderProducts(); renderBuilder(); renderVsls(); renderBanks(); renderLibrary(); renderTrash();
+}
+
+// ================= left rail =================
+function renderProducts(){
+  $('#products').innerHTML=state.products.map(p=>{
+    const done=p.stages.filter(x=>x.status==='done').length;
+    return `<div class="product">
+      <div class="nm">${esc(p.product)}<span style="flex:1"></span>
+        <button class="mini danger" onclick="delProduct('${p.slug}')">🗑</button></div>
+      <div class="stagebar">${p.stages.map(x=>`<i class="${x.status==='done'?'done':''}" title="${x.key}"></i>`).join('')}</div>
+      <div class="slist">${p.scripts.map(sc=>
+        `<a onclick="openFile('products/${p.slug}/${sc.file}')">📄 ${esc(sc.file.replace('scripts/','').replace('.md',''))}</a>`).join('')
+        ||'<span class="hint">no scripts yet — ask the 🧠 Agent, then /vsl</span>'}</div>
+    </div>`;
+  }).join('')||'<span class="hint">No products — click ＋ new</span>';
+}
+async function newProduct(){
+  const name=prompt('Product name (e.g. Night Mode Gummies):'); if(!name)return;
+  const slug=(prompt('Folder slug:',name.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,''))||'').trim();
+  if(!slug)return;
+  try{ await post('/api/product',{name,slug}); toast('Created '+slug); refresh(); }catch(e){ toast('Error: '+e.message); }
+}
+async function delProduct(slug){
+  if(!confirm(`Move product "${slug}" to trash? (recoverable)`))return;
+  try{ await api('/api/product/'+encodeURIComponent(slug),{method:'DELETE'}); toast('Trashed'); refresh(); }catch(e){ toast('Error: '+e.message); }
+}
+function renderBuilder(){
+  const bp=$('#bproduct'), bs=$('#bscript'), bm=$('#bmodel');
+  const keep=bp.value;
+  bp.innerHTML=state.products.map(p=>`<option value="${p.slug}">${esc(p.product)}</option>`).join('');
+  if([...bp.options].some(o=>o.value===keep))bp.value=keep;
+  bm.innerHTML=Object.entries(VIDEO_MODELS).map(([k,c])=>`<option value="${k}">${k} — $${c.toFixed(2)}/clip</option>`).join('');
+  builderProduct();
+}
+function builderProduct(){
+  const p=state.products.find(x=>x.slug===$('#bproduct').value);
+  $('#bscript').innerHTML=(p?p.scripts:[]).map(sc=>`<option value="${sc.file}">${esc(sc.file.replace('scripts/','').replace('.md',''))}</option>`).join('')
+    ||'<option value="">no scripts yet</option>';
+  $('#bdocs').innerHTML=state.research.map(r=>{
+    const mine=p&&r.startsWith('research/'+p.slug+'/');
+    return `<label style="display:flex;gap:6px;cursor:pointer"><input type="checkbox" value="${r}" ${mine?'checked':''}
+      onchange="$('#bdocsn').textContent=document.querySelectorAll('#bdocs input:checked').length"
+      style="accent-color:var(--gold)">${esc(r.replace('research/',''))}</label>`;
+  }).join('')||'<span class="hint">none</span>';
+  $('#bdocsn').textContent=document.querySelectorAll('#bdocs input:checked').length;
+}
+async function buildVsl(){
+  const product=$('#bproduct').value, script=$('#bscript').value, name=$('#bname').value.trim();
+  if(!product||!script){toast('Pick a product + script');return;}
+  if(!name){toast('Name the VSL');$('#bname').focus();return;}
+  const docs=[...document.querySelectorAll('#bdocs input:checked')].map(i=>i.value);
+  try{ const r=await post('/api/build-vsl',{product,script,docs,name}); watchJob(r.job_id); toast('Building "'+name+'" — watch Activity'); }
+  catch(e){ toast('Error: '+e.message); }
+}
+function renderVsls(){
+  $('#vsls').innerHTML=state.vsls.map(v=>{
+    const vids=v.segments.filter(x=>x.video_ok).length, vos=v.segments.filter(x=>x.vo_ok).length;
+    const missing=v.segments.length-vids;
+    return `<div class="vslrow" onclick="vslModal('${v.slug}')">
+      <b style="flex:1">${esc(v.name)}</b>
+      <span class="hint">${vids}/${v.segments.length}🎬 ${vos}/${v.segments.length}🎙</span>
+      ${v.output_exists?'<span class="dot ok" title="rendered"></span>':`<span class="dot warn" title="${missing} shots missing"></span>`}
+    </div>`;
+  }).join('');
+}
+function vslModal(slug){
+  const v=state.vsls.find(x=>x.slug===slug); if(!v)return;
+  const missing=v.segments.filter(x=>!x.video_ok).length;
+  $('#modaltitle').textContent='🏗 '+v.name;
+  $('#modalbody').innerHTML=`
+    <div class="row" style="margin-bottom:12px">
+      <button onclick="run('generate-vo','${slug}')">🎙 Generate VO (free)</button>
+      <select id="vm-${slug}">${Object.entries(VIDEO_MODELS).map(([k,c])=>`<option value="${k}">${k} — $${c.toFixed(2)}</option>`).join('')}</select>
+      <button class="danger" ${missing?'':'disabled'} onclick="genAll('${slug}',${missing})">🎬 Generate ${missing} missing $</button>
+      <button onclick="run('check-media','${slug}')">🔍 Check media</button>
+      <button class="gold" onclick="run('assemble','${slug}',{no_music:${!v.music_ok}})">⚡ Assemble (free)</button>
+    </div>
+    <div class="hint">${v.aspect_ratio||''} · target ${v.target_duration||'?'}s · music ${v.music_ok?'✓':'✗ manual'}</div>
+    <pre style="margin-top:10px">${v.segments.map(s=>`#${s.shot}  ${s.video_ok?'🎬':'⬜'}${s.vo_ok?'🎙':'⬜'}  ${esc(s.vo_text)}`).join('\n')}</pre>`;
+  $('#modal').classList.add('open');
+}
+function genAll(slug,missing){
+  const m=$('#vm-'+slug).value;
+  if(!confirm(`Generate ${missing} shot(s) with ${m}?\n~$${(VIDEO_MODELS[m]*missing).toFixed(2)} on fal.ai`))return;
+  run('generate-video',slug,{confirm_cost:true,video_model:m});
+}
+async function run(action,slug,extra){
+  try{ const r=await post('/api/run',Object.assign({action,slug},extra||{})); watchJob(r.job_id); toast('Started: '+action); closeModal(); }
+  catch(e){ toast('Error: '+e.message); }
+}
+function renderBanks(){
+  $('#banks').innerHTML=Object.entries(state.banks).map(([k,n])=>
+    `<div class="bank" onclick="openBank('${k}')"><div class="n">${n}</div><div class="t">${k}</div></div>`).join('');
+}
+async function openBank(name){
+  const es=await api('/api/bank/'+name);
+  $('#modaltitle').textContent=`banks/${name} — ${es.length} entries`;
+  $('#modalbody').innerHTML=es.map(e=>`<div style="border:1px solid var(--line);border-radius:10px;padding:9px 11px;margin-bottom:7px">
+    <span style="color:var(--gold);font-family:var(--mono);font-size:11px">${e.id||''}</span>
+    <div>${esc(e.text_verbatim||e.name||e.text||'')}</div>
+    <div class="hint">${esc(e.hook_class||e.class||'')} ${esc((e.tags||[]).join(', '))}</div></div>`).join('')||'Empty.';
+  $('#modal').classList.add('open');
+}
+async function openFile(path){
+  const f=await api('/api/file?path='+encodeURIComponent(path));
+  $('#modaltitle').textContent=path;
+  $('#modalbody').innerHTML='<pre></pre>'; $('#modalbody pre').textContent=f.content;
+  $('#modal').classList.add('open');
+}
+
+// ================= center: library =================
+function renderLibrary(){
+  const outs=state.outputs;
+  $('#libcount').textContent=outs.length+' videos';
+  const kinds=[['all','All'],['vsl','VSLs'],['dub','Dubs'],['edit','✂ Edits']];
+  $('#libchips').innerHTML=kinds.map(([k,l])=>`<span class="chip ${libFilter===k?'on':''}" onclick="libFilter='${k}';renderLibrary()">${l}</span>`).join('');
+  const list=outs.filter(o=>{
+    if(libFilter==='all')return true;
+    if(libFilter==='edit')return o.path.startsWith('output/edits/');
+    if(libFilter==='vsl')return o.kind==='vsl'&&!o.path.startsWith('output/edits/');
+    return o.kind===libFilter;
+  });
+  $('#libgrid').innerHTML=list.map(o=>`
+    <div class="vcard" onclick='openEditor(${JSON.stringify(o).replace(/'/g,"&#39;")})'>
+      <img loading="lazy" src="/api/poster?path=${encodeURIComponent(o.path)}" onerror="this.style.opacity=.15">
+      <span class="k">${o.path.startsWith('output/edits/')?'✂ edit':o.kind}</span>
+      <div class="b"><div class="t">${esc((o.group?o.group+' / ':'')+o.name)}</div>
+        <div class="m">${fmtB(o.size)} · ${fmtT(o.mtime)}</div></div>
+    </div>`).join('')||'<span class="hint">Nothing here yet.</span>';
+  // join dropdown
+  $('#t-join').innerHTML='<option value="">— nothing —</option>'+
+    outs.map(o=>`<option value="${esc(o.path)}">${esc((o.group?o.group+'/':'')+o.name)}</option>`).join('');
+}
+
+// ================= center: editor =================
+function openEditor(o){
+  edCur=o;
+  $('#library').style.display='none'; $('#editor').style.display='';
+  $('#ed-name').textContent=(o.group?o.group+' / ':'')+o.name;
+  $('#ed-meta').textContent=fmtB(o.size);
+  const v=$('#ed-vid'); v.src='/media/'+o.path;
+  v.onloadedmetadata=()=>{ $('#t-end').value=v.duration.toFixed(1); edSum(); };
+  ['t-zoom','t-speed','t-vol'].forEach(id=>$('#'+id).value=1);
+  $('#t-text').value=''; $('#t-start').value=0;
+  edSum(); inspect(o);
+}
+function closeEditor(){ $('#editor').style.display='none'; $('#library').style.display=''; $('#ed-vid').pause(); }
+function edTick(v){ $('#ed-now').textContent=v.currentTime.toFixed(1)+'s'; }
+function edSum(){
+  const z=+$('#t-zoom').value, s=+$('#t-speed').value, vol=+$('#t-vol').value;
+  $('#t-zoomv').textContent='×'+z; $('#t-speedv').textContent='×'+s; $('#t-volv').textContent=vol==0?'mute':'×'+vol;
+  const bits=[`cut ${$('#t-start').value}s → ${$('#t-end').value}s`];
+  if(z>1)bits.push('zoom ×'+z); if(s!=1)bits.push('speed ×'+s);
+  if($('#t-text').value.trim())bits.push('text "'+$('#t-text').value.trim().slice(0,20)+'"');
+  if(vol!=1)bits.push(vol==0?'muted':'volume ×'+vol);
+  if($('#t-join').value)bits.push('+ append clip');
+  $('#sum-text').textContent=bits.join(' · ');
+}
+async function renderEdit(){
+  if(!edCur)return;
+  const join=$('#t-join').value;
+  try{
+    const body={path:edCur.path,start:+$('#t-start').value,end:+$('#t-end').value,
+      zoom:+$('#t-zoom').value,speed:+$('#t-speed').value,volume:+$('#t-vol').value,
+      text:$('#t-text').value.trim(),text_pos:$('#t-pos').value};
+    const r=await post('/api/edit',body);
+    watchJob(r.job_id);
+    if(join){
+      toast('Rendering the cut… the append runs right after');
+      await waitJob(r.job_id);
+      const r2=await post('/api/concat',{paths:[r.output,join]});
+      watchJob(r2.job_id); await waitJob(r2.job_id);
+      toast('✂ Edit + join done — in Library under ✂ Edits');
+    } else {
+      await waitJob(r.job_id);
+      toast('✂ Edit rendered — in Library under ✂ Edits');
+    }
+    closeEditor(); refresh();
+  }catch(e){ toast('Error: '+e.message); }
+}
+async function waitJob(id){
+  while(true){ const j=await api('/api/job/'+id+'?offset=0');
+    if(j.status!=='running')return j; await new Promise(r=>setTimeout(r,1200)); }
+}
+async function inspect(o){
+  $('#insp-name').textContent=o.name;
+  try{
+    const p=await api('/api/qc/probe?path='+encodeURIComponent(o.path));
+    const v=(p.streams||[]).find(s=>s.codec_type==='video')||{};
+    const a=(p.streams||[]).find(s=>s.codec_type==='audio');
+    const dur=parseFloat((p.format||{}).duration||0);
+    $('#inspector').innerHTML=`<table class="probe">
+      <tr><td>resolution</td><td>${v.width||'?'}×${v.height||'?'}</td></tr>
+      <tr><td>duration</td><td>${dur.toFixed(1)}s</td></tr>
+      <tr><td>fps</td><td>${esc(v.r_frame_rate||'?')}</td></tr>
+      <tr><td>bitrate</td><td>${Math.round((+(p.format||{}).bit_rate||0)/1000)} kb/s</td></tr>
+      <tr><td>codec</td><td>${esc(v.codec_name||'?')}</td></tr>
+      <tr><td>audio</td><td>${a?esc(a.codec_name)+' '+(a.channels||'?')+'ch':'— none —'}</td></tr>
+      <tr><td>file</td><td style="font-family:var(--mono);font-size:10px">${esc(o.path)}</td></tr></table>`;
+  }catch(e){ $('#inspector').textContent='probe failed'; }
+}
+async function toDesktop(path){ try{ const r=await post('/api/output-to-desktop',{path}); toast('Saved: '+r.saved_to); }catch(e){ toast('Error: '+e.message); } }
+async function renameOut(path,name){
+  const n=prompt('New name:',name.replace('✂ ','')); if(!n)return;
+  try{ await post('/api/output-rename',{path,new_name:n}); toast('Renamed'); closeEditor(); refresh(); }catch(e){ toast('Error: '+e.message); }
+}
+async function trashOut(path,name){
+  if(!confirm(`Move "${name}" to trash? (recoverable)`))return;
+  try{ await api('/api/output?path='+encodeURIComponent(path),{method:'DELETE'}); toast('Trashed'); closeEditor(); refresh(); }catch(e){ toast('Error: '+e.message); }
+}
+
+// ================= right rail =================
+function renderTrash(){
+  const t=state.trash||[];
+  $('#trashn').textContent=t.length||'';
+  $('#trash').innerHTML=t.slice(0,8).map(x=>`
+    <div class="row" style="font-size:11px;margin-bottom:5px">
+      <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(x.original)}</span>
+      <button class="mini" onclick="restoreTrash('${esc(x.name)}')">↩</button>
+      <button class="mini danger" onclick="purgeTrash('${esc(x.name)}')">✕</button>
+    </div>`).join('')||'<span class="hint">empty</span>';
+}
+async function restoreTrash(name){ try{ await post('/api/trash/restore',{name}); toast('Restored'); refresh(); }catch(e){ toast('Error: '+e.message); } }
+async function purgeTrash(name){ if(!confirm('Delete forever?'))return;
+  try{ await api('/api/trash?name='+encodeURIComponent(name),{method:'DELETE'}); toast('Purged'); refresh(); }catch(e){ toast('Error: '+e.message); } }
+
+async function loadJobs(){
+  try{ jobs=await api('/api/jobs'); }catch(e){ return; }
+  $('#joblist').innerHTML=jobs.slice(0,7).map(j=>{
+    const p=j.progress||{};
+    return `<div class="job" onclick="watchJob('${j.id}')">
+      ${j.status==='running'?'<span class="spin"></span>':`<span class="dot ${j.status==='done'?'ok':(j.status==='issues'?'warn':'bad')}"></span>`}
+      <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(j.label)}</span>
+      <span class="status">${j.status}${j.status==='running'&&p.pct!=null?' '+p.pct+'%':''}</span>
+      ${j.status==='running'?`<button class="mini danger" onclick="event.stopPropagation();stopJob('${j.id}')">⏹</button>
+        <div class="jbar"><i style="width:${p.pct!=null?p.pct:4}%"></i></div>`:''}
+    </div>`;
+  }).join('');
+  const run=jobs.find(j=>j.status==='running'), s=$('#jobstrip');
+  if(run){ const p=run.progress||{};
+    $('#js-label').textContent=run.label; $('#js-pct').textContent=p.pct!=null?p.pct+'%':(p.label||'…');
+    $('#js-fill').style.width=(p.pct!=null?p.pct:4)+'%'; $('#js-stop').dataset.id=run.id; s.classList.add('on');
+  } else s.classList.remove('on');
+}
+async function stopJob(id){
+  if(!id||!confirm('Stop this job? Files are not harmed.'))return;
+  try{ await post('/api/job/'+id+'/stop',{}); toast('⏹ Stopped'); loadJobs(); }catch(e){ toast('Error: '+e.message); }
+}
+function watchJob(id){ activeJob=id; logOffset=0; $('#log').textContent=''; pollJob(); }
+async function pollJob(){
+  if(!activeJob)return;
+  try{
+    const j=await api(`/api/job/${activeJob}?offset=${logOffset}`);
+    for(const line of j.lines){ const d=document.createElement('div'); d.textContent=line;
+      if(/error|missing|✗|failed|traceback/i.test(line))d.className='err'; $('#log').appendChild(d); }
+    if(j.lines.length){ $('#log').scrollTop=$('#log').scrollHeight; logOffset=j.next_offset; }
+    $('#jobhint').textContent=j.status==='running'?'running…':j.status;
+    if(j.status==='running')setTimeout(pollJob,900);
+    else{ refresh(); loadJobs();
+      if(j.cost)toast(j.cost.free?'✅ FREE (local) · fal total $'+(j.cost.total||0).toFixed(2)
+        :'💰 ~$'+j.cost.this_run.toFixed(3)+' · fal total $'+j.cost.total.toFixed(2)); }
+  }catch(e){ setTimeout(pollJob,2000); }
+}
+async function showSpend(){
+  try{ const s=await api('/api/spend');
+    $('#modaltitle').textContent=`💰 fal.ai spend — $${s.total.toFixed(2)} total`;
+    $('#modalbody').innerHTML=(s.runs||[]).map(r=>`<div class="row" style="border-bottom:1px solid var(--line);padding:6px 2px;font-size:12.5px">
+      <b style="color:var(--gold);font-family:var(--mono)">$${(r.cost||0).toFixed(3)}</b>
+      <span style="flex:1">${esc(r.summary||'')}</span><span class="hint">${fmtT(r.ts)}</span></div>`).join('')
+      ||'<span class="hint">No paid runs yet.</span>';
+    $('#modal').classList.add('open');
+  }catch(e){ toast('Error: '+e.message); }
+}
+
+// ================= research agent =================
+let agentSession=null, agentBusy=false;
+function toggleAgent(){ const a=$('#agent'); a.style.display=a.style.display==='none'||!a.style.display?'flex':'none'; }
+function aB(kind,text){
+  const d=document.createElement('div');
+  if(kind==='user')d.style.cssText='align-self:flex-end;background:var(--accent);color:#fff;padding:8px 11px;border-radius:12px 12px 4px 12px;font-size:12.5px;max-width:88%;white-space:pre-wrap';
+  else if(kind==='tool')d.style.cssText='align-self:flex-start;color:var(--dim);font-size:10.5px';
+  else d.style.cssText='align-self:flex-start;background:var(--panel2);border:1px solid var(--line);padding:8px 11px;border-radius:12px 12px 12px 4px;font-size:12.5px;max-width:92%;white-space:pre-wrap';
+  d.textContent=(kind==='tool'?'🔎 ':'')+text;
+  if(kind==='ai'){ const pin=document.createElement('button'); pin.textContent='📌 Teach'; pin.className='mini';
+    pin.style.cssText='display:block;margin-top:6px';
+    pin.onclick=()=>post('/api/agent-note',{text}).then(()=>{pin.textContent='✓ saved';pin.disabled=true;}).catch(e=>toast(e.message));
+    d.appendChild(pin); }
+  $('#alog').appendChild(d); $('#alog').scrollTop=$('#alog').scrollHeight; return d;
+}
+async function agentSend(){
+  if(agentBusy)return; const msg=$('#ain').value.trim(); if(!msg)return;
+  agentBusy=true; $('#asend').disabled=true; $('#ain').value=''; aB('user',msg);
+  const typing=aB('tool','thinking… (reads your banks & research)');
+  try{
+    const r=await post('/api/chat',{message:msg,session_id:agentSession,model:'opus',mode:'research'});
+    let off=0;
+    while(true){ const p=await api(`/api/chat/${r.turn_id}?offset=${off}`);
+      for(const ev of p.events){ if(ev.kind==='text')aB('ai',ev.text); else if(ev.kind==='tool')aB('tool',ev.text); }
+      off=p.next_offset; if(p.session_id)agentSession=p.session_id;
+      if(p.status==='done')break; await new Promise(r2=>setTimeout(r2,900)); }
+  }catch(e){ toast('Agent: '+e.message); }
+  finally{ typing.remove(); agentBusy=false; $('#asend').disabled=false; }
+}
+$('#ain').addEventListener('keydown',e=>{ if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();agentSend();} });
+
+// ================= boot =================
+function closeModal(){ $('#modal').classList.remove('open'); }
+$('#modal').addEventListener('click',e=>{ if(e.target.id==='modal')closeModal(); });
+document.addEventListener('keydown',e=>{ if(e.key==='Escape'){closeModal();} });
+['t-start','t-end'].forEach(id=>$('#'+id).addEventListener('input',edSum));
+refresh(); loadJobs();
+setInterval(()=>{ refresh(); loadJobs(); },8000);
+</script>
+</body>
+</html>

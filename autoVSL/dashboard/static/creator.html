@@ -1,0 +1,627 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Creator — autoVSL</title>
+<style>
+  :root {
+    --bg:#0b0e14; --panel:#141926; --panel2:#1b2231; --line:#28324a;
+    --text:#eef2fb; --dim:#8b96ab; --accent:#7c5cff; --accent2:#4cc9f0;
+    --ok:#3ddc84; --bad:#ff5c72; --warn:#ffb454; --radius:14px;
+    --mono:ui-monospace,'Cascadia Code',Consolas,monospace;
+  }
+  * { box-sizing:border-box; margin:0; }
+  body { background:radial-gradient(1100px 500px at 75% -10%, #1a2036 0%, var(--bg) 55%);
+         color:var(--text); font:14.5px/1.55 'Segoe UI',system-ui,sans-serif; min-height:100vh; }
+  a { color:var(--accent2); text-decoration:none; }
+  header { display:flex; align-items:center; gap:12px; padding:14px 24px; border-bottom:1px solid var(--line);
+           position:sticky; top:0; background:rgba(11,14,20,.92); backdrop-filter:blur(8px); z-index:30; }
+  header h1 { font-size:18px; } header h1 b { color:var(--accent); }
+  header .sub { color:var(--dim); font-size:12px; }
+  .nav { margin-left:auto; display:flex; gap:7px; align-items:center; }
+  .nav a, .badge { background:var(--panel2); border:1px solid var(--line); padding:5px 12px;
+                   border-radius:18px; font-size:12.5px; font-weight:600; }
+  .badge.money { border-color:var(--warn); color:var(--warn); }
+  #jobstrip { display:none; align-items:center; gap:12px; padding:8px 24px; font-size:13px;
+              background:rgba(124,92,255,.1); border-bottom:1px solid var(--accent); position:sticky; top:57px; z-index:29; }
+  #jobstrip.on { display:flex; }
+  #jobstrip .bar { flex:1; max-width:460px; height:8px; background:var(--panel2); border:1px solid var(--line); border-radius:6px; overflow:hidden; }
+  #jobstrip .bar i { display:block; height:100%; width:0%; background:linear-gradient(90deg,var(--accent),var(--accent2)); transition:width .5s; }
+  .spin { width:11px; height:11px; border:2px solid var(--accent); border-top-color:transparent; border-radius:50%; animation:sp .8s linear infinite; flex:none; }
+  @keyframes sp { to { transform:rotate(360deg); } }
+
+  main { padding:18px 24px; max-width:1600px; margin:0 auto; }
+  .toolbar { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:14px; }
+  .toolbar input[type=search] { background:var(--panel2); border:1px solid var(--line); color:var(--text);
+    border-radius:10px; padding:9px 14px; font:inherit; width:260px; }
+  .chip { background:var(--panel2); border:1px solid var(--line); color:var(--dim); border-radius:16px;
+          padding:4px 12px; font-size:12px; cursor:pointer; user-select:none; }
+  .chip.on { border-color:var(--accent); color:var(--accent2); background:rgba(124,92,255,.14); }
+  .drop { border:2px dashed var(--line); border-radius:10px; padding:8px 16px; color:var(--dim);
+          cursor:pointer; font-size:12.5px; }
+  .drop:hover,.drop.drag { border-color:var(--accent); color:var(--accent2); }
+
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(215px,1fr)); gap:14px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:var(--radius);
+          overflow:hidden; cursor:pointer; transition:.15s; position:relative; }
+  .card:hover { border-color:var(--accent); transform:translateY(-2px); box-shadow:0 8px 22px rgba(0,0,0,.35); }
+  .card.sel { border-color:var(--accent); box-shadow:0 0 0 1px var(--accent) inset; }
+  .card img { width:100%; aspect-ratio:9/12; object-fit:cover; display:block; background:#000; }
+  .card .body { padding:10px 12px; }
+  .card .t { font-weight:700; font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .card .who { font-size:11.5px; color:var(--accent2); min-height:16px; }
+  .card .tags { display:flex; gap:4px; flex-wrap:wrap; margin-top:4px; min-height:16px; }
+  .card .tag { background:rgba(76,201,240,.1); border:1px solid rgba(76,201,240,.35); color:var(--accent2);
+               font-size:10px; border-radius:8px; padding:0 7px; }
+  .card .st { position:absolute; top:8px; left:8px; display:flex; gap:4px; }
+  .card .st span { background:rgba(11,14,20,.75); border-radius:8px; padding:1px 7px; font-size:11px; }
+  .card .st span.off { opacity:.28; }
+  .card .working { position:absolute; top:8px; right:8px; background:rgba(11,14,20,.8); border-radius:10px;
+                   padding:3px 8px; display:flex; gap:6px; align-items:center; font-size:10.5px; color:var(--warn); }
+
+  /* drawer */
+  #drawer { position:fixed; top:0; right:-560px; width:540px; max-width:96vw; height:100vh; z-index:40;
+            background:var(--panel); border-left:1px solid var(--line); transition:right .25s ease;
+            display:flex; flex-direction:column; box-shadow:-14px 0 40px rgba(0,0,0,.45); }
+  #drawer.open { right:0; }
+  #drawer .head { display:flex; gap:10px; align-items:center; padding:14px 18px; border-bottom:1px solid var(--line); }
+  #drawer .head b { font-size:15px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  #drawer .body { padding:16px 18px; overflow-y:auto; flex:1; }
+  #drawer video { width:100%; max-height:300px; background:#000; border-radius:10px; display:block; }
+  .sec { border:1px solid var(--line); border-left:3px solid var(--line); border-radius:12px;
+         background:var(--panel2); padding:13px 14px; margin-top:12px; transition:.2s; }
+  .sec.done { border-left-color:var(--ok); }
+  .sec.active { border-left-color:var(--accent); box-shadow:0 0 14px rgba(124,92,255,.12); }
+  .sec.busy { border-left-color:var(--warn); }
+  .sec.locked { opacity:.55; }
+  .stepbar { height:7px; background:var(--panel); border:1px solid var(--line); border-radius:5px; overflow:hidden; flex:1; }
+  .stepbar i { display:block; height:100%; width:0%; background:linear-gradient(90deg,var(--accent),var(--accent2)); transition:width .5s; }
+  button.stop { border-color:rgba(255,92,114,.5); color:var(--bad); padding:5px 11px; font-size:12px; }
+  button.stop:hover { border-color:var(--bad); background:rgba(255,92,114,.1); }
+  #backdrop { position:fixed; inset:0; background:rgba(5,7,11,.5); z-index:35; display:none; }
+  #backdrop.on { display:block; }
+  .sec h3 { font-size:12px; text-transform:uppercase; letter-spacing:1px; color:var(--dim); margin-bottom:9px;
+            display:flex; align-items:center; gap:8px; }
+  .sec h3 .state { margin-left:auto; font-size:11px; text-transform:none; letter-spacing:0; }
+  .ok { color:var(--ok); } .warn { color:var(--warn); } .dim { color:var(--dim); }
+  button { background:var(--panel); color:var(--text); border:1px solid var(--line); border-radius:9px;
+           padding:8px 14px; font:inherit; font-size:13px; cursor:pointer; transition:.12s; }
+  button:hover { border-color:var(--accent); color:var(--accent2); }
+  button.primary { background:linear-gradient(135deg,var(--accent),#5b8cff); border:none; color:#fff; font-weight:700; }
+  button.primary:hover { filter:brightness(1.12); color:#fff; }
+  button.danger:hover { border-color:var(--bad); color:var(--bad); }
+  button:disabled { opacity:.45; cursor:not-allowed; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  input[type=text], select, textarea { background:var(--panel); border:1px solid var(--line); color:var(--text);
+    border-radius:9px; padding:8px 11px; font:inherit; font-size:13px; }
+  textarea { width:100%; height:120px; resize:vertical; line-height:1.55; }
+  .metaGrid { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+  .metaGrid .full { grid-column:1/-1; }
+  .hint { font-size:11.5px; color:var(--dim); }
+  .toast { position:fixed; bottom:20px; left:50%; transform:translateX(-50%); background:var(--panel2);
+           border:1px solid var(--accent); padding:10px 20px; border-radius:11px; z-index:70; display:none;
+           box-shadow:0 8px 26px rgba(0,0,0,.45); max-width:80vw; }
+  .empty { color:var(--dim); padding:40px; text-align:center; }
+</style>
+</head>
+<body>
+<header>
+  <div><h1>🎬 <b>Creator</b></h1><div class="sub">Turn existing videos into new ads — clean subs → new script → dub → done</div></div>
+  <div class="nav">
+    <button class="badge" style="border-color:var(--accent);color:var(--accent2);cursor:pointer;font-weight:700"
+      onclick="toggleAgent()" title="Chat with your research & brand strategist — finds new niches, angles and hooks; teach it about your product">🧠 Research Agent</button>
+    <span class="badge money" id="spend" title="Estimated total paid to the fal.ai API">💰 $0.00</span>
+    <a href="/mission" title="Advanced: build brand-new VSLs from research">Mission Control</a><a href="/qc">QC</a><a href="/dubbing">Dubbing</a><a href="/subtitles">💬 Subtitles</a>
+  </div>
+</header>
+
+<!-- research agent chat -->
+<div id="agent" style="display:none;position:fixed;top:62px;right:18px;width:430px;max-width:95vw;height:min(600px,78vh);
+     z-index:60;background:var(--panel);border:1px solid var(--accent);border-radius:16px;box-shadow:0 18px 50px rgba(0,0,0,.55);
+     flex-direction:column;overflow:hidden">
+  <div style="display:flex;gap:8px;align-items:center;padding:11px 14px;border-bottom:1px solid var(--line)">
+    <b>🧠 Research &amp; Brand Agent</b>
+    <span class="hint" style="flex:1">knows your banks, research &amp; brand</span>
+    <button class="badge" style="cursor:pointer" onclick="agentSession=null;$('#alog').innerHTML=agentHint()">new</button>
+    <button class="badge" style="cursor:pointer" onclick="toggleAgent()">✕</button>
+  </div>
+  <div id="alog" style="flex:1;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:8px;background:#0a0d13"></div>
+  <div style="display:flex;gap:7px;padding:10px;border-top:1px solid var(--line)">
+    <textarea id="ain" rows="2" placeholder="e.g. give me 5 fresh hooks for the brain-fog angle… / here's a fact about my product: …"
+      style="flex:1;resize:none"></textarea>
+    <button class="primary" id="asend" onclick="agentSend()">➤</button>
+  </div>
+</div>
+<div id="jobstrip"><span class="spin"></span><b id="js-label"></b><div class="bar"><i id="js-fill"></i></div><span id="js-pct"></span>
+  <button class="stop" id="js-stop" onclick="stopJob(this.dataset.id, this.dataset.label)">⏹ Stop</button></div>
+<div id="backdrop" onclick="closeDrawer()"></div>
+
+<main>
+  <label class="drop" id="drop" style="display:block;padding:22px;text-align:center;font-size:14.5px;margin-bottom:14px;border-radius:14px">
+    <input type="file" id="file" accept="video/*" multiple style="display:none">
+    <b>⬆ Drop your video here</b> — or click to choose · then follow the steps: clean → script → dub, approving each one
+  </label>
+  <div class="toolbar">
+    <input type="search" id="q" placeholder="🔎 Search videos, characters, tags…" oninput="render()">
+    <span id="charchips"></span>
+    <span id="tagchips"></span>
+  </div>
+  <div class="grid" id="grid"><div class="empty">Loading your library…</div></div>
+</main>
+
+<!-- workflow drawer -->
+<div id="drawer">
+  <div class="head">
+    <b id="d-title">—</b>
+    <span style="margin-left:auto"></span>
+    <button class="danger" onclick="delVideo()" title="Move this video + its whole pipeline to trash (recoverable)">🗑</button>
+    <button onclick="closeDrawer()">✕</button>
+  </div>
+  <div class="body">
+    <video id="d-vid" controls playsinline preload="metadata"></video>
+
+    <div class="sec">
+      <h3>🏷 Name & organize <span class="state hint">saves automatically</span></h3>
+      <div class="metaGrid">
+        <input type="text" id="m-title" class="full" placeholder="Friendly title (e.g. Beach balcony testimonial)" onchange="saveMeta()">
+        <input type="text" id="m-char" list="charlist" placeholder="Character (e.g. Paulina)" onchange="saveMeta()">
+        <input type="text" id="m-tags" placeholder="Tags, comma separated" onchange="saveMeta()">
+      </div>
+      <datalist id="charlist"></datalist>
+    </div>
+
+    <div class="sec">
+      <h3>1 · 🧹 Clean subtitles <span class="state" id="s1state"></span></h3>
+      <div class="row" id="s1row"></div>
+      <div class="hint" style="margin-top:6px">Finds burned-in captions automatically and erases them with AI (free, local GPU). The original is backed up.</div>
+    </div>
+
+    <div class="sec">
+      <h3>2 · ✍️ New script <span class="state" id="s2state"></span></h3>
+      <div id="s2body"></div>
+    </div>
+
+    <div class="sec">
+      <h3>3 · 🎙 Dub <span class="state" id="s3state"></span></h3>
+      <div class="row">
+        <select id="d-quality">
+          <option value="local-hd">💻 Free HD — local voice + Wav2Lip HD lips ($0)</option>
+          <option value="local-w2l">💻 Free — local voice + Wav2Lip lips, faster/softer ($0)</option>
+          <option value="local-fast">💻 Free fast — local voice, keep original mouth ($0)</option>
+          <option value="hybrid-latent">💻+☁ Local voice + LatentSync lips (~$0.30/min) 💰</option>
+          <option value="cloud-budget">☁ F5 voice + LatentSync lips (~$1/min) 💰</option>
+          <option value="cloud-veed">☁ F5 voice + VEED lips (~$0.40/min) 💰</option>
+          <option value="cloud-sync2">☁ HD voice + sync v2 lips (~$3/min) 💰💰</option>
+          <option value="cloud-pro">☁ HD voice + sync v2 PRO — best possible 💰💰💰</option>
+        </select>
+        <button class="primary" id="dubbtn" onclick="startDub()">🎙 Dub it</button>
+      </div>
+      <div class="hint" id="dubhint" style="margin-top:6px"></div>
+      <details style="margin-top:9px">
+        <summary style="cursor:pointer;font-size:12px;color:var(--accent2)">🎚 Fine-tune the dub (optional)</summary>
+        <div class="row" style="margin-top:9px">
+          <label class="hint">Language
+            <select id="ft-lang" style="margin-left:6px">
+              <option value="en">English</option><option value="es">Spanish</option>
+              <option value="fr">French</option><option value="de">German</option>
+              <option value="it">Italian</option><option value="pt">Portuguese</option>
+            </select></label>
+          <label class="hint" style="flex:1;min-width:200px">Keep original audio (music/ambience) under the new voice:
+            <b id="ft-kvval" style="color:var(--text)">off</b>
+            <input type="range" id="ft-kv" min="0" max="60" value="0" style="width:100%"
+              oninput="$('#ft-kvval').textContent=this.value==0?'off':this.value+'%'">
+          </label>
+        </div>
+        <div class="hint" style="margin-top:4px">Applies to the 💻 local engine. 0% = replace the audio fully; 10–25% keeps a hint of the original room/music.</div>
+      </details>
+    </div>
+
+    <div class="sec" id="s4sec" style="display:none">
+      <h3>4 · ✅ Result <span class="state ok" id="s4state"></span></h3>
+      <video id="d-result" controls playsinline preload="metadata" style="max-height:260px"></video>
+      <div class="row" style="margin-top:9px">
+        <button class="primary" onclick="toDesktop()">💾 Save to Desktop</button>
+        <button onclick="burnCaps(this)" title="Burn word-timed captions from your script onto the final (free, local)">💬 Burn captions</button>
+        <button onclick="aiQC(this)" title="Claude inspects frames: mouth, realism, quality — verdict lands in QC (free)">🤖 AI quality check</button>
+        <button onclick="location.href='/qc?path='+encodeURIComponent(cur.dub)">🔬 Open QC</button>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <span class="hint">✂ Quick trim:</span>
+        <input type="text" id="qt-s" value="0" style="width:58px" title="start (s)">
+        <span class="hint">→</span>
+        <input type="text" id="qt-e" value="" placeholder="end s" style="width:58px" title="end (s)">
+        <button onclick="quickTrim(this)">✂ Cut (free)</button>
+        <span class="hint">renders a new copy — the dub stays untouched</span>
+      </div>
+    </div>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+const $=s=>document.querySelector(s);
+const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+function toast(m){const t=$('#toast');t.textContent=m;t.style.display='block';clearTimeout(t._t);t._t=setTimeout(()=>t.style.display='none',4200);}
+async function api(p,o){const r=await fetch(p,o);if(!r.ok)throw new Error((await r.text()).replace(/<[^>]+>/g,' ').trim().slice(0,180));return r.json();}
+const post=(p,b)=>api(p,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});
+
+let lib={videos:[],characters:[],tags:[]}, cur=null, fChar='', fTag='', jobs=[];
+
+async function load(){
+  lib=await api('/api/creator/library');
+  $('#spend').textContent=`💰 $${(lib.fal_spend||0).toFixed(2)}`;
+  $('#charlist').innerHTML=lib.characters.map(c=>`<option value="${esc(c)}">`).join('');
+  render();
+  if(cur){const v=lib.videos.find(x=>x.name===cur.name); if(v){cur=v; syncDrawer();} }
+}
+
+function runningFor(v){ return jobs.find(j=>j.status==='running' && (j.slug===v.name||j.slug===v.stem)); }
+
+function render(){
+  const q=($('#q').value||'').toLowerCase();
+  $('#charchips').innerHTML=lib.characters.map(c=>`<span class="chip ${fChar===c?'on':''}" onclick="fChar=fChar==='${esc(c)}'?'':'${esc(c)}';render()">👤 ${esc(c)}</span>`).join('');
+  $('#tagchips').innerHTML=lib.tags.map(t=>`<span class="chip ${fTag===t?'on':''}" onclick="fTag=fTag==='${esc(t)}'?'':'${esc(t)}';render()"># ${esc(t)}</span>`).join('');
+  const vids=lib.videos.filter(v=>{
+    if(fChar && v.character!==fChar) return false;
+    if(fTag && !v.tags.includes(fTag)) return false;
+    if(q && !(v.name+' '+v.title+' '+v.character+' '+v.tags.join(' ')).toLowerCase().includes(q)) return false;
+    return true;
+  });
+  $('#grid').innerHTML=vids.map(v=>{
+    const run=runningFor(v);
+    return `<div class="card ${cur&&cur.name===v.name?'sel':''}" onclick="openVideo('${esc(v.name)}')">
+      <img src="/api/thumb/${encodeURIComponent(v.name)}" loading="lazy" alt="">
+      <div class="st">
+        <span class="${v.cleaned?'':'off'}" title="subtitles cleaned">🧹</span>
+        <span class="${v.script?'':'off'}" title="script ready">✍️</span>
+        <span class="${v.dub?'':'off'}" title="dubbed">🎙</span>
+      </div>
+      ${run?`<div class="working"><span class="spin"></span>working…</div>`:''}
+      <div class="body">
+        <div class="t">${esc(v.title||v.name)}</div>
+        <div class="who">${v.character?'👤 '+esc(v.character):''}</div>
+        <div class="tags">${v.tags.map(t=>`<span class="tag">${esc(t)}</span>`).join('')}</div>
+      </div>
+    </div>`;
+  }).join('') || '<div class="empty">No videos match — clear filters or drop a new video above.</div>';
+}
+
+// ------------------------------------------------- drawer
+function openVideo(name){
+  cur=lib.videos.find(v=>v.name===name); if(!cur)return;
+  $('#drawer').classList.add('open'); $('#backdrop').classList.add('on');
+  $('#d-vid').src='/media/uploads/'+encodeURIComponent(cur.name);
+  syncDrawer(); render();
+}
+function closeDrawer(){ $('#drawer').classList.remove('open'); $('#backdrop').classList.remove('on'); $('#d-vid').pause(); const r=$('#d-result'); if(r.src)r.pause(); cur=null; render(); }
+
+function secState(el,state){ el.classList.remove('done','active','busy','locked'); if(state)el.classList.add(state); }
+function progressRow(run,what){
+  const p=run.progress||{};
+  return `<div class="row" style="width:100%"><span class="spin"></span>
+    <span class="warn" style="font-size:12px">${esc(p.label||what)}${p.pct!=null?' · '+p.pct+'%':''}</span>
+    <div class="stepbar"><i style="width:${p.pct!=null?p.pct:5}%"></i></div>
+    <button class="stop" onclick="stopJob('${run.id}','${esc(run.label)}')">⏹ Stop</button></div>`;
+}
+
+function syncDrawer(){
+  if(!cur)return;
+  $('#d-title').textContent=cur.title||cur.name;
+  if(document.activeElement!==$('#m-title')) $('#m-title').value=cur.title;
+  if(document.activeElement!==$('#m-char')) $('#m-char').value=cur.character;
+  if(document.activeElement!==$('#m-tags')) $('#m-tags').value=cur.tags.join(', ');
+  const run=runningFor(cur);
+  const s1=$('#s1state').closest('.sec'), s2=$('#s2state').closest('.sec'), s3=$('#s3state').closest('.sec');
+
+  // step 1 — clean
+  if(run && run.action==='clean-subs'){ secState(s1,'busy');
+    $('#s1state').innerHTML='<span class="warn">⏳ working</span>';
+    $('#s1row').innerHTML=progressRow(run,'cleaning'); }
+  else if(cur.cleaned){ secState(s1,'done'); $('#s1state').innerHTML='<span class="ok">✓ cleaned (original saved)</span>';
+    $('#s1row').innerHTML=`<button onclick="playClean()">▶ Preview cleaned</button>
+      <button onclick="restoreOrig()">↩ Restore original</button>`; }
+  else if(cur.no_subs){ secState(s1,'done'); $('#s1state').innerHTML='<span class="ok">✓ no captions</span>';
+    $('#s1row').innerHTML=`<button onclick="setNoSubs(false)">undo</button>`; }
+  else { secState(s1,'active'); $('#s1state').innerHTML='<span class="dim">start here</span>';
+    $('#s1row').innerHTML=`<button class="primary" onclick="cleanSubs(this)">🧹 Clean subtitles (free)</button>
+      <button onclick="setNoSubs(true)" title="This video has no burned-in captions — skip cleaning">✓ No captions — skip</button>`; }
+
+  // approval gates — nothing advances until YOU confirm each step
+  const ap=cur.approved||{};
+  if((cur.cleaned||cur.no_subs) && !ap.clean){
+    $('#s1row').insertAdjacentHTML('beforeend',
+      `<button class="primary" onclick="approveStep('clean')" title="Confirm this step — unlocks the script step">✓ Approve & continue</button>`);
+    secState(s1,'active');
+  }
+
+  // step 2 — script (unlocks only after step 1 is done AND approved)
+  const step1done=(cur.cleaned||cur.no_subs)&&ap.clean;
+  if(run && run.action==='transcribe'){ secState(s2,'busy'); $('#s2state').innerHTML='<span class="warn">⏳ transcribing</span>';
+    $('#s2body').innerHTML=progressRow(run,'listening to the original'); }
+  else if(!step1done){ secState(s2,'locked'); $('#s2state').innerHTML='<span class="dim">🔒 approve step 1 first</span>'; $('#s2body').innerHTML=''; }
+  else if(cur.script && ap.script){ secState(s2,'done'); $('#s2state').innerHTML='<span class="ok">✓ approved</span>'; loadScript(); }
+  else if(cur.script){ secState(s2,'active');
+    $('#s2state').innerHTML='<button class="primary" style="padding:4px 12px;font-size:12px" onclick="approveStep(\'script\')">✓ Approve script</button>'; loadScript(); }
+  else if(cur.transcript){ secState(s2,'active'); $('#s2state').innerHTML='<span class="warn">✍️ write your new words</span>'; loadScript(); }
+  else { secState(s2, step1done?'active':'locked'); $('#s2state').innerHTML='<span class="dim">needs transcript</span>';
+    $('#s2body').innerHTML=`<button class="primary" onclick="busyBtn(this);transcribe()">📝 Transcribe original (free)</button>`; }
+
+  // step 3 — dub
+  const dubRun=run && run.action==='dub';
+  const s3row=$('#dubbtn').parentElement;
+  let prog=$('#s3prog'); if(!prog){ prog=document.createElement('div'); prog.id='s3prog'; s3row.after(prog); }
+  if(dubRun){ secState(s3,'busy'); $('#s3state').innerHTML='<span class="warn">⏳ dubbing</span>';
+    prog.innerHTML=progressRow(run,'dubbing'); $('#dubbtn').disabled=true; }
+  else { prog.innerHTML='';
+    const s3ready=cur.script&&ap.script;   // dub unlocks only after the script is approved
+    secState(s3, cur.dub?'done':(s3ready?'active':'locked'));
+    $('#dubbtn').disabled=!s3ready;
+    $('#s3state').innerHTML=cur.dub?'<span class="ok">✓ dubbed — redo anytime</span>':(s3ready?'':'<span class="dim">🔒 approve the script first</span>'); }
+  dubHint();
+
+  // step 4 — result
+  if(cur.dub){ $('#s4sec').style.display=''; secState($('#s4sec'), ap.dub?'done':'active');
+    $('#s4state').innerHTML=ap.dub?'✓ approved final':'<button class="primary" style="padding:4px 12px;font-size:12px" onclick="approveStep(\'dub\')">✓ Approve final</button>';
+    const url='/media/'+cur.dub; if(!$('#d-result').src.includes(encodeURIComponent(cur.stem))) $('#d-result').src=url; }
+  else $('#s4sec').style.display='none';
+}
+
+function approveStep(k){
+  const ap={...(cur.approved||{})}; ap[k]=true;
+  post('/api/creator/meta',{name:cur.name,approved:ap}).then(()=>{toast('✓ Step approved');load();})
+    .catch(e=>toast('Error: '+e.message));
+}
+function playClean(){ const v=$('#d-vid'); v.currentTime=0; v.play(); toast('Playing the cleaned source'); }
+function setNoSubs(val){ post('/api/creator/meta',{name:cur.name,no_subs:val}).then(load).catch(e=>toast('Error: '+e.message)); }
+function busyBtn(b){ b.disabled=true; b.dataset.t=b.textContent; b.textContent='⏳ starting…'; setTimeout(()=>{b.disabled=false;b.textContent=b.dataset.t;},6000); }
+async function stopJob(id,label){
+  if(!confirm('Stop "'+label+'"?\nThe job is cancelled; your source video is not harmed.'))return;
+  try{ await post('/api/job/'+id+'/stop',{}); toast('⏹ Stopped'); await pollJobs(); await load(); }
+  catch(e){ toast('Error: '+e.message); }
+}
+
+async function saveMeta(){
+  if(!cur)return;
+  const tags=$('#m-tags').value.split(',').map(t=>t.trim()).filter(Boolean);
+  try{ await post('/api/creator/meta',{name:cur.name,title:$('#m-title').value,character:$('#m-char').value,tags});
+    toast('Saved'); await load(); }catch(e){ toast('Save failed: '+e.message); }
+}
+
+async function loadScript(){
+  if(document.activeElement && document.activeElement.id==='scripttext') return; // don't clobber while typing
+  try{ const s=await api('/api/script/'+encodeURIComponent(cur.stem));
+    $('#s2body').innerHTML=`<textarea id="scripttext" oninput="fitMeter()"></textarea>
+      <div id="fitmeter" class="hint" style="margin-top:5px"></div>
+      <div class="row" style="margin-top:8px;padding:8px;border:1px solid var(--line);border-radius:9px;background:var(--panel)">
+        <span style="font-size:11px;color:var(--accent2);font-weight:700" title="Every rewrite feeds Claude your full research: all bank hooks & angles, the brand offer, and ad-conversion rules">✨ CLAUDE · brand+research aware</span>
+        <button onclick="aiRewrite('Punch this up: stronger hook in the first line, vivid concrete language, keep it authentic.',this)">Punch up hook</button>
+        <button onclick="aiRewrite('Make it sound like natural spoken conversation, not written copy.',this)">More natural</button>
+        <button onclick="aiRewrite(fitInstr(),this)" title="Shortens/expands the words to match this video's length for clean lip-sync">✂ Fit video length</button>
+        <input type="text" id="aiin" placeholder="or tell Claude what to change…" style="flex:1;min-width:150px">
+        <button class="primary" onclick="aiRewrite($('#aiin').value.trim(),this)">Go</button>
+        <button id="aiundo" style="display:none" onclick="aiUndo()">↩ Undo</button>
+      </div>
+      <div class="hint" id="aistat"></div>
+      <div class="row" style="margin-top:8px"><button class="primary" onclick="saveScript()">💾 Save script</button>
+      <span class="hint">${s.source==='edited'?'your saved edit':'from the transcript — rewrite it into your new message'}</span></div>`;
+    $('#scripttext').value=s.text||'';
+    fitMeter();
+  }catch(e){ $('#s2body').innerHTML='<span class="hint">could not load script</span>'; }
+}
+
+// the ORIGINAL speaker's pace (words/sec), measured from their transcript ÷ video length
+function origRate(){
+  const d=$('#d-vid').duration||0;
+  const w=cur&&cur.orig_words||0;
+  const r=(d>0&&w>0)?w/d:0;
+  return (r>=1&&r<=5)?r:2.5;   // fall back to a natural default if not measurable yet
+}
+function fitMeter(){
+  const el=$('#fitmeter'), ta=$('#scripttext'); if(!el||!ta)return;
+  const words=(ta.value.trim().match(/\S+/g)||[]).length;
+  const d=$('#d-vid').duration||0;
+  if(!d){ el.innerHTML=`${words} words`; return; }
+  const rate=origRate(), target=Math.round(d*rate), lo=Math.round(target*0.9), hi=Math.round(target*1.05);
+  const secsAt=Math.round(words/rate);
+  const paced=(cur&&cur.orig_words)?`matches the speaker's ${rate.toFixed(1)} words/sec`:`~${rate.toFixed(1)} words/sec`;
+  let color='var(--ok)', msg=`✓ fits & keeps the original pace`;
+  if(words>hi){ color='var(--bad)'; msg=`⚠ too long — voice will rush/overrun by ~${secsAt-Math.round(d)}s (trim to ≤${hi})`; }
+  else if(words<lo){ color='var(--warn)'; msg=`a bit short — voice may drag or end early (aim ${lo}-${hi})`; }
+  el.innerHTML=`<b style="color:${color}">${words} words ≈ ${secsAt}s</b> · target ${lo}-${hi} · ${paced} · <span style="color:${color}">${msg}</span>`;
+}
+
+function fitInstr(){
+  const d=Math.round($('#d-vid').duration||30), rate=origRate(), target=Math.round(d*rate);
+  return `Rewrite to about ${target} words. The original speaker talks at ${rate.toFixed(1)} words/sec — match that exact pace so the new voice runs at the SAME speed and fills this ${d}s video for clean lip-sync. Keep the strongest lines; cut the rest.`;
+}
+let aiPrev=null;
+async function aiRewrite(instruction,btn){
+  const ta=$('#scripttext');
+  if(!ta||!ta.value.trim()){toast('Script is empty');return;}
+  if(!instruction){toast('Tell Claude what to change');return;}
+  if(btn)busyBtn(btn);
+  $('#aistat').textContent='✨ Claude is rewriting with your research + brand + the video\'s pace… (30-90s — don\'t close the panel)'; ta.disabled=true;
+  try{
+    const r=await post('/api/copywrite',{text:ta.value,instruction,brand:true,target_seconds:($('#d-vid').duration||0),rate:origRate()});
+    aiPrev=ta.value; ta.value=r.text; $('#aiundo').style.display='';
+    $('#aistat').textContent='Done — '+ta.value.split(/\s+/).filter(Boolean).length+' words. Review, tweak, then 💾 Save.';
+  }catch(e){ $('#aistat').textContent=''; toast('Claude error: '+e.message); }
+  finally{ ta.disabled=false; }
+}
+function aiUndo(){ if(aiPrev===null)return; $('#scripttext').value=aiPrev; aiPrev=null; $('#aiundo').style.display='none'; $('#aistat').textContent='Reverted.'; }
+async function saveScript(){
+  const text=$('#scripttext').value.trim(); if(!text){toast('Script is empty');return;}
+  try{ await post('/api/script/'+encodeURIComponent(cur.stem),{text}); toast('Script saved — ready to dub'); await load(); }
+  catch(e){ toast('Error: '+e.message); }
+}
+
+function cleanSubs(btn){
+  if(btn)busyBtn(btn);
+  post('/api/clean-subs',{file:cur.name,auto:true,mode:'erase'})
+    .then(()=>{ toast('Cleaning started — AI finds & erases the captions (a few minutes)'); pollJobs().then(()=>syncDrawer()); })
+    .catch(e=>toast('Error: '+e.message));
+}
+function restoreOrig(){
+  if(!confirm('Put back the ORIGINAL video (with captions)?'))return;
+  post('/api/clean-restore',{file:cur.name}).then(()=>{toast('Original restored');load();}).catch(e=>toast('Error: '+e.message));
+}
+function transcribe(){
+  post('/api/run',{action:'transcribe',file:cur.name})
+    .then(()=>{toast('Transcribing (free, local)…');pollJobs();}).catch(e=>toast('Error: '+e.message));
+}
+
+const QUALITY={
+  'local-hd':{body:{engine:'local',lipsync:'wav2lip-hd'},paid:false,label:'Free HD — everything on your GPU, $0'},
+  'local-w2l':{body:{engine:'local',lipsync:'wav2lip'},paid:false,label:'Free — local voice + Wav2Lip (faster, softer mouth), $0'},
+  'local-fast':{body:{engine:'local',lipsync:'none'},paid:false,label:'Free fast — cloned voice, mouth unchanged, $0'},
+  'hybrid-latent':{body:{engine:'local',lipsync:'latentsync'},paid:true,label:'Local voice (free) + LatentSync lips on fal.ai (paid)'},
+  'cloud-budget':{body:{engine:'fal',tts:'f5',tier:'latentsync'},paid:true,label:'F5 voice + LatentSync lips (fal.ai, paid)'},
+  'cloud-veed':{body:{engine:'fal',tts:'f5',tier:'veed'},paid:true,label:'F5 voice + VEED lips (fal.ai, paid)'},
+  'cloud-sync2':{body:{engine:'fal',tts:'hd',tier:'standard'},paid:true,label:'HD voice + sync-lipsync v2 (fal.ai, expensive)'},
+  'cloud-pro':{body:{engine:'fal',tts:'hd',tier:'pro'},paid:true,label:'HD voice + sync v2 PRO — best possible (fal.ai, most expensive)'},
+};
+function dubHint(){ const q=QUALITY[$('#d-quality').value]; $('#dubhint').textContent=q.label;
+  $('#dubbtn').textContent=q.paid?'🎙 Dub it — approve cost $':'🎙 Dub it (free)'; }
+function startDub(){
+  if(!cur)return;
+  const q=QUALITY[$('#d-quality').value];
+  const body={action:'dub',file:cur.name,...q.body};
+  if(q.body.engine==='local'){ body.language=$('#ft-lang').value; body.keep_volume=(+$('#ft-kv').value)/100; }
+  if(q.paid){ if(!confirm('⚠ This uses fal.ai and costs money:\n\n'+q.label+'\n\nApprove and start?'))return; body.confirm_cost=true; }
+  post('/api/run',body).then(()=>{toast(q.paid?'Dub started (paid run — cost shows when done)':'Free dub started');pollJobs();})
+    .catch(e=>toast('Error: '+e.message));
+}
+function toDesktop(){
+  post('/api/output-to-desktop',{path:cur.dub}).then(r=>toast('Saved: '+r.saved_to)).catch(e=>toast('Error: '+e.message));
+}
+function burnCaps(b){ busyBtn(b);
+  post('/api/run',{action:'caption',file:cur.name})
+    .then(()=>{toast('💬 Burning word-timed captions onto the final…');pollJobs();})
+    .catch(e=>toast('Error: '+e.message));
+}
+function aiQC(b){ busyBtn(b);
+  post('/api/qc/ai-review',{path:cur.dub})
+    .then(()=>toast('🤖 AI review running — verdict + scores appear in QC in ~2 min'))
+    .catch(e=>toast('Error: '+e.message));
+}
+function quickTrim(b){
+  const s=parseFloat($('#qt-s').value)||0, e=parseFloat($('#qt-e').value);
+  if(!(e>s)){toast('Enter an end time after the start');return;}
+  busyBtn(b);
+  post('/api/edit',{path:cur.dub,start:s,end:e})
+    .then(()=>{toast('✂ Cutting — the new copy lands in Mission Control → Library (✂ Edits)');pollJobs();})
+    .catch(e2=>toast('Error: '+e2.message));
+}
+async function delVideo(){
+  if(!cur)return;
+  if(!confirm(`Delete "${cur.title||cur.name}" and its whole pipeline (transcript, script, dubs)?\nEverything moves to trash — recoverable from Mission Control.`))return;
+  try{ await api('/api/upload?file='+encodeURIComponent(cur.name),{method:'DELETE'});
+    toast('Moved to trash'); closeDrawer(); await load(); }catch(e){ toast('Error: '+e.message); }
+}
+
+// ------------------------------------------------- jobs / progress
+async function pollJobs(){
+  try{ jobs=await api('/api/jobs'); }catch(e){ return; }
+  const run=jobs.find(j=>j.status==='running');
+  const s=$('#jobstrip');
+  if(run){ const p=run.progress||{};
+    $('#js-label').textContent=run.label;
+    $('#js-pct').textContent=p.pct!=null?p.pct+'%':(p.label||'…');
+    $('#js-fill').style.width=(p.pct!=null?p.pct:4)+'%';
+    const sb=$('#js-stop'); sb.dataset.id=run.id; sb.dataset.label=run.label;
+    s.classList.add('on');
+  } else s.classList.remove('on');
+}
+let lastRunning=false;
+setInterval(async()=>{
+  await pollJobs();
+  const nowRunning=jobs.some(j=>j.status==='running');
+  if(lastRunning&&!nowRunning){ const done=jobs[0];
+    if(done&&done.cost){ toast(done.cost.free?'✅ Done — FREE (local). fal.ai total $'+(done.cost.total||0).toFixed(2)
+      :'💰 Done — cost ~$'+done.cost.this_run.toFixed(3)+' · fal.ai total $'+done.cost.total.toFixed(2)); }
+    else if(done) toast(done.label+': '+done.status);
+    await load();
+  } else if(nowRunning && cur) syncDrawer();
+  lastRunning=nowRunning;
+},4000);
+
+// ------------------------------------------------- research & brand agent
+let agentSession=null, agentBusy=false;
+const agentHint=()=>'<div class="hint" style="margin:auto;text-align:center;padding:0 20px">Ask for new niches, angles or hooks — or teach me about your product.<br><br>Try: <i>"5 fresh hooks for the microdosing-curious mom"</i> · <i>"my product fact: each gummy has 400mg lion\'s mane"</i></div>';
+function toggleAgent(){
+  const a=$('#agent');
+  const show=a.style.display==='none';
+  a.style.display=show?'flex':'none';
+  if(show&&!$('#alog').innerHTML)$('#alog').innerHTML=agentHint();
+  if(show)$('#ain').focus();
+}
+function aBubble(kind,text){
+  const d=document.createElement('div');
+  if(kind==='user'){ d.style.cssText='align-self:flex-end;background:var(--accent);color:#fff;padding:8px 11px;border-radius:12px 12px 4px 12px;font-size:12.5px;max-width:88%;white-space:pre-wrap'; d.textContent=text; }
+  else if(kind==='tool'){ d.style.cssText='align-self:flex-start;color:var(--dim);font-size:10.5px'; d.textContent='🔎 '+text; }
+  else{ d.style.cssText='align-self:flex-start;background:var(--panel2);border:1px solid var(--line);padding:8px 11px;border-radius:12px 12px 12px 4px;font-size:12.5px;max-width:92%;white-space:pre-wrap';
+    d.textContent=text;
+    const pin=document.createElement('button');
+    pin.textContent='📌 Teach — save to agent memory'; pin.className='badge';
+    pin.style.cssText='display:block;margin-top:7px;cursor:pointer;font-size:10.5px';
+    pin.onclick=()=>post('/api/agent-note',{text}).then(r=>{pin.textContent='✓ saved to its memory';pin.disabled=true;})
+      .catch(e=>toast('Error: '+e.message));
+    d.appendChild(pin); }
+  const log=$('#alog'); const h=log.querySelector('.hint'); if(h)h.remove();
+  log.appendChild(d); log.scrollTop=log.scrollHeight; return d;
+}
+async function agentSend(){
+  if(agentBusy)return;
+  const inp=$('#ain'); const msg=inp.value.trim(); if(!msg)return;
+  agentBusy=true; $('#asend').disabled=true; inp.value='';
+  aBubble('user',msg);
+  const typing=aBubble('tool','thinking… (reads your banks & research)');
+  try{
+    const r=await post('/api/chat',{message:msg,session_id:agentSession,model:'opus',mode:'research'});
+    let off=0;
+    while(true){
+      const p=await api(`/api/chat/${r.turn_id}?offset=${off}`);
+      for(const ev of p.events){
+        if(ev.kind==='text')aBubble('ai',ev.text);
+        else if(ev.kind==='tool')aBubble('tool',ev.text);
+        else if(ev.kind==='error')toast(ev.text.slice(0,160));
+      }
+      off=p.next_offset; if(p.session_id)agentSession=p.session_id;
+      if(p.status==='done')break;
+      await sleep(900);
+    }
+  }catch(e){ toast('Agent error: '+e.message); }
+  finally{ typing.remove(); agentBusy=false; $('#asend').disabled=false; }
+}
+$('#ain')&&$('#ain').addEventListener('keydown',e=>{ if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();agentSend();} });
+
+// ------------------------------------------------- upload
+function upload(files){
+  for(const f of files){
+    const fd=new FormData(); fd.append('file',f);
+    const x=new XMLHttpRequest(); x.open('POST','/api/upload');
+    x.upload.onprogress=e=>{ if(e.lengthComputable)$('#drop').textContent=`⬆ ${f.name} — ${Math.round(e.loaded/e.total*100)}%`; };
+    x.onload=async()=>{ $('#drop').innerHTML='<input type="file" id="file" accept="video/*" multiple style="display:none">⬆ Add videos'; bindFile();
+      if(x.status===200){ toast('Added '+f.name+' — open it and start step 1 when ready'); await load(); openVideo(f.name); }
+      else toast('Upload failed: '+x.responseText.slice(0,120)); };
+    x.onerror=()=>toast('Upload failed'); x.send(fd);
+  }
+}
+function bindFile(){ const el=$('#file'); if(el) el.addEventListener('change',e=>{upload(e.target.files);e.target.value='';}); }
+bindFile();
+const dz=$('#drop');
+dz.addEventListener('dragover',e=>{e.preventDefault();dz.classList.add('drag');});
+dz.addEventListener('dragleave',()=>dz.classList.remove('drag'));
+dz.addEventListener('drop',e=>{e.preventDefault();dz.classList.remove('drag');upload(e.dataTransfer.files);});
+$('#d-quality').addEventListener('change',dubHint);
+document.addEventListener('keydown',e=>{ if(e.key==='Escape')closeDrawer(); });
+
+(async()=>{ await load(); await pollJobs();
+  const want=new URLSearchParams(location.search).get('v');
+  if(want&&lib.videos.some(v=>v.name===want)) openVideo(want);
+})();
+</script>
+</body>
+</html>

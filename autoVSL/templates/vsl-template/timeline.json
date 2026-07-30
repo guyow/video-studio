@@ -1,0 +1,27 @@
+{
+  "name": "New VSL",
+  "aspect_ratio": "9:16",
+  "fps": 30,
+  "target_duration_seconds": 60,
+  "media_root": "vsls/SLUG/media",
+  "tracks": {
+    "video": 0,
+    "voiceover": 1,
+    "music": 2
+  },
+  "music": {
+    "file": "music/background.mp3",
+    "volume": 0.15,
+    "fade_in_seconds": 2,
+    "fade_out_seconds": 3,
+    "duck_under_vo": true,
+    "duck_volume": 0.08
+  },
+  "segments": [],
+  "edit_rules": [
+    "Trim each video clip to match VO duration",
+    "Use 0.3–0.5s cross-dissolves between segments",
+    "Keep music under VO at all times",
+    "Export 9:16 MP4 H.264"
+  ]
+}

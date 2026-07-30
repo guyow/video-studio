@@ -1,0 +1,642 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>autoVSL — Quality Control</title>
+<style>
+  :root {
+    --bg: #0d1017; --panel: #151a24; --panel2: #1b2231; --line: #262f42;
+    --text: #e6ebf4; --dim: #8b96ab; --accent: #7c5cff; --accent2: #4cc9f0;
+    --ok: #3ddc84; --bad: #ff5c72; --warn: #ffb454;
+    --radius: 12px; --mono: ui-monospace, 'Cascadia Code', Consolas, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body { background: var(--bg); color: var(--text); font: 14px/1.5 'Segoe UI', system-ui, sans-serif; }
+  header {
+    display: flex; align-items: center; gap: 16px; padding: 14px 22px;
+    border-bottom: 1px solid var(--line); position: sticky; top: 0; background: rgba(13,16,23,.92);
+    backdrop-filter: blur(6px); z-index: 20;
+  }
+  header h1 { font-size: 17px; letter-spacing: .4px; }
+  header h1 span { color: var(--accent); }
+  header a { color: var(--accent2); text-decoration: none; font-size: 13px; }
+  main { display: grid; grid-template-columns: 320px 1fr 360px; gap: 16px; padding: 16px 22px; align-items: start; }
+  @media (max-width: 1250px) { main { grid-template-columns: 1fr; } }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; margin-bottom: 16px; }
+  .panel h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 1.2px; color: var(--dim); margin-bottom: 12px; }
+  .panel h2 .right { float: right; font-weight: 400; text-transform: none; letter-spacing: 0; }
+  button {
+    background: var(--panel2); color: var(--text); border: 1px solid var(--line); border-radius: 8px;
+    padding: 7px 14px; font: inherit; font-size: 13px; cursor: pointer; transition: .15s;
+  }
+  button:hover { border-color: var(--accent); color: var(--accent2); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  button.primary:hover { filter: brightness(1.15); color: #fff; }
+  button.danger { border-color: rgba(255,92,114,.4); }
+  button.danger:hover { border-color: var(--bad); color: var(--bad); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  button.mini { padding: 3px 9px; font-size: 11.5px; border-radius: 6px; }
+  button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .pill { display: inline-block; padding: 1px 9px; border-radius: 10px; font-size: 11px; font-weight: 600; }
+  .pill.ok { background: rgba(61,220,132,.14); color: var(--ok); }
+  .pill.bad { background: rgba(255,92,114,.14); color: var(--bad); }
+  .pill.warn { background: rgba(255,180,84,.14); color: var(--warn); }
+  .pill.dim { background: rgba(139,150,171,.14); color: var(--dim); }
+
+  /* video list */
+  .vsec { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: var(--dim); margin: 12px 0 6px; }
+  .vsec:first-child { margin-top: 0; }
+  .vrow {
+    display: flex; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid var(--line);
+    border-radius: 10px; background: var(--panel2); margin-bottom: 6px; cursor: pointer; font-size: 12.5px;
+  }
+  .vrow:hover { border-color: var(--accent); }
+  .vrow.sel { border-color: var(--accent); background: rgba(124,92,255,.12); }
+  .vrow .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+  .vrow .meta { color: var(--dim); font-size: 10.5px; flex: none; }
+
+  /* player */
+  .vwrap { position: relative; background: #000; border-radius: 10px; overflow: hidden; margin: 0 auto; max-width: 420px; }
+  .vwrap video { display: block; width: 100%; max-height: 62vh; background: #000; }
+  #seloverlay { position: absolute; inset: 0; cursor: crosshair; display: none; z-index: 5; }
+  #selbox { position: absolute; border: 2px dashed var(--warn); background: rgba(255,180,84,.15); pointer-events: none; display: none; }
+  .toolbar { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; justify-content: center; margin-top: 10px; }
+  .toolbar .time { font-family: var(--mono); font-size: 12px; color: var(--dim); min-width: 110px; text-align: center; }
+  #strip { display: flex; gap: 4px; overflow-x: auto; margin-top: 10px; padding-bottom: 4px; }
+  #strip img { height: 84px; border-radius: 6px; cursor: pointer; border: 1px solid var(--line); flex: none; }
+  #strip img:hover { border-color: var(--accent); }
+  .hint { color: var(--dim); font-size: 12px; }
+
+  /* subtitle tools */
+  .subtools { display: flex; flex-direction: column; gap: 10px; }
+  .subrow { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .subrow input[type=number] {
+    width: 88px; background: var(--panel2); color: var(--text); border: 1px solid var(--line);
+    border-radius: 8px; padding: 6px 8px; font: inherit; font-size: 12.5px;
+  }
+
+  /* specs & checklist */
+  table.specs { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  table.specs td { padding: 4px 6px; border-bottom: 1px solid rgba(38,47,66,.5); }
+  table.specs td:first-child { color: var(--dim); width: 42%; }
+  .specwarn { color: var(--warn); font-size: 12px; margin-top: 6px; }
+  .checkrow { display: flex; align-items: center; gap: 8px; padding: 7px 0; border-bottom: 1px solid rgba(38,47,66,.5); }
+  .checkrow .lbl { flex: 1; font-size: 13px; }
+  .checkrow .lbl small { display: block; color: var(--dim); font-size: 10.5px; }
+  #qcnotes {
+    width: 100%; height: 64px; background: #0a0d13; color: var(--text); border: 1px solid var(--line);
+    border-radius: 10px; padding: 9px 11px; font: 12.5px/1.5 'Segoe UI', sans-serif; resize: vertical; margin-top: 10px;
+  }
+
+  /* ai review */
+  .scorebar { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+  .scorebar .k { width: 62px; font-size: 12px; color: var(--dim); }
+  .scorebar .bar { flex: 1; height: 8px; background: var(--line); border-radius: 4px; overflow: hidden; }
+  .scorebar .bar i { display: block; height: 100%; border-radius: 4px; }
+  .scorebar .v { width: 38px; text-align: right; font-family: var(--mono); font-size: 12px; }
+  .ai-issues { font-size: 12px; color: var(--dim); margin: 4px 0 10px; padding-left: 16px; }
+  .ai-issues li { margin-bottom: 2px; }
+  .ai-summary { font-size: 12.5px; background: var(--panel2); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin-top: 8px; }
+
+  #qclog {
+    background: #0a0d13; border: 1px solid var(--line); border-radius: 10px; padding: 10px;
+    font-family: var(--mono); font-size: 11px; line-height: 1.5; height: 140px; overflow-y: auto;
+    white-space: pre-wrap; word-break: break-word; color: #b9c4d8;
+  }
+  #qclog .err { color: var(--bad); }
+  .toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--panel2); border: 1px solid var(--accent); color: var(--text); padding: 10px 18px; border-radius: 10px; z-index: 60; display: none; }
+</style>
+</head>
+<body>
+<header>
+  <h1>auto<span>VSL</span> — Quality Control</h1>
+  <span class="pill dim" id="counts"></span>
+  <a href="/subtitles" style="margin-left:auto;background:var(--panel2);border:1px solid var(--line);padding:5px 13px;border-radius:20px;font-weight:600">💬 Subtitles</a>
+  <a href="/">← Mission Control</a>
+</header>
+
+<main>
+  <!-- LEFT: video list -->
+  <section>
+    <div class="panel">
+      <h2>🏆 Model scoreboard <span class="right" style="text-transform:none">which combos actually perform</span></h2>
+      <div id="scoreboard" class="hint">loading…</div>
+    </div>
+    <div class="panel">
+      <h2>Videos to review</h2>
+      <div id="vlist"><span class="hint">loading…</span></div>
+    </div>
+  </section>
+
+  <!-- CENTER: player + subtitle tools -->
+  <section>
+    <div class="panel">
+      <h2 id="curtitle">Pick a video on the left</h2>
+      <div id="playerarea" style="display:none">
+        <div class="vwrap" id="vwrap">
+          <video id="vid" controls playsinline></video>
+          <div id="seloverlay"><div id="selbox"></div></div>
+        </div>
+        <div class="toolbar">
+          <button class="mini" onclick="setSpeed(0.25)" id="sp025">0.25×</button>
+          <button class="mini" onclick="setSpeed(0.5)" id="sp05">0.5×</button>
+          <button class="mini on" onclick="setSpeed(1)" id="sp1">1×</button>
+          <button class="mini" onclick="stepFrame(-1)" title="Back one frame ( , )">⏴ frame</button>
+          <button class="mini" onclick="stepFrame(1)" title="Forward one frame ( . )">frame ⏵</button>
+          <button class="mini" onclick="toggleLoop()" id="loopbtn" title="Loop 3s around the current moment — watch the mouth against the audio">↺ loop 3s</button>
+          <span class="time" id="tdisp">0.00s</span>
+        </div>
+        <div class="hint" style="text-align:center;margin-top:6px">
+          Lip-sync check: play at 0.5×, ↺ loop a speech moment, step frames with <b>,</b> and <b>.</b> — mouth should hit consonants exactly with the audio.
+        </div>
+        <div id="strip"></div>
+
+        <div style="border-top:1px solid var(--line);margin-top:14px;padding-top:12px">
+          <h2>🧹 Clear subtitles</h2>
+          <div class="subtools">
+            <div class="subrow">
+              <button class="primary" style="font-size:14px;padding:10px 20px" onclick="removeSubs('erase')"
+                title="Finds where the captions sit, erases only the letter pixels with AI inpainting, and opens the result when done. Nothing else in the video is touched.">
+                🧹 Remove subtitles — automatic</button>
+              <span class="hint">one click: finds the captions, erases just the letters, opens the result (takes a few minutes — watch the console)</span>
+            </div>
+            <details>
+              <summary style="cursor:pointer;font-size:12px;color:var(--accent2)">advanced — set the area yourself, blur, crop, strip tracks</summary>
+              <div class="subtools" style="margin-top:10px">
+                <div class="subrow">
+                  <button id="bandbtn" onclick="presetBand()" title="Places the search box where captions usually sit (uses the AI review's detected location if you ran one)">▼ Auto box — caption band</button>
+                  <button id="selbtn" onclick="toggleSelect()">▭ Draw box manually</button>
+                  <button id="rmregion" onclick="removeSubs('erase')" disabled title="Erase caption letters inside YOUR box only">🧽 Erase in box</button>
+                  <button id="blregion" onclick="removeSubs('blur')" disabled title="Blur the whole selected area (fallback if Erase misses stylised captions)">🌫 Blur region</button>
+                  <span class="hint" id="selhint">set a box only if the automatic button grabs the wrong area</span>
+                </div>
+                <div class="subrow">
+                  <input type="number" id="croppx" min="10" step="10" value="120" title="pixels to cut off the bottom">
+                  <button onclick="removeSubs('crop')" title="Cut the bottom strip off entirely">✂ Crop bottom px</button>
+                  <button onclick="removeSubs('strip')" title="Removes embedded subtitle tracks without re-encoding. Does not touch burned-in captions.">Strip embedded tracks</button>
+                  <span class="hint">cleaned copies land in <b>output/nosubs/</b> and appear in the list</span>
+                </div>
+              </div>
+            </details>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- RIGHT: specs + AI + checklist + log -->
+  <section>
+    <div class="panel">
+      <h2>Tech specs</h2>
+      <div id="specs" class="hint">select a video</div>
+    </div>
+    <div class="panel">
+      <h2>🤖 AI review <span class="right"><button class="mini primary" id="aibtn" onclick="runAiReview()" disabled>Run AI review</button></span></h2>
+      <div id="aibox" class="hint">Claude inspects extracted frames — mouth/lip-sync artifacts, realism, quality, and burned-in captions. Runs on your Claude subscription (no API cost).</div>
+    </div>
+    <div class="panel">
+      <h2>✅ Manual QC checklist</h2>
+      <div id="checklist" class="hint">select a video</div>
+    </div>
+    <div class="panel">
+      <h2>Console <span class="right" id="qchint">idle</span></h2>
+      <div id="qclog">Jobs you run appear here live.</div>
+    </div>
+  </section>
+</main>
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = s => document.querySelector(s);
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const fmtBytes = b => b > 1e6 ? (b/1e6).toFixed(1)+' MB' : Math.round(b/1e3)+' KB';
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+function toast(msg) {
+  const t = $('#toast'); t.textContent = msg; t.style.display = 'block';
+  setTimeout(() => t.style.display = 'none', 3500);
+}
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+const post = (path, body) => api(path, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+
+let videos = [], reviews = {}, cur = null, curFps = 30, curSubs = 0, curChecks = {}, selection = null;
+
+// ------------------------------------------------------------- list
+const GROUPS = {dub: '🎤 Dubs (lip-synced)', vsl: '🎬 Assembled VSLs', nosubs: '🧹 Subtitle-cleaned', source: '📥 Source uploads'};
+
+function verdictPill(rel) {
+  const r = reviews[rel] || {};
+  if (r.verdict === 'pass') return '<span class="pill ok">✓ pass</span>';
+  if (r.verdict === 'fail') return '<span class="pill bad">✗ fail</span>';
+  const ai = (r.ai && r.ai.overall) ? r.ai.overall.verdict : null;
+  if (ai) return `<span class="pill ${ai === 'pass' ? 'ok' : ai === 'fail' ? 'bad' : 'warn'}">🤖 ${ai}</span>`;
+  return '<span class="pill dim">pending</span>';
+}
+
+function renderList() {
+  let html = '';
+  for (const kind of Object.keys(GROUPS)) {
+    const items = videos.filter(v => v.kind === kind);
+    if (!items.length) continue;
+    html += `<div class="vsec">${GROUPS[kind]}</div>` + items.map(v => `
+      <div class="vrow ${cur === v.path ? 'sel' : ''}" onclick="selectVideo('${v.path}')">
+        <div class="nm" title="${esc(v.path)}">${esc(v.group ? v.group + ' / ' : '')}${esc(v.name)}</div>
+        <span class="meta">${fmtBytes(v.size)}</span>
+        ${v.models?`<span class="pill dim" title="models that created this video">${esc(v.models)}</span>`:''}
+        ${verdictPill(v.path)}
+        ${kind === 'nosubs' ? `<button class="mini danger" onclick="event.stopPropagation();deleteCleaned('${v.path}','${esc(v.name)}')" title="Move to trash">🗑</button>` : ''}
+      </div>`).join('');
+  }
+  $('#vlist').innerHTML = html || '<span class="hint">No videos found — render a dub or VSL first.</span>';
+  const reviewed = Object.values(reviews).filter(r => r.verdict === 'pass' || r.verdict === 'fail').length;
+  $('#counts').textContent = `${videos.length} videos · ${reviewed} reviewed`;
+}
+
+async function loadList() {
+  const d = await api('/api/qc/videos');
+  videos = d.videos; reviews = d.reviews;
+  renderList();
+  loadScoreboard().catch(() => {});
+}
+
+async function loadScoreboard() {
+  const rows = await api('/api/qc/models');
+  $('#scoreboard').innerHTML = rows.length ? rows.map(r => `
+    <div style="display:flex;gap:8px;align-items:center;padding:6px 4px;border-bottom:1px solid rgba(38,47,66,.5);font-size:12.5px">
+      <b style="flex:1">${esc(r.combo)}</b>
+      <span class="pill ${r.avg_score==null?'dim':(r.avg_score>=8?'ok':r.avg_score>=6?'warn':'bad')}"
+        title="average of AI mouth/realism/quality scores">${r.avg_score==null?'no AI review yet':r.avg_score+'/10'}</span>
+      <span class="pill ok" title="your manual passes">✓${r.passes}</span>
+      <span class="pill bad" title="your manual fails">✗${r.fails}</span>
+      <span class="meta">${r.videos} video${r.videos===1?'':'s'}</span>
+    </div>`).join('') +
+    '<div class="hint" style="margin-top:6px">Run 🤖 AI review + Pass/Fail on each dub — this table learns which models to trust.</div>'
+    : '<span class="hint">No dubs yet — dub a video, then review it here.</span>';
+}
+
+async function deleteCleaned(path, name) {
+  if (!confirm(`Move "${name}" to trash?\nYou can restore it from the main dashboard's Trash section.`)) return;
+  try {
+    await api('/api/output?path=' + encodeURIComponent(path), {method: 'DELETE'});
+    if (cur === path) { cur = null; $('#playerarea').style.display = 'none'; $('#curtitle').textContent = 'Pick a video on the left'; }
+    await loadList();
+    toast('Moved to trash.');
+  } catch (e) { toast('Error: ' + e.message.slice(0, 200)); }
+}
+
+// ------------------------------------------------------------- player
+async function selectVideo(path) {
+  cur = path; selection = null; cancelSelect();
+  renderList();
+  const v = videos.find(x => x.path === path);
+  $('#curtitle').textContent = (v ? (v.group ? v.group + ' / ' : '') + v.name : path);
+  $('#playerarea').style.display = '';
+  $('#aibtn').disabled = false;
+  const vid = $('#vid');
+  vid.src = '/media/' + path;
+  vid.playbackRate = 1; setSpeedBtns(1); loopOn = false; $('#loopbtn').classList.remove('on');
+  history.replaceState(null, '', '/qc?path=' + encodeURIComponent(path));
+
+  renderChecklist(); renderAi();
+  $('#specs').innerHTML = '<span class="hint">probing…</span>';
+  $('#strip').innerHTML = '<span class="hint">extracting frames…</span>';
+  try { renderSpecs(await api('/api/qc/probe?path=' + encodeURIComponent(path))); }
+  catch (e) { $('#specs').innerHTML = '<span class="hint">probe failed: ' + esc(e.message.slice(0,120)) + '</span>'; }
+  try {
+    const f = await api('/api/qc/frames?path=' + encodeURIComponent(path) + '&count=10');
+    $('#strip').innerHTML = f.frames.map(fr =>
+      `<img src="/media/${fr.path}" title="jump to ${fr.t}s" onclick="$('#vid').currentTime=${fr.t}">`).join('')
+      || '<span class="hint">no frames</span>';
+  } catch (e) { $('#strip').innerHTML = '<span class="hint">frames failed: ' + esc(e.message.slice(0,120)) + '</span>'; }
+}
+
+function setSpeedBtns(s) {
+  for (const [id, v] of [['#sp025', .25], ['#sp05', .5], ['#sp1', 1]])
+    $(id).classList.toggle('on', v === s);
+}
+function setSpeed(s) { $('#vid').playbackRate = s; setSpeedBtns(s); }
+function stepFrame(dir) {
+  const vid = $('#vid'); vid.pause();
+  vid.currentTime = Math.max(0, vid.currentTime + dir / curFps);
+}
+
+let loopOn = false, loopA = 0, loopB = 0;
+function toggleLoop() {
+  const vid = $('#vid');
+  loopOn = !loopOn;
+  $('#loopbtn').classList.toggle('on', loopOn);
+  if (loopOn) {
+    loopA = Math.max(0, vid.currentTime - 1.5);
+    loopB = loopA + 3;
+    vid.currentTime = loopA; vid.play();
+  }
+}
+$('#vid') && null;
+document.addEventListener('DOMContentLoaded', () => {});
+setInterval(() => {
+  const vid = $('#vid');
+  if (!vid) return;
+  $('#tdisp').textContent = vid.currentTime.toFixed(2) + 's' + (vid.duration ? ' / ' + vid.duration.toFixed(1) + 's' : '');
+  if (loopOn && (vid.currentTime > loopB || vid.currentTime < loopA - 0.2)) vid.currentTime = loopA;
+}, 120);
+
+document.addEventListener('keydown', e => {
+  if (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'INPUT') return;
+  if (e.key === ',') { stepFrame(-1); e.preventDefault(); }
+  if (e.key === '.') { stepFrame(1); e.preventDefault(); }
+});
+
+// ------------------------------------------------------------- specs
+function renderSpecs(probe) {
+  const v = (probe.streams || []).find(s => s.codec_type === 'video') || {};
+  const a = (probe.streams || []).find(s => s.codec_type === 'audio');
+  const subs = (probe.streams || []).filter(s => s.codec_type === 'subtitle');
+  const fmt = probe.format || {};
+  const dur = parseFloat(fmt.duration || 0);
+  const kbps = Math.round((parseInt(fmt.bit_rate || 0)) / 1000);
+  let fps = 30;
+  if (v.r_frame_rate && v.r_frame_rate.includes('/')) {
+    const [n, d] = v.r_frame_rate.split('/').map(Number);
+    if (d) fps = n / d;
+  }
+  curFps = fps || 30;
+  curSubs = subs.length;
+
+  const warns = [];
+  const H = Math.min(v.width || 0, v.height || 0);
+  if (H && H < 720) warns.push(`low resolution (${v.width}×${v.height}) — will look soft on modern phones`);
+  if (kbps && H >= 1000 && kbps < 2500) warns.push(`bitrate ${kbps} kb/s is low for ${v.height}p — expect compression artifacts`);
+  if (fps && fps < 24) warns.push(`${fps.toFixed(1)} fps — motion will stutter`);
+  if (!a) warns.push('no audio stream!');
+  if (subs.length) warns.push(`${subs.length} embedded subtitle track(s) — use "Strip embedded subtitle tracks" below`);
+
+  $('#specs').innerHTML = `<table class="specs">
+    <tr><td>resolution</td><td>${v.width || '?'} × ${v.height || '?'} ${v.height > v.width ? '(vertical ✓)' : ''}</td></tr>
+    <tr><td>frame rate</td><td>${fps ? fps.toFixed(2) : '?'} fps</td></tr>
+    <tr><td>duration</td><td>${dur ? dur.toFixed(1) + 's' : '?'}</td></tr>
+    <tr><td>bitrate</td><td>${kbps ? kbps + ' kb/s' : '?'}</td></tr>
+    <tr><td>video codec</td><td>${esc(v.codec_name || '?')} ${esc(v.profile || '')}</td></tr>
+    <tr><td>audio</td><td>${a ? esc(a.codec_name) + ' · ' + (a.sample_rate || '?') + ' Hz · ' + (a.channels || '?') + 'ch' : '— none —'}</td></tr>
+    <tr><td>subtitle tracks</td><td>${subs.length || 'none'}</td></tr>
+  </table>` + (warns.length ? `<div class="specwarn">⚠ ${warns.map(esc).join('<br>⚠ ')}</div>` : '<div class="hint" style="margin-top:6px">✓ no technical red flags</div>');
+}
+
+// ------------------------------------------------------------- checklist
+const CHECK_DEFS = [
+  ['lip_sync', 'Lip-sync timing', 'mouth hits consonants with the audio (use 0.5× + loop)'],
+  ['dubbing', 'Dubbing / voice', 'voice sounds natural, no robotic tone, matches the person'],
+  ['quality', 'Video quality', 'sharp, no blockiness/banding, colors stable'],
+  ['realism', 'Looks real', 'skin, eyes, teeth, hands, background — no AI tells'],
+];
+
+function renderChecklist() {
+  if (!cur) return;
+  const saved = reviews[cur] || {};
+  curChecks = Object.assign({}, saved.checks || {});
+  const btn = (key, val, label) =>
+    `<button class="mini ${curChecks[key] === val ? 'on' : ''}" onclick="setCheck('${key}','${val}')">${label}</button>`;
+  $('#checklist').innerHTML = CHECK_DEFS.map(([key, label, hint]) => `
+    <div class="checkrow">
+      <div class="lbl">${label}<small>${hint}</small></div>
+      ${btn(key, 'pass', '✓')} ${btn(key, 'fail', '✗')} ${btn(key, 'na', '–')}
+    </div>`).join('') + `
+    <textarea id="qcnotes" placeholder="Notes — what's wrong, what to redo…">${esc(saved.notes || '')}</textarea>
+    <div style="display:flex;gap:8px;margin-top:10px;align-items:center">
+      <button class="primary" onclick="saveReview('pass')">✅ Pass video</button>
+      <button class="danger" onclick="saveReview('fail')">❌ Fail video</button>
+      <button class="mini" onclick="saveReview('pending')">save as pending</button>
+    </div>`;
+}
+
+function setCheck(key, val) {
+  curChecks[key] = curChecks[key] === val ? undefined : val;
+  if (curChecks[key] === undefined) delete curChecks[key];
+  // re-render buttons only (keep notes text)
+  const notes = $('#qcnotes') ? $('#qcnotes').value : '';
+  const saved = reviews[cur] || {};
+  reviews[cur] = Object.assign({}, saved, {checks: curChecks, notes});
+  renderChecklist();
+}
+
+async function saveReview(verdict) {
+  if (!cur) return;
+  try {
+    await post('/api/qc/review', {path: cur, checks: curChecks, notes: $('#qcnotes').value, verdict});
+    toast(verdict === 'pending' ? 'Saved.' : `Marked ${verdict.toUpperCase()}: ${cur.split('/').pop()}`);
+    await loadList();
+    renderChecklist();
+  } catch (e) { toast('Error: ' + e.message.slice(0, 200)); }
+}
+
+// ------------------------------------------------------------- AI review
+function scoreColor(s) { return s >= 8 ? 'var(--ok)' : s >= 6 ? 'var(--warn)' : 'var(--bad)'; }
+
+function renderAi() {
+  const ai = (reviews[cur] || {}).ai;
+  if (!ai) {
+    $('#aibox').innerHTML = '<span class="hint">No AI review yet — click "Run AI review". Claude reads 12 extracted frames (6 spread + 6 mid-speech burst) and scores mouth artifacts, realism, quality and captions.</span>';
+    return;
+  }
+  const bar = (k, label) => {
+    const s = (ai[k] || {}).score || 0;
+    return `<div class="scorebar"><span class="k">${label}</span>
+      <span class="bar"><i style="width:${s * 10}%;background:${scoreColor(s)}"></i></span>
+      <span class="v" style="color:${scoreColor(s)}">${s}/10</span></div>`;
+  };
+  const issues = k => ((ai[k] || {}).issues || []).length
+    ? `<ul class="ai-issues">${(ai[k].issues).map(i => `<li>${esc(i)}</li>`).join('')}</ul>` : '';
+  const o = ai.overall || {};
+  const t = ai.text || {};
+  $('#aibox').innerHTML =
+    bar('mouth', 'mouth') + issues('mouth') +
+    bar('realism', 'realism') + issues('realism') +
+    bar('quality', 'quality') + issues('quality') +
+    `<div style="font-size:12px;margin:6px 0">📝 captions: ${t.subtitles_present
+      ? `<span class="pill warn">present — ${esc(t.location || '?')}</span> <span class="hint">→ use Clear subtitles below</span>`
+      : '<span class="pill ok">none detected</span>'}${(t.issues || []).length ? `<ul class="ai-issues">${t.issues.map(i => `<li>${esc(i)}</li>`).join('')}</ul>` : ''}</div>` +
+    `<div class="ai-summary">
+      <span class="pill ${o.verdict === 'pass' ? 'ok' : o.verdict === 'fail' ? 'bad' : 'warn'}">${esc(o.verdict || '?')}</span>
+      ${esc(o.summary || '')}
+      ${(o.fix_suggestions || []).length ? '<ul class="ai-issues" style="margin-top:6px">' + o.fix_suggestions.map(f => `<li>💡 ${esc(f)}</li>`).join('') + '</ul>' : ''}
+      <div class="hint" style="margin-top:4px">⚠ AI judges frames only — confirm lip-sync <i>timing</i> by ear with the 0.5× loop.</div>
+    </div>`;
+}
+
+async function runAiReview() {
+  if (!cur) return;
+  $('#aibtn').disabled = true;
+  try {
+    const r = await post('/api/qc/ai-review', {path: cur});
+    toast('AI review started — watch the console');
+    await watchJob(r.job_id);
+    await loadList();
+    renderAi();
+  } catch (e) { toast('Error: ' + e.message.slice(0, 200)); }
+  finally { $('#aibtn').disabled = false; }
+}
+
+// ------------------------------------------------------------- subtitle removal
+function toggleSelect() {
+  const ov = $('#seloverlay');
+  if (ov.style.display === 'block') { cancelSelect(); return; }
+  $('#vid').pause();
+  ov.style.display = 'block';
+  $('#selbtn').classList.add('on');
+  $('#selhint').textContent = 'drag a box over the captions…';
+}
+function cancelSelect() {
+  $('#seloverlay').style.display = 'none';
+  $('#selbox').style.display = 'none';
+  $('#selbtn') && $('#selbtn').classList.remove('on');
+  if (!selection) { $('#rmregion').disabled = true; $('#blregion').disabled = true; }
+}
+
+// The <video> letterboxes the picture inside its element (object-fit: contain), so element
+// coordinates must be mapped onto the actual displayed picture, not the whole element.
+function videoContentRect() {
+  const vid = $('#vid');
+  const r = $('#seloverlay').getBoundingClientRect();
+  const va = vid.videoWidth / vid.videoHeight, ea = r.width / r.height;
+  let x, y, w, h;
+  if (va > ea) { w = r.width; h = w / va; x = 0; y = (r.height - h) / 2; }
+  else { h = r.height; w = h * va; y = 0; x = (r.width - w) / 2; }
+  return {x, y, w, h, scale: vid.videoWidth / w, rect: r};
+}
+
+function showSelectionBox() {
+  if (!selection) return;
+  $('#seloverlay').style.display = 'block';   // must be visible BEFORE measuring, else rect is 0×0
+  $('#selbtn').classList.add('on');
+  const c = videoContentRect(), b = $('#selbox');
+  b.style.display = 'block';
+  Object.assign(b.style, {
+    left: (c.x + selection.x / c.scale) + 'px', top: (c.y + selection.y / c.scale) + 'px',
+    width: (selection.w / c.scale) + 'px', height: (selection.h / c.scale) + 'px',
+  });
+  $('#rmregion').disabled = false;
+  $('#blregion').disabled = false;
+  $('#selhint').textContent = `region ${selection.w}×${selection.h} at (${selection.x},${selection.y}) — now 🧽 Erase text`;
+}
+
+function presetBand() {
+  const vid = $('#vid');
+  if (!vid.videoWidth) { toast('Wait for the video to load first'); return; }
+  vid.pause();
+  const ai = (reviews[cur] || {}).ai;
+  const loc = (ai && ai.text && ai.text.subtitles_present && ai.text.location) || 'bottom';
+  const bands = {top: [0.06, 0.26], middle: [0.38, 0.62], bottom: [0.70, 0.92]};
+  const [a, b] = bands[loc] || bands.bottom;
+  const W = vid.videoWidth, H = vid.videoHeight;
+  selection = {x: Math.round(W * 0.04), y: Math.round(H * a),
+               w: Math.round(W * 0.92), h: Math.round(H * (b - a))};
+  showSelectionBox();
+  $('#selhint').textContent = `auto ${loc} band ${selection.w}×${selection.h} — adjust by dragging if needed, then 🧽 Erase text`;
+}
+
+let dragStart = null;
+const ov = $('#seloverlay');
+const clampPt = (e, c) => ({
+  x: Math.min(Math.max(e.clientX - c.rect.left, c.x), c.x + c.w),
+  y: Math.min(Math.max(e.clientY - c.rect.top, c.y), c.y + c.h),
+});
+ov.addEventListener('mousedown', e => {
+  if (!$('#vid').videoWidth) { toast('The video is still loading — wait for it to appear, then draw the box'); return; }
+  dragStart = clampPt(e, videoContentRect());
+  const b = $('#selbox');
+  b.style.display = 'block';
+  Object.assign(b.style, {left: dragStart.x + 'px', top: dragStart.y + 'px', width: '0px', height: '0px'});
+  e.preventDefault();
+});
+ov.addEventListener('mousemove', e => {
+  if (!dragStart) return;
+  const p = clampPt(e, videoContentRect());
+  Object.assign($('#selbox').style, {
+    left: Math.min(p.x, dragStart.x) + 'px', top: Math.min(p.y, dragStart.y) + 'px',
+    width: Math.abs(p.x - dragStart.x) + 'px', height: Math.abs(p.y - dragStart.y) + 'px',
+  });
+});
+ov.addEventListener('mouseup', e => {
+  if (!dragStart) return;
+  const c = videoContentRect(), p = clampPt(e, c);
+  const x = Math.min(p.x, dragStart.x) - c.x, y = Math.min(p.y, dragStart.y) - c.y;
+  const w = Math.abs(p.x - dragStart.x), h = Math.abs(p.y - dragStart.y);
+  dragStart = null;
+  if (w < 6 || h < 6) return;
+  selection = {x: Math.round(x * c.scale), y: Math.round(y * c.scale),
+               w: Math.round(w * c.scale), h: Math.round(h * c.scale)};
+  showSelectionBox();
+});
+
+async function removeSubs(method) {
+  if (!cur) return;
+  if (method === 'strip' && curSubs === 0) {
+    toast('No embedded subtitle tracks in this file — your captions are burned into the picture. Use ▼ Auto box (or draw one), then 🧽 Erase text.');
+    return;
+  }
+  const body = {path: cur, method};
+  if (method === 'crop') {
+    body.bottom = parseInt($('#croppx').value) || 0;
+    if (!body.bottom) { toast('Enter how many pixels to crop off the bottom'); return; }
+  }
+  const validSel = selection && selection.w >= 8 && selection.h >= 8 && isFinite(selection.x + selection.y);
+  if (method === 'erase') {
+    if (validSel) Object.assign(body, selection);   // no box → the server auto-detects the captions
+  }
+  if (method === 'delogo' || method === 'blur') {
+    if (!validSel) {
+      toast('Set the caption region first — click ▼ Auto box, or ▭ Draw box manually (after the video loads)');
+      return;
+    }
+    Object.assign(body, selection);
+  }
+  try {
+    const r = await post('/api/qc/remove-subs', body);
+    toast('Cleaning started → ' + r.output);
+    cancelSelect(); selection = null;
+    $('#rmregion').disabled = true; $('#blregion').disabled = true;
+    const j = await watchJob(r.job_id);
+    await loadList();
+    if (j && j.status === 'done') {
+      toast('✓ Cleaned — opening the result so you can check it');
+      selectVideo(r.output);
+    }
+  } catch (e) { toast('Error: ' + e.message.slice(0, 200)); }
+}
+
+// ------------------------------------------------------------- job console
+async function watchJob(jobId) {
+  let off = 0;
+  const log = $('#qclog');
+  log.textContent = '';
+  while (true) {
+    let j;
+    try { j = await api(`/api/job/${jobId}?offset=${off}`); }
+    catch (e) { await sleep(1500); continue; }
+    for (const line of j.lines) {
+      const div = document.createElement('div');
+      div.textContent = line;
+      if (/error|failed|traceback/i.test(line)) div.className = 'err';
+      log.appendChild(div);
+    }
+    if (j.lines.length) log.scrollTop = log.scrollHeight;
+    off = j.next_offset;
+    $('#qchint').textContent = j.status === 'running' ? 'running…' : j.status;
+    if (j.status !== 'running') { toast(j.label + ': ' + j.status); return j; }
+    await sleep(900);
+  }
+}
+
+// ------------------------------------------------------------- boot
+(async () => {
+  await loadList();
+  const want = new URLSearchParams(location.search).get('path');
+  if (want && videos.some(v => v.path === want)) selectVideo(want);
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,149 @@
+{
+  "brand": "Fairy Flame (liitt)",
+  "source": "research/fairy-flame/brand/03-brand-platform.md + 05-brand-kit-spec.md (2026-07)",
+  "world": "The Glow \u2014 the light coming back on inside her. Dark indigo 'before' world; gold glow = the after-state; the deep-magenta flame gummy is the Ember.",
+  "tokens": {
+    "bg_base": "#0B0A1C",
+    "surface": "#1C1A3A",
+    "surface_2": "#252247",
+    "accent_gold": "#E8B84A",
+    "accent_gold_bright": "#F5C542",
+    "accent_raspberry": "#B23A6E",
+    "accent_indigo": "#4B40C9",
+    "text_on_dark": "#F4F1E8",
+    "text_muted": "#B9B4CC",
+    "ink_on_gold": "#0B0A1C",
+    "type_stack": "Bricolage Grotesque (display) / Newsreader (body) / Hanken Grotesk (eyebrow, 2px tracking)",
+    "rules": [
+      "never white on gold",
+      "dark pouch + small lights = shelf differentiation",
+      "no candy-bright, no trippy cliches"
+    ]
+  },
+  "fonts": {
+    "display": {
+      "file": "brand-assets/fonts/BricolageGrotesque.ttf",
+      "static": true
+    },
+    "body": {
+      "file": "brand-assets/fonts/Newsreader.ttf",
+      "variable": true,
+      "weight": 420
+    },
+    "eyebrow": {
+      "file": "brand-assets/fonts/HankenGrotesk.ttf",
+      "variable": true,
+      "weight": 600,
+      "tracking_px": 2
+    }
+  },
+  "wordmark": {
+    "text": "liitt",
+    "twin_wick": "the two 'i' dots are lit wicks with small gold flame glows",
+    "gold_on_dark": "brand-assets/wordmark/liitt-gold-on-dark.png",
+    "light": "brand-assets/wordmark/liitt-light.png",
+    "user_override": "brand-assets/wordmark/official-logo.png",
+    "approved": true
+  },
+  "product": {
+    "brand": "liitt",
+    "name": "Fairy Flame",
+    "actives_phrase": "microdose gummies",
+    "url": "fairyflame.com",
+    "prices": {
+      "1-pouch": "$69",
+      "3-pouch": "$189",
+      "6-pouch": "$329"
+    },
+    "default_offer": "3-pouch $189",
+    "guarantee": "60-day money-back"
+  },
+  "compliance": {
+    "banned_words": [
+      "wellness",
+      "journey",
+      "holistic"
+    ],
+    "banned_claims_regex": "\\b(cure|cures|cured|treat|treats|treated|heal|heals|healed|prevent|prevents|diagnos\\w*|guaranteed results)\\b",
+    "claims_rule": "'supports' framing only \u2014 no disease/medical claims. Personal-experience framing ('I felt...') is fine.",
+    "names_locked": "brand is always 'liitt'; product is always 'Fairy Flame'; call the active 'microdose gummies' only \u2014 never name specific actives in ad copy",
+    "glow_rule": "'glow' means inner light returning, never skin/beauty glow"
+  },
+  "platforms": {
+    "meta-1x1": {
+      "label": "Meta / Instagram square",
+      "w": 1080,
+      "h": 1080,
+      "gen_w": 576,
+      "gen_h": 576,
+      "safe": {
+        "top": 64,
+        "bottom": 64,
+        "left": 64,
+        "right": 64
+      }
+    },
+    "ig-4x5": {
+      "label": "Instagram 4:5 feed",
+      "w": 1080,
+      "h": 1350,
+      "gen_w": 512,
+      "gen_h": 640,
+      "safe": {
+        "top": 80,
+        "bottom": 120,
+        "left": 64,
+        "right": 64
+      }
+    },
+    "story-9x16": {
+      "label": "TikTok / Reels / Story",
+      "w": 1080,
+      "h": 1920,
+      "gen_w": 432,
+      "gen_h": 768,
+      "safe": {
+        "top": 240,
+        "bottom": 320,
+        "left": 64,
+        "right": 64
+      }
+    }
+  },
+  "avatar": "The Vanished Woman \u2014 high-functioning woman 40-55 who did everything right and still doesn't feel like herself. After-language: 'I feel like myself again.'",
+  "style_suffix": "editorial mystic photography, deep indigo night palette with warm gold glow accents, premium calm aesthetic, cinematic soft light, photorealistic, high-end wellness brand, muted and restrained",
+  "negative_prompt": "candy colors, neon rave, psychedelic trippy patterns, clutter, cheap stock photo look, oversaturated, discount promo style, text, watermark, low quality, blurry, deformed hands, extra fingers",
+  "presets": [
+    {
+      "id": "product-hero",
+      "label": "Product hero \u2014 dark pouch, the Glow",
+      "prompt": "matte dark-indigo product pouch on a dark stone surface, two small warm golden lights glowing beside it, single beam of soft gold light from above, deep magenta flame-shaped gummies spilling artfully, editorial product photography"
+    },
+    {
+      "id": "pain-mirror",
+      "label": "Pain mirror \u2014 the before state (b-roll)",
+      "prompt": "woman in her 40s at a kitchen table at dusk, blue-grey fog-like light, palm to forehead, mail piled up, wine glass untouched, exhausted but holding it together, documentary realism, muted cold palette"
+    },
+    {
+      "id": "glow-moment",
+      "label": "Glow moment \u2014 the after state (b-roll)",
+      "prompt": "woman in her 40s laughing warmly in a golden-lit kitchen in the evening, singing to herself while cooking, family blurred in warm background, light literally warmer around her, candid joyful realism"
+    },
+    {
+      "id": "ritual-macro",
+      "label": "Ritual macro \u2014 the Ember",
+      "prompt": "extreme macro of a deep magenta flame-shaped gummy held between two fingers against a dark indigo background, single warm gold rim light, glowing as if lit from within, luxurious minimal composition"
+    },
+    {
+      "id": "old-photo",
+      "label": "Identity hook \u2014 the old photo",
+      "prompt": "hands holding a printed photograph of a vibrant smiling woman from ten years ago, dim evening bedroom light in the present, emotional cinematic contrast between the bright photo and the muted room"
+    },
+    {
+      "id": "coffee-ritual",
+      "label": "liitt coffee \u2014 morning ritual",
+      "prompt": "mushroom coffee in a ceramic mug on a dark wood counter at dawn, steam catching a single ray of warm gold morning light, dark indigo shadows, calm premium morning ritual, editorial still life"
+    }
+  ],
+  "usage_note": "Presets map to the angle bank: pain-mirror/glow-moment serve an-0001 (red flags -> root cause) before/after beats; old-photo serves the identity-reclamation hook class; product-hero/ritual-macro are offer-stack statics. All output must respect 'supports' framing \u2014 never render medical claims as text."
+}

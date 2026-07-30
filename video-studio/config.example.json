@@ -1,0 +1,37 @@
+{
+  "port": 5180,
+  "autovsl_root": "<REPO_ROOT>/autoVSL",
+  "engines_dir": "<REPO_ROOT>/autoVSL/dashboard",
+  "subtitle_studio": "<REPO_ROOT>/subtitle-studio",
+  "dubbing_studio": "<REPO_ROOT>/dubbing-studio",
+  "course_pipeline": "<REPO_ROOT>/course_pipeline",
+  "engines": {
+    "erase": "<REPO_ROOT>/subtitle-studio/erase_subs.py",
+    "recaption": "<REPO_ROOT>/subtitle-studio/recaption.py",
+    "lipsync": "<REPO_ROOT>/dubbing-studio/lipsync.py"
+  },
+  "venvs": {
+    "cv": "<REPO_ROOT>/autoVSL/.venv/Scripts/python.exe",
+    "whisper": "<REPO_ROOT>/course_pipeline/.venv/Scripts/python.exe",
+    "vsr": "<REPO_ROOT>/tools/vsr/.venv/Scripts/python.exe",
+    "dub": "<REPO_ROOT>/dubbing-studio/venv/Scripts/python.exe"
+  },
+  "weights": {
+    "propainter": "<REPO_ROOT>/tools/ProPainter",
+    "wav2lip": "<REPO_ROOT>/tools/Wav2Lip",
+    "codeformer": "<REPO_ROOT>/CodeFormer"
+  },
+  "exports_dir": "<YOUR_DESKTOP>/Video Studio",
+  "bash": "C:/Program Files/Git/bin/bash.exe",
+  "comfyui": "127.0.0.1:8188",
+  "brand_kit": "<REPO_ROOT>/autoVSL/banks/liitt-brand-kit.json",
+  "banks_dir": "<REPO_ROOT>/autoVSL/banks",
+  "brand_out": "<REPO_ROOT>/autoVSL/output/brand-content",
+  "remote_pin": "000000",
+  "secret_key": "",
+  "lan_access": true,
+  "auto_cleanup": {
+    "enabled": true,
+    "delay_hours": 24.0
+  }
+}

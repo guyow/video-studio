@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ComfyUI Studio — autoVSL</title>
+<style>
+  :root{--bg:#0e1116;--panel:#161b22;--panel2:#1c232d;--line:#2a3441;--fg:#e6edf3;--dim:#8b98a5;--accent:#7c5cff;--accent2:#00d0b0;}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 -apple-system,Segoe UI,Roboto,sans-serif}
+  header{padding:18px 22px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:14px}
+  header h1{font-size:19px;margin:0}
+  header .sub{color:var(--dim);font-size:12.5px}
+  a{color:var(--accent2);text-decoration:none}
+  .wrap{max-width:1100px;margin:0 auto;padding:22px}
+  .tabs{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:18px}
+  .tab{padding:9px 15px;border:1px solid var(--line);border-radius:10px;background:var(--panel);cursor:pointer;font-weight:600}
+  .tab.on{border-color:var(--accent);background:var(--panel2);color:#fff}
+  .tab small{display:block;font-weight:400;color:var(--dim);font-size:11px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px;margin-bottom:16px}
+  label{display:block;font-size:12.5px;color:var(--dim);margin:10px 0 4px}
+  input[type=text],textarea,input[type=number]{width:100%;background:var(--panel2);border:1px solid var(--line);border-radius:9px;color:var(--fg);padding:9px 11px;font:inherit}
+  textarea{min-height:70px;resize:vertical}
+  .row{display:flex;gap:12px;flex-wrap:wrap}
+  .row>div{flex:1;min-width:120px}
+  .drop{border:1.5px dashed var(--line);border-radius:11px;padding:16px;text-align:center;color:var(--dim);cursor:pointer;background:var(--panel2)}
+  .drop.has{border-color:var(--accent2);color:var(--fg)}
+  .drop img{max-height:120px;max-width:100%;border-radius:8px;margin-top:8px}
+  button.run{margin-top:16px;background:var(--accent);color:#fff;border:0;border-radius:10px;padding:11px 20px;font-weight:700;font-size:14px;cursor:pointer}
+  button.run:disabled{opacity:.5;cursor:wait}
+  .note{font-size:12px;color:var(--dim);margin-top:8px}
+  .warn{color:#ffcb6b}
+  #log{white-space:pre-wrap;font-family:ui-monospace,Consolas,monospace;font-size:11.5px;color:var(--dim);background:#0a0d12;border:1px solid var(--line);border-radius:9px;padding:11px;max-height:180px;overflow:auto;margin-top:14px;display:none}
+  .results{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px;margin-top:16px}
+  .results a{display:block;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--panel2)}
+  .results img{width:100%;display:block}
+  .spin{display:none;margin-top:14px;color:var(--accent2)}
+  .spin.on{display:block}
+  .free{display:inline-block;background:rgba(0,208,176,.13);color:var(--accent2);border:1px solid var(--accent2);border-radius:999px;padding:1px 9px;font-size:11px;font-weight:700}
+</style>
+</head>
+<body>
+<header>
+  <h1>🎨 ComfyUI Studio</h1>
+  <span class="sub">Local, free image tools on your GPU <span class="free">$0</span></span>
+  <span style="margin-left:auto"><a href="/">← Mission Control</a></span>
+</header>
+<div class="wrap">
+  <div class="tabs" id="tabs">
+    <div class="tab on" data-m="generate">🖼️ Generate<small>prompt → N variations</small></div>
+    <div class="tab" data-m="upscale">🔍 Upscale<small>image → 4× HD</small></div>
+    <div class="tab" data-m="inpaint">🩹 Inpaint<small>repaint a masked area</small></div>
+    <div class="tab" data-m="keyframe">🎭 Keyframe<small>consistent, ControlNet-guided</small></div>
+  </div>
+
+  <div class="card" id="form"></div>
+
+  <button class="run" id="runbtn" onclick="runNow()">Run</button>
+  <div class="spin" id="spin">⏳ Working on your GPU… (generate ~1–2 min · upscale ~45s · keyframe slow on 4 GB)</div>
+  <div id="log"></div>
+  <div class="results" id="results"></div>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+let mode = 'generate';
+const uploaded = {};          // field -> server path
+let BRAND = {presets:[], style_suffix:'', negative_prompt:''};
+fetch('/api/studio/brand').then(r=>r.json()).then(j=>{ BRAND=j; fillPresets(); }).catch(()=>{});
+
+function fillPresets(){
+  const sel = $('#f_preset'); if(!sel) return;
+  sel.innerHTML = '<option value="">— custom (no preset) —</option>' +
+    (BRAND.presets||[]).map(p=>`<option value="${p.id}">${p.label}</option>`).join('');
+}
+function applyPreset(){
+  const id = $('#f_preset').value;
+  const p = (BRAND.presets||[]).find(x=>x.id===id);
+  if(p) $('#f_prompt').value = p.prompt;
+}
+
+const FORMS = {
+  generate: `
+    <label>🔥 Fairy Flame / liitt brand preset (auto-styles the prompt to the brand kit)</label>
+    <select id="f_preset" onchange="applyPreset()"><option value="">— custom (no preset) —</option></select>
+    <label>Prompt</label><textarea id="f_prompt" placeholder="liitt lions mane gummies jar on a marble kitchen counter, soft morning light, product photography, photorealistic"></textarea>
+    <label style="display:flex;gap:8px;align-items:center;cursor:pointer;margin-top:8px">
+      <input type="checkbox" id="f_brandstyle" checked style="accent-color:var(--accent)">
+      Apply liitt brand style (editorial mystic · indigo/gold Glow palette + brand negative prompt)
+    </label>
+    <div class="row">
+      <div><label>Variations</label><input type="number" id="f_count" value="4" min="1" max="8"></div>
+      <div><label>Width</label><input type="number" id="f_width" value="512" step="64"></div>
+      <div><label>Height</label><input type="number" id="f_height" value="768" step="64"></div>
+    </div>
+    <div class="note">Batch-generate ad creatives / product shots / VSL keyframes. SD 1.5 (DreamShaper), free & local. Presets come from <b>banks/liitt-brand-kit.json</b> (The Glow brand platform + angle bank).</div>`,
+  upscale: `
+    ${dropHtml('image','Image to upscale')}
+    <div class="note">4× Real-ESRGAN upscale — turn a 512px shot into 2048px, ad-ready.</div>`,
+  inpaint: `
+    ${dropHtml('image','Base image')}
+    ${dropHtml('mask','Mask (white = repaint area)')}
+    <label>What to paint in the masked area</label><textarea id="f_prompt" placeholder="a potted green plant on the counter, natural light"></textarea>
+    <div class="note">Swap a background, place a product, fix a region. White mask pixels get regenerated.</div>`,
+  keyframe: `
+    ${dropHtml('image','Reference image (composition to keep)')}
+    <label>Prompt for the new frame</label><textarea id="f_prompt" placeholder="same man same pose, warm evening lamp light, photorealistic"></textarea>
+    <div class="row">
+      <div><label>Width</label><input type="number" id="f_width" value="512" step="64"></div>
+      <div><label>Height</label><input type="number" id="f_height" value="768" step="64"></div>
+      <div><label>Strength</label><input type="number" id="f_strength" value="0.8" step="0.05" min="0" max="1"></div>
+    </div>
+    <div class="note warn">⚠ ControlNet is slow on 4 GB in full-VRAM mode (~10 min). For usable speed, launch ComfyUI with <b>run_nvidia_lowvram.bat</b> for keyframe work.</div>`
+};
+
+function dropHtml(field,label){
+  return `<label>${label}</label>
+    <div class="drop" id="d_${field}" onclick="document.getElementById('i_${field}').click()">
+      <span id="t_${field}">Click to choose an image</span>
+      <input type="file" id="i_${field}" accept="image/*" style="display:none" onchange="onFile('${field}',this)">
+    </div>`;
+}
+
+function render(){
+  $('#form').innerHTML = FORMS[mode];
+  $('#results').innerHTML = ''; $('#log').style.display='none';
+  fillPresets();   // repopulate the brand preset select after re-render
+}
+async function onFile(field,input){
+  const file = input.files[0]; if(!file) return;
+  const t = $('#t_'+field); t.textContent = 'Uploading…';
+  const fd = new FormData(); fd.append('image', file);
+  const r = await fetch('/api/studio/upload',{method:'POST',body:fd});
+  const j = await r.json(); uploaded[field] = j.path;
+  const d = $('#d_'+field); d.classList.add('has');
+  t.innerHTML = file.name + '<br><img src="'+URL.createObjectURL(file)+'">';
+}
+async function runNow(){
+  const body = {mode};
+  const p = $('#f_prompt'); if(p) body.prompt = p.value;
+  // brand style: wrap the prompt in the liitt/Fairy Flame look + brand negative
+  const bs = $('#f_brandstyle');
+  if(mode==='generate' && bs && bs.checked && BRAND.style_suffix){
+    body.prompt = (body.prompt||'').replace(/[,.\s]+$/,'') + ', ' + BRAND.style_suffix;
+    if(BRAND.negative_prompt) body.negative = BRAND.negative_prompt;
+  }
+  ['count','width','height','strength'].forEach(k=>{const e=$('#f_'+k); if(e) body[k]=e.value;});
+  if(mode!=='generate'){ if(!uploaded.image){ alert('Choose an image first.'); return; } body.image = uploaded.image; }
+  if(mode==='inpaint' && uploaded.mask) body.mask = uploaded.mask;
+  $('#runbtn').disabled = true; $('#spin').classList.add('on'); $('#results').innerHTML=''; $('#log').style.display='none';
+  try{
+    const r = await fetch('/api/studio/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    const j = await r.json();
+    if(j.results && j.results.length){
+      $('#results').innerHTML = j.results.map(u=>`<a href="${u}" target="_blank"><img src="${u}?t=${Date.now()}"></a>`).join('');
+    }
+    if(!j.ok || !j.results.length){ const l=$('#log'); l.style.display='block'; l.textContent = j.log || 'No output produced.'; }
+  }catch(e){ const l=$('#log'); l.style.display='block'; l.textContent='Request failed: '+e; }
+  $('#runbtn').disabled = false; $('#spin').classList.remove('on');
+}
+document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{
+  document.querySelectorAll('.tab').forEach(x=>x.classList.remove('on'));
+  t.classList.add('on'); mode = t.dataset.m; render();
+});
+render();
+</script>
+</body>
+</html>

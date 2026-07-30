@@ -1,0 +1,55 @@
+---
+description: Build VSLs with free external generation + Palmier/ffmpeg assembly
+globs:
+  - vsls/**
+  - templates/**
+alwaysApply: false
+---
+
+# VSL Workflow (autoVSL)
+
+When the user asks to build, sequence, or edit a VSL:
+
+## Prerequisites
+
+1. **Palmier Pro** must be open with a project (macOS 26+, Apple Silicon)
+2. **Palmier MCP** connected at `http://127.0.0.1:19789/mcp`
+3. Media files placed in the VSL's `media/` folder per `timeline.json`
+
+## Build sequence (Palmier MCP)
+
+1. Read `vsls/<slug>/timeline.json` and `brief.md`
+2. Verify all media files exist under `media_root`
+3. Use Palmier MCP to:
+   - `importMedia` — import all video, VO, and music files
+   - Place video clips on track 0 in segment order
+   - Place VO clips on track 1, aligned to each video segment
+   - Place music on track 2, full length, at specified volume
+   - Trim clips so each video segment matches its VO duration
+   - Apply cross-dissolves (0.3–0.5s) between segments
+   - Duck music under voiceover
+4. `inspectTimeline` to verify before export
+5. Report any missing files or timing issues
+
+## Generating new assets (FREE — never use Palmier generate_*)
+
+**VO (automated, free):**
+```bash
+python3 scripts/generate-vo.py <slug>
+```
+
+**Video + music (manual, free tiers):**
+See `docs/free-generation.md`. Run `scripts/print-prompts.sh <slug>` for copy-paste prompts.
+
+**NEVER call Palmier `generate_video`, `generate_audio`, or `generate_image`** — they cost money. Palmier is import + edit only.
+
+## New VSL from template
+
+Copy `templates/vsl-template/` to `vsls/<new-slug>/`, fill in brief, shots, VO, music, and timeline.json.
+
+## Style rules (all VSLs)
+
+- Cinematic, filmic, warm tones — never stock-footage energy
+- No hard sell, no before/after splits, no EDM
+- VO drives pacing; video supports emotion
+- Product shot + CTA always last segment

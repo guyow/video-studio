@@ -44,7 +44,20 @@ dubbing-studio/outputs/
 **/__pycache__/
 
 # autoVSL is its own git repository (committed separately)
-/autoVSL/
+# autoVSL: ship its SOURCE, never its media/renders/keys
+/autoVSL/.venv/
+/autoVSL/.env
+/autoVSL/uploads/
+/autoVSL/output/
+/autoVSL/outputs/
+/autoVSL/vsls/
+/autoVSL/comfyui-output/
+/autoVSL/.trash/
+/autoVSL/temp/
+/autoVSL/courses/
+/autoVSL/research/
+/autoVSL/products/*/offer.md
+/autoVSL/banks/*.jsonl
 
 # Course videos (large, licensed content — never commit)
 /courses/
@@ -89,3 +102,7 @@ Thumbs.db
 /mv2.json
 /st.json
 /vfy.json
+
+# live config holds this machine's session key + phone PIN - config.example.json is the template
+/video-studio/config.json
+/video-studio/jobs/

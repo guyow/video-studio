@@ -1,0 +1,86 @@
+{
+  "product": "Fairy Flame Microdose Gummies",
+  "slug": "fairy-flame",
+  "created": "2026-07-05",
+  "stage": 6,
+  "stages": {
+    "1_product_intake": {
+      "status": "done",
+      "offer_doc": "offer.md",
+      "stories": ["stories/founder-story.md"],
+      "gaps": [
+        "proof numbers (review counts, press bar) excluded until real data exists"
+      ]
+    },
+    "2_avatar_research": {
+      "status": "done",
+      "research": "avatars/research.md",
+      "avatars": [
+        "avatars/burned-out-mom.md",
+        "avatars/blocked-microdoser.md",
+        "avatars/numbed-med-user.md",
+        "avatars/sober-ritual-seeker.md"
+      ],
+      "chosen_avatar": "avatars/burned-out-mom.md"
+    },
+    "3_angles": {
+      "status": "done",
+      "angles_file": "angles/burned-out-mom-angles.md",
+      "top_10": [
+        "photo-before-kids (Been-There Mom 48F, emotional story)",
+        "wine-isnt-calming-you (Been-There Mom 48F, contrarian)",
+        "husband-asked-what-changed (Been-There Mom 48F, testimonial)",
+        "photo-ten-years-ago (Been-There Mom 48F, identity question)",
+        "3-signs-running-on-empty (Nurse 52F, red flags)",
+        "take-more-walks-worst-advice (Nurse 52F, authority root cause)",
+        "anxiety-peaks-45-55 (Nurse 52F, shocking stat)",
+        "stop-coffee-for-fog (Nurse 52F, contrarian)",
+        "one-body-founder-story (Founder 38M, emotional story)",
+        "gas-station-gummies-expose (Founder 38M, ingredient expose)"
+      ]
+    },
+    "4_scripts": {
+      "status": "done",
+      "angle_matching": "scripts/00-angle-matching.md",
+      "scripts": [
+        {"file": "scripts/01-photo-before-kids.md", "angle": 1, "formula": "farmers-dog-cactus", "status": "approved"},
+        {"file": "scripts/02-3-signs-running-on-empty.md", "angle": 5, "formula": "ryze-blood-sugar-red-flags", "status": "approved"},
+        {"file": "scripts/03-husband-asked-what-changed.md", "angle": 3, "formula": "jones-rd + ryze-timeline", "status": "approved"},
+        {"file": "scripts/04-one-body-founder-story.md", "angle": 9, "formula": "farmers-dog-founders", "status": "approved"},
+        {"file": "scripts/05-wine-isnt-calming-you.md", "angle": 2, "formula": "ryze-blood-sugar-red-flags", "status": "approved"},
+        {"file": "scripts/06-photo-ten-years-ago.md", "angle": 4, "formula": "mushroom-coffee-prostate", "status": "approved"},
+        {"file": "scripts/07-take-more-walks.md", "angle": 6, "formula": "primal-queen-hysterectomy", "status": "approved"},
+        {"file": "scripts/08-anxiety-peaks-45-55.md", "angle": 7, "formula": "primal-queen-hysterectomy", "status": "approved"},
+        {"file": "scripts/09-stop-coffee-for-fog.md", "angle": 8, "formula": "ryze-blood-sugar + ryze-timeline", "status": "approved"},
+        {"file": "scripts/10-gas-station-gummies.md", "angle": 10, "formula": "farmers-dog-founders + pestie", "status": "approved"}
+      ]
+    },
+    "5_shot_list": {
+      "status": "done",
+      "shot_lists": ["shot-lists/master-shot-list.md"]
+    },
+    "6_generation": {
+      "status": "not_started",
+      "vsl_slugs": []
+    }
+  },
+  "upsells": {
+    "status": "review",
+    "scripts": [
+      {"file": "upsells/oto1-6-pouch-control.md", "oto": 1, "formula": "warning-stock-up", "status": "review"},
+      {"file": "upsells/oto1-6-pouch-challenger.md", "oto": 1, "formula": "olof-compressed", "status": "review"},
+      {"file": "upsells/oto2-3-pouch-downsell.md", "oto": 2, "formula": "downsell-compressed", "status": "review"}
+    ],
+    "flags": [
+      "OTO1 price placeholder: $33/pouch x6 = $198",
+      "Downsell price placeholder: $39/pouch x3 = $117",
+      "Button texts placeholder",
+      "Supply-risk claims (small batches, weeks-long restock) need truth confirmation",
+      "Therapy cost anchor ($200/session) needs approval"
+    ]
+  },
+  "performance": {
+    "notes": "media buyer agent writes CPA/CTR/hook-winner data here per script/angle to drive kill-or-iterate decisions",
+    "results": []
+  }
+}

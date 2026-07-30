@@ -1,0 +1,345 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Subtitle Eraser — autoVSL</title>
+<style>
+  :root {
+    --bg:#0b0e14; --panel:#141926; --panel2:#1b2231; --line:#28324a;
+    --text:#eef2fb; --dim:#8b96ab; --accent:#7c5cff; --accent2:#4cc9f0;
+    --ok:#3ddc84; --bad:#ff5c72; --warn:#ffb454;
+    --radius:14px; --mono:ui-monospace,'Cascadia Code',Consolas,monospace;
+  }
+  * { box-sizing:border-box; margin:0; }
+  body { background:radial-gradient(1200px 600px at 70% -10%, #1a2036 0%, var(--bg) 55%); color:var(--text);
+         font:15px/1.55 'Segoe UI',system-ui,sans-serif; min-height:100vh; }
+  a { color:var(--accent2); text-decoration:none; }
+  header { display:flex; align-items:center; gap:14px; padding:16px 26px; border-bottom:1px solid var(--line);
+           position:sticky; top:0; background:rgba(11,14,20,.9); backdrop-filter:blur(8px); z-index:20; }
+  header h1 { font-size:18px; letter-spacing:.3px; }
+  header h1 b { color:var(--accent); }
+  header .sub { color:var(--dim); font-size:12.5px; }
+  header .nav { margin-left:auto; display:flex; gap:8px; }
+  header .nav a { background:var(--panel2); border:1px solid var(--line); padding:6px 13px; border-radius:20px; font-size:13px; font-weight:600; }
+  header .nav a:hover { border-color:var(--accent); }
+  main { display:grid; grid-template-columns:330px 1fr; gap:20px; padding:20px 26px; max-width:1500px; margin:0 auto; align-items:start; }
+  @media (max-width:1050px){ main { grid-template-columns:1fr; } }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:var(--radius); padding:18px; margin-bottom:18px; }
+  .card h2 { font-size:12px; text-transform:uppercase; letter-spacing:1.3px; color:var(--dim); margin-bottom:14px; }
+  .card h2 .r { float:right; font-weight:400; text-transform:none; letter-spacing:0; }
+
+  /* dropzone + list */
+  .drop { display:block; border:2px dashed var(--line); border-radius:12px; padding:20px; text-align:center;
+          color:var(--dim); cursor:pointer; transition:.15s; font-size:13.5px; margin-bottom:14px; }
+  .drop:hover,.drop.drag { border-color:var(--accent); color:var(--accent2); background:rgba(124,92,255,.06); }
+  .sec { font-size:10.5px; text-transform:uppercase; letter-spacing:1px; color:var(--dim); margin:14px 0 7px; }
+  .sec:first-child { margin-top:0; }
+  .row { display:flex; align-items:center; gap:9px; padding:9px 11px; border:1px solid var(--line); border-radius:11px;
+         background:var(--panel2); margin-bottom:7px; cursor:pointer; font-size:13px; transition:.12s; }
+  .row:hover { border-color:var(--accent); transform:translateX(2px); }
+  .row.sel { border-color:var(--accent); background:rgba(124,92,255,.14); box-shadow:0 0 0 1px var(--accent) inset; }
+  .row .nm { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:600; }
+  .row .mt { color:var(--dim); font-size:10.5px; flex:none; }
+  .badge { display:inline-block; padding:1px 8px; border-radius:9px; font-size:10px; font-weight:700; flex:none; }
+  .badge.clean { background:rgba(61,220,132,.16); color:var(--ok); }
+  .badge.src { background:rgba(139,150,171,.16); color:var(--dim); }
+
+  /* stage / player */
+  .stage { position:relative; background:#000; border-radius:12px; overflow:hidden; min-height:300px;
+           display:flex; align-items:center; justify-content:center; }
+  .stage video { max-width:100%; max-height:46vh; width:auto; display:block; background:#000; }
+  .stage .empty { color:var(--dim); font-size:14px; padding:60px 20px; text-align:center; }
+  .cmp { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+  .cmp figure { margin:0; }
+  .cmp figcaption { font-size:11.5px; color:var(--dim); text-align:center; margin-bottom:6px; text-transform:uppercase; letter-spacing:.8px; }
+  .cmp video { width:100%; border-radius:10px; background:#000; display:block; }
+
+  /* the one button */
+  .hero { display:flex; flex-direction:column; align-items:center; gap:12px; margin:18px 0 4px; text-align:center; }
+  .bigbtn { background:linear-gradient(135deg,var(--accent),#5b8cff); color:#fff; border:none; border-radius:14px;
+            padding:16px 34px; font:700 17px 'Segoe UI',sans-serif; cursor:pointer; box-shadow:0 8px 26px rgba(124,92,255,.4);
+            transition:.15s; display:inline-flex; align-items:center; gap:10px; }
+  .bigbtn:hover { transform:translateY(-2px); box-shadow:0 12px 32px rgba(124,92,255,.55); }
+  .bigbtn:disabled { opacity:.5; cursor:not-allowed; transform:none; box-shadow:none; }
+  .hero .note { color:var(--dim); font-size:12.5px; max-width:460px; }
+  button.ghost { background:var(--panel2); color:var(--text); border:1px solid var(--line); border-radius:9px;
+                 padding:9px 16px; font:inherit; font-size:13px; cursor:pointer; transition:.15s; }
+  button.ghost:hover { border-color:var(--accent); color:var(--accent2); }
+  button.ghost:disabled { opacity:.4; cursor:not-allowed; }
+  .btnrow { display:flex; gap:10px; justify-content:center; flex-wrap:wrap; margin-top:6px; }
+
+  /* progress */
+  .prog { margin-top:16px; display:none; }
+  .prog.on { display:block; }
+  .bar { height:12px; background:var(--panel2); border:1px solid var(--line); border-radius:8px; overflow:hidden; }
+  .bar i { display:block; height:100%; width:0%; border-radius:8px;
+           background:linear-gradient(90deg,var(--accent),var(--accent2)); transition:width .4s ease; }
+  .prog .lbl { display:flex; justify-content:space-between; font-size:12.5px; color:var(--dim); margin-bottom:6px; }
+  .prog .lbl b { color:var(--text); }
+  .phase { display:flex; gap:6px; margin-top:10px; }
+  .phase .p { flex:1; text-align:center; font-size:10.5px; text-transform:uppercase; letter-spacing:.6px;
+              color:var(--dim); padding:5px; border:1px solid var(--line); border-radius:7px; background:var(--panel2); }
+  .phase .p.on { border-color:var(--accent); color:var(--accent2); background:rgba(124,92,255,.12); }
+  .phase .p.done { border-color:rgba(61,220,132,.5); color:var(--ok); }
+  #log { margin-top:12px; background:#080b11; border:1px solid var(--line); border-radius:10px; padding:11px;
+         font-family:var(--mono); font-size:11px; line-height:1.5; max-height:150px; overflow-y:auto;
+         white-space:pre-wrap; word-break:break-word; color:#aeb9cf; display:none; }
+  #log.on { display:block; }
+  #log .err { color:var(--bad); }
+
+  .toast { position:fixed; bottom:22px; left:50%; transform:translateX(-50%); background:var(--panel2);
+           border:1px solid var(--accent); color:var(--text); padding:11px 20px; border-radius:11px; z-index:60; display:none;
+           box-shadow:0 8px 30px rgba(0,0,0,.4); }
+  .done-banner { display:none; align-items:center; gap:12px; margin-top:16px; padding:14px 18px; border-radius:12px;
+                 background:rgba(61,220,132,.1); border:1px solid rgba(61,220,132,.4); }
+  .done-banner.on { display:flex; }
+  .done-banner .t { flex:1; }
+  .done-banner .t b { color:var(--ok); }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>🧼 <b>Subtitle</b> Eraser</h1>
+    <div class="sub">Rebuilds the video behind burned-in captions with AI — no blur, no black box</div>
+  </div>
+  <div class="nav">
+    <a href="/qc">🔬 Quality Control</a>
+    <a href="/">🎬 Mission Control</a>
+  </div>
+</header>
+
+<main>
+  <!-- LEFT: source picker -->
+  <section>
+    <div class="card">
+      <h2>1 · Pick a video <span class="r" id="count"></span></h2>
+      <label class="drop" id="drop">
+        <input type="file" id="file" accept="video/*,.mp4,.mov,.mkv,.webm,.m4v" multiple style="display:none">
+        <span id="dropmsg">⬆ Drop a video here or click to upload</span>
+      </label>
+      <div id="list"><span style="color:var(--dim);font-size:13px">Loading videos…</span></div>
+    </div>
+  </section>
+
+  <!-- RIGHT: preview + action -->
+  <section>
+    <div class="card">
+      <h2 id="title">2 · Preview & erase</h2>
+      <div class="stage" id="stage">
+        <div class="empty">← Select or upload a video to begin</div>
+      </div>
+
+      <div class="hero" id="hero" style="display:none">
+        <button class="bigbtn" id="go" onclick="erase()">🧼 Remove Subtitles — Automatic</button>
+        <div class="note">Finds the captions on their own, reconstructs the real background behind every letter, and leaves the rest of the video untouched. Takes a few minutes.</div>
+        <div class="btnrow">
+          <button class="ghost" id="dlbtn" onclick="download()" disabled>⬇ Download result</button>
+          <button class="ghost" id="qcbtn" onclick="openQc()" disabled>🔬 Open in QC</button>
+        </div>
+      </div>
+
+      <div class="prog" id="prog">
+        <div class="lbl"><span id="plbl">Starting…</span><b id="ppct">0%</b></div>
+        <div class="bar"><i id="pbar"></i></div>
+        <div class="phase">
+          <div class="p" id="ph-scan">1 · Find captions</div>
+          <div class="p" id="ph-ai">2 · AI reconstruct</div>
+          <div class="p" id="ph-enc">3 · Render</div>
+        </div>
+        <div id="log"></div>
+      </div>
+
+      <div class="done-banner" id="doneb">
+        <span style="font-size:26px">✅</span>
+        <div class="t"><b>Subtitles removed.</b> <span id="donemsg"></span></div>
+        <button class="ghost" onclick="download()">⬇ Download</button>
+      </div>
+    </div>
+
+    <div class="card" id="cmpcard" style="display:none">
+      <h2>Before / after</h2>
+      <div class="cmp">
+        <figure><figcaption>Original — with captions</figcaption><video id="vBefore" controls muted loop playsinline></video></figure>
+        <figure><figcaption>Erased — captions gone</figcaption><video id="vAfter" controls muted loop playsinline></video></figure>
+      </div>
+    </div>
+  </section>
+</main>
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = s => document.querySelector(s);
+const sleep = ms => new Promise(r=>setTimeout(r,ms));
+const esc = s => String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const fmtMB = b => b>1e6 ? (b/1e6).toFixed(1)+' MB' : Math.round(b/1e3)+' KB';
+function toast(m){ const t=$('#toast'); t.textContent=m; t.style.display='block'; setTimeout(()=>t.style.display='none',3800); }
+async function api(p,o){ const r=await fetch(p,o); if(!r.ok) throw new Error((await r.text()).slice(0,200)); return r.json(); }
+const post=(p,b)=>api(p,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});
+
+let videos=[], reviews={}, cur=null, curOut=null, busy=false;
+
+const GROUPS={dub:'🎤 Dubbed videos',vsl:'🎬 Assembled VSLs',source:'📥 Uploads',nosubs:'✨ Already cleaned'};
+
+function render(){
+  let html='';
+  for(const k of Object.keys(GROUPS)){
+    const items=videos.filter(v=>v.kind===k);
+    if(!items.length) continue;
+    html+=`<div class="sec">${GROUPS[k]}</div>`+items.map(v=>`
+      <div class="row ${cur===v.path?'sel':''}" onclick="pick('${encodeURIComponent(v.path)}')">
+        <span>${k==='nosubs'?'✨':'🎬'}</span>
+        <div class="nm" title="${esc(v.path)}">${esc(v.group?v.group+' / ':'')}${esc(v.name)}</div>
+        <span class="mt">${fmtMB(v.size)}</span>
+        <span class="badge ${k==='nosubs'?'clean':'src'}">${k==='nosubs'?'clean':k}</span>
+      </div>`).join('');
+  }
+  $('#list').innerHTML = html || '<span style="color:var(--dim);font-size:13px">No videos yet — upload one above.</span>';
+  $('#count').textContent = videos.length+' video'+(videos.length===1?'':'s');
+}
+
+async function load(){
+  const d=await api('/api/qc/videos');
+  videos=d.videos; reviews=d.reviews||{};
+  render();
+}
+
+function pick(enc){
+  const path=decodeURIComponent(enc);
+  cur=path; curOut=null;
+  render();
+  const v=videos.find(x=>x.path===path);
+  $('#title').textContent='2 · '+(v?(v.group?v.group+' / ':'')+v.name:path);
+  $('#stage').innerHTML=`<video src="/media/${path}" controls playsinline></video>`;
+  $('#hero').style.display='flex';
+  $('#go').disabled=false;
+  $('#dlbtn').disabled=true; $('#qcbtn').disabled=true;
+  $('#prog').classList.remove('on'); $('#log').classList.remove('on'); $('#log').innerHTML='';
+  $('#doneb').classList.remove('on');
+  $('#cmpcard').style.display='none';
+  history.replaceState(null,'','/eraser?path='+encodeURIComponent(path));
+}
+
+// ---- progress parsing ----
+function setPhase(id,state){ const el=$('#'+id); el.classList.remove('on','done'); if(state) el.classList.add(state); }
+function updateProgress(lines){
+  let pct=0, lbl='Working…', scanDone=false, aiChunk=null, aiPct=0, enc=null, done=false, total=1;
+  for(const l of lines){
+    let m;
+    if((m=l.match(/scan (\d+)\/(\d+)/))){ pct=Math.min(14, 14*(+m[1]/+m[2])); lbl='Finding captions…'; }
+    if(/scan done/.test(l)) scanDone=true;
+    if((m=l.match(/(\d+) chunk\(s\)/))) total=+m[1];
+    if((m=l.match(/chunk (\d+)\/(\d+)/))){ aiChunk=[+m[1],+m[2]]; }
+    if((m=l.match(/pp: (\d+)%/))) aiPct=+m[1];
+    if((m=l.match(/encode (\d+)\/(\d+)/))){ enc=[+m[1],+m[2]]; }
+    if(/^done:|ProPainter AI \(/.test(l)) done=true;
+  }
+  setPhase('ph-scan', scanDone?'done':'on');
+  if(scanDone && aiChunk){
+    setPhase('ph-scan','done'); setPhase('ph-ai','on');
+    const chunkFrac=((aiChunk[0]-1)+aiPct/100)/aiChunk[1];
+    pct=15+70*chunkFrac;
+    lbl=`AI reconstructing — chunk ${aiChunk[0]}/${aiChunk[1]} (${aiPct}%)`;
+  }
+  if(enc){
+    setPhase('ph-ai','done'); setPhase('ph-enc','on');
+    pct=85+15*(enc[0]/enc[1]); lbl='Rendering final video…';
+  }
+  if(done){ pct=100; lbl='Done'; setPhase('ph-scan','done'); setPhase('ph-ai','done'); setPhase('ph-enc','done'); }
+  $('#pbar').style.width=Math.round(pct)+'%';
+  $('#ppct').textContent=Math.round(pct)+'%';
+  $('#plbl').textContent=lbl;
+}
+
+async function erase(){
+  if(!cur||busy) return;
+  busy=true;
+  $('#go').disabled=true; $('#doneb').classList.remove('on'); $('#cmpcard').style.display='none';
+  $('#prog').classList.add('on'); $('#log').classList.add('on'); $('#log').innerHTML='';
+  setPhase('ph-scan','on'); setPhase('ph-ai',''); setPhase('ph-enc','');
+  $('#pbar').style.width='2%'; $('#ppct').textContent='0%'; $('#plbl').textContent='Starting…';
+  try{
+    const r=await post('/api/qc/remove-subs',{path:cur,method:'erase'});
+    curOut=r.output;
+    const all=[];
+    let off=0, status='running';
+    while(status==='running'){
+      await sleep(1000);
+      let j;
+      try{ j=await api(`/api/job/${r.job_id}?offset=${off}`); }catch(e){ continue; }
+      for(const line of j.lines){
+        all.push(line);
+        const d=document.createElement('div');
+        d.textContent=line;
+        if(/error|failed|traceback/i.test(line)) d.className='err';
+        $('#log').appendChild(d);
+      }
+      if(j.lines.length) $('#log').scrollTop=$('#log').scrollHeight;
+      off=j.next_offset; status=j.status;
+      updateProgress(all);
+    }
+    if(status==='done'){
+      const usedBlur=all.some(l=>/classic inpaint/.test(l));
+      finishOk(usedBlur);
+    } else {
+      $('#plbl').textContent='Failed'; toast('Erase failed — see the log');
+    }
+  }catch(e){
+    $('#prog').classList.remove('on');
+    toast('Error: '+e.message);
+  }finally{
+    busy=false; $('#go').disabled=false;
+    await load();
+  }
+}
+
+function finishOk(usedBlur){
+  updateProgress(['done:']);
+  $('#dlbtn').disabled=false; $('#qcbtn').disabled=false;
+  $('#doneb').classList.add('on');
+  $('#donemsg').textContent = (usedBlur
+    ? 'Saved (used the fast fallback fill — the AI engine was unavailable). '
+    : 'Reconstructed with AI. ') + curOut.split('/').pop();
+  // before/after
+  $('#cmpcard').style.display='';
+  $('#vBefore').src='/media/'+cur;
+  $('#vAfter').src='/media/'+curOut;
+  $('#vBefore').play().catch(()=>{}); $('#vAfter').play().catch(()=>{});
+  toast('✅ Subtitles removed');
+}
+
+function download(){ if(curOut) window.open('/media/'+curOut,'_blank'); }
+function openQc(){ if(curOut) location.href='/qc?path='+encodeURIComponent(curOut); }
+
+// ---- upload ----
+function upload(files){
+  for(const f of files){
+    const fd=new FormData(); fd.append('file',f);
+    const x=new XMLHttpRequest(); x.open('POST','/api/upload');
+    x.upload.onprogress=e=>{ if(e.lengthComputable) $('#dropmsg').textContent=`Uploading ${f.name} — ${Math.round(e.loaded/e.total*100)}%`; };
+    x.onload=async()=>{
+      $('#dropmsg').textContent='⬆ Drop a video here or click to upload';
+      if(x.status===200){ toast('Uploaded '+f.name); await load();
+        const v=videos.find(v=>v.name===f.name); if(v) pick(encodeURIComponent(v.path)); }
+      else toast('Upload failed: '+x.responseText.slice(0,120));
+    };
+    x.onerror=()=>toast('Upload failed');
+    x.send(fd);
+  }
+}
+$('#file').addEventListener('change',e=>{ upload(e.target.files); e.target.value=''; });
+const dz=$('#drop');
+dz.addEventListener('dragover',e=>{e.preventDefault();dz.classList.add('drag');});
+dz.addEventListener('dragleave',()=>dz.classList.remove('drag'));
+dz.addEventListener('drop',e=>{e.preventDefault();dz.classList.remove('drag');upload(e.dataTransfer.files);});
+
+// ---- boot ----
+(async()=>{
+  await load();
+  const want=new URLSearchParams(location.search).get('path');
+  if(want && videos.some(v=>v.path===want)) pick(encodeURIComponent(want));
+})();
+</script>
+</body>
+</html>
