@@ -66,6 +66,12 @@ $dubPy = Join-Path $Root "dubbing-studio\venv\Scripts\python.exe"
 # ---------- stage 4: config for THIS machine ----------
 Write-Host "`n[4/6] rewriting config paths + fresh secrets..." -ForegroundColor Cyan
 $cfgPath = Join-Path $Root "video-studio\config.json"
+# config.json is not in git (it holds this machine's session key + phone PIN);
+# a fresh clone starts from the template and gets its own secrets below.
+if (-not (Test-Path $cfgPath)) {
+    Copy-Item (Join-Path $Root "video-studio\config.example.json") $cfgPath
+    Write-Host "  created config.json from config.example.json"
+}
 $cfg = Get-Content $cfgPath -Raw | ConvertFrom-Json
 $oldRoot = ($cfg.autovsl_root -replace "/autoVSL$", "") -replace "\\autoVSL$", ""
 $newRoot = $Root -replace "\\", "/"
