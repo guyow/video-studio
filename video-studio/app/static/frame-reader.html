@@ -1,0 +1,596 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Frame Reader — Video Studio</title>
+<link rel="stylesheet" href="/static/vs-creator.css">
+<link rel="stylesheet" href="/static/vs.css">
+<script src="/static/vs-nav.js" defer></script>
+<style>
+  /* minmax(0,…) on every track: a grid column defaults to min-width:auto, so one
+     unbreakable string (ad files arrive with 110-char names) would otherwise
+     widen the whole page instead of wrapping. */
+  main.fr { max-width:1560px; margin:0 auto; padding:18px 24px;
+            display:grid; grid-template-columns:360px minmax(0,1fr); gap:18px; align-items:start; }
+  @media (max-width:1150px){ main.fr { grid-template-columns:minmax(0,1fr); } }
+  main.fr h3 { overflow-wrap:anywhere; }
+  .drop-vid { border:2px dashed var(--line); border-radius:12px; min-height:104px; display:flex;
+    align-items:center; justify-content:center; text-align:center; color:var(--dim); cursor:pointer;
+    padding:16px; transition:.15s; }
+  .drop-vid:hover,.drop-vid.drag { border-color:var(--accent); color:var(--accent2);
+    background:rgba(124,92,255,.06); }
+  .chipbtn { background:var(--panel2); border:1px solid var(--line); color:var(--text);
+    border-radius:9px; padding:7px 13px; font-size:13px; cursor:pointer; }
+  .chipbtn.on { border-color:var(--accent); background:rgba(124,92,255,.16); }
+  .chiprow { display:flex; gap:7px; flex-wrap:wrap; }
+  .srclist { max-height:220px; overflow:auto; border:1px solid var(--line); border-radius:10px;
+    padding:6px; margin-top:8px; background:var(--panel2); }
+  .srcrow { display:flex; align-items:center; gap:8px; padding:5px 7px; border-radius:7px;
+    font-size:12.5px; cursor:pointer; }
+  .srcrow:hover { background:rgba(255,255,255,.04); }
+  .srcrow.on { background:rgba(124,92,255,.16); }
+  .srcrow .nm { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .srcrow .kd { color:var(--dim); font-size:11px; white-space:nowrap; }
+  /* downloaded ad creatives have 100-char unbroken filenames — without this the
+     name forces the whole page into horizontal scroll */
+  #pick, #pick b { overflow-wrap:anywhere; word-break:break-word; }
+
+  .statrow { display:grid; grid-template-columns:repeat(auto-fit,minmax(92px,1fr)); gap:8px;
+    margin:2px 0 12px; }
+  .stat { background:var(--panel2); border:1px solid var(--line); border-radius:10px;
+    padding:8px 10px; }
+  .stat b { display:block; font-size:18px; font-weight:700; line-height:1.25; }
+  .stat span { font-size:11px; color:var(--dim); }
+
+  .facts { display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:8px 18px;
+    font-size:12.5px; line-height:1.6; }
+  .facts div b { color:var(--dim); font-weight:600; }
+
+  .scene { border:1px solid var(--line); border-radius:12px; background:var(--panel);
+    padding:12px 13px; margin-bottom:12px; display:grid; grid-template-columns:190px minmax(0,1fr);
+    gap:14px; align-items:start; }
+  @media (max-width:760px){ .scene { grid-template-columns:minmax(0,1fr); } }
+  .scene .strip { display:flex; flex-direction:column; gap:6px; }
+  .scene .strip img { width:100%; border-radius:8px; background:#000; display:block; cursor:zoom-in; }
+  .scene .strip .tt { font-size:10.5px; color:var(--dim); text-align:center; }
+  .scene h4 { margin:0 0 3px; font-size:14.5px; display:flex; align-items:center;
+    gap:9px; flex-wrap:wrap; }
+  .scene h4 .num { color:var(--dim); font-weight:600; }
+  .tag { font-size:10.5px; padding:2px 8px; border-radius:99px; border:1px solid var(--line);
+    color:var(--dim); white-space:nowrap; }
+  .tag.fn { border-color:var(--accent); color:var(--accent2); }
+  .tag.cast { border-color:#2c7; color:#4d9; }
+  .tech { font:11.5px/1.5 var(--mono); color:var(--accent2); margin:6px 0 8px; }
+  .kv { font-size:12.5px; line-height:1.62; }
+  .kv div { margin-bottom:2px; }
+  .kv b { color:var(--dim); font-weight:600; }
+  .said { background:var(--panel2); border-left:2px solid var(--accent); border-radius:0 8px 8px 0;
+    padding:7px 10px; margin:8px 0; font-size:12.5px; line-height:1.6; }
+  .ost { background:#0c1018; border:1px solid var(--line); border-radius:8px; padding:6px 9px;
+    margin:8px 0; font:12px/1.5 var(--mono); color:#ffd479; }
+  .shoot { background:var(--panel2); border:1px solid var(--line); border-radius:9px;
+    padding:8px 10px; margin-top:8px; font-size:12.5px; line-height:1.6; }
+  .shoot b { color:var(--accent2); }
+  .i2v { display:flex; gap:7px; align-items:flex-start; margin-top:8px; }
+  .i2v code { flex:1; background:#080b11; border:1px solid var(--line); border-radius:8px;
+    padding:7px 9px; font:11.5px/1.5 var(--mono); color:#b9c3d8; }
+  .mini { font-size:11.5px; padding:5px 9px; border-radius:8px; border:1px solid var(--line);
+    background:var(--panel2); color:var(--text); cursor:pointer; white-space:nowrap; }
+  .mini:hover { border-color:var(--accent); color:var(--accent2); }
+
+  .readcard { background:var(--panel); border:1px solid var(--line); border-radius:11px;
+    overflow:hidden; cursor:pointer; }
+  .readcard.on { border-color:var(--accent); }
+  .readcard img { width:100%; display:block; background:#000; aspect-ratio:9/16; object-fit:cover; }
+  .readcard .m { padding:7px 9px; font-size:11.5px; color:var(--dim); line-height:1.5; }
+  .readcard .m b { color:var(--text); display:block; overflow:hidden;
+    text-overflow:ellipsis; white-space:nowrap; }
+  .reads { display:grid; grid-template-columns:repeat(auto-fill,minmax(132px,1fr)); gap:10px; }
+
+  #log { background:#080b11; border:1px solid var(--line); border-radius:9px; padding:9px 11px;
+    margin-top:7px; font:11px/1.5 var(--mono); color:#b9c3d8; max-height:240px; overflow:auto;
+    white-space:pre-wrap; }
+  .hb { display:flex; gap:7px; flex-wrap:wrap; font-size:11.5px; margin-top:8px; }
+  .vo { background:var(--panel2); border:1px solid var(--line); border-radius:10px;
+    padding:11px 13px; font-size:13.5px; line-height:1.75; white-space:pre-wrap; }
+  #lightbox { position:fixed; inset:0; background:rgba(0,0,0,.86); display:none;
+    align-items:center; justify-content:center; z-index:900; cursor:zoom-out; }
+  #lightbox img { max-width:92vw; max-height:92vh; border-radius:10px; }
+</style>
+</head>
+<body>
+<header class="vs-head">
+  <h1>🔬 Frame <b>Reader</b></h1>
+  <div class="sub">drop a winning UGC clip → it watches every scene → the shot-by-shot script that made it, with a rebuild prompt per beat</div>
+</header>
+
+<main class="fr">
+  <section>
+    <div class="vs-panel">
+      <h3>1 · The winner</h3>
+      <label class="drop-vid" id="drop">
+        <input type="file" id="file" style="display:none"
+               accept="video/mp4,video/quicktime,.mp4,.mov,.mkv,.webm,.m4v,.avi">
+        <span id="dropmsg">⬆ Drop the video that's working<br>
+          <span class="vs-hint">mp4 · mov · webm — yours or a competitor's</span></span>
+      </label>
+      <div class="srclist" id="srclist"><div class="vs-hint">loading…</div></div>
+      <div class="vs-hint" id="pick" style="margin-top:6px">nothing picked</div>
+    </div>
+
+    <div class="vs-panel">
+      <h3>2 · What are you doing with it?</h3>
+      <textarea class="vs-ta" id="brief" rows="3"
+        placeholder="optional — e.g. I want to rebuild this for Fairy Flame gummies with my own actress"></textarea>
+      <div class="vs-hint" style="margin-top:6px">
+        Leave it blank for a straight teardown. Fill it in and the shoot notes aim at your plan.
+      </div>
+
+      <div class="vs-row" style="margin-top:12px;align-items:center;gap:12px;flex-wrap:wrap">
+        <label class="vs-hint" style="margin:0">Max scenes</label>
+        <input type="number" id="scenes" value="24" min="4" max="40"
+               style="width:64px;background:var(--panel2);border:1px solid var(--line);
+                      color:var(--text);border-radius:7px;padding:5px 7px">
+        <label class="vs-hint" style="margin:0">Frames</label>
+        <input type="number" id="frames" value="40" min="6" max="80"
+               style="width:64px;background:var(--panel2);border:1px solid var(--line);
+                      color:var(--text);border-radius:7px;padding:5px 7px">
+      </div>
+      <label style="display:flex;align-items:center;gap:6px;font-size:12.5px;cursor:pointer;margin-top:10px">
+        <input type="checkbox" id="tr" checked> transcribe the voice-over (local whisper)
+      </label>
+
+      <div class="vs-hint" style="margin-top:12px">People on camera</div>
+      <div class="chiprow" id="chars" style="margin-top:5px">
+        <button class="chipbtn on" data-c="0">Auto</button>
+        <button class="chipbtn" data-c="1">1</button>
+        <button class="chipbtn" data-c="2">2</button>
+        <button class="chipbtn" data-c="3">3</button>
+        <button class="chipbtn" data-c="4">4+</button>
+      </div>
+      <div class="vs-hint" id="charhint" style="margin-top:6px">
+        Auto lets the reader work it out — it can waver between "same woman, new angle"
+        and "second actress" across cuts. Telling it the real count locks one description
+        per person, so the shot list and every Image→Video prompt stay on the same face.
+      </div>
+
+      <div class="vs-hint" style="margin-top:11px">Reader model</div>
+      <div class="chiprow" id="model" style="margin-top:5px">
+        <button class="chipbtn on" data-m="sonnet">Sonnet · fast</button>
+        <button class="chipbtn" data-m="opus">Opus · sharpest</button>
+      </div>
+
+      <div class="hb" id="health"></div>
+      <div class="vs-row" style="margin-top:12px">
+        <button class="vs-btn primary" id="run" disabled>🔬 Read this video</button>
+      </div>
+      <div id="prog" style="display:none">
+        <div class="vs-hint" id="proglbl">starting…</div>
+        <div id="log"></div>
+      </div>
+      <div class="vs-hint" style="margin-top:8px">
+        Free — local ffmpeg + local whisper + your Claude subscription. Nothing is charged.
+      </div>
+    </div>
+
+    <div class="vs-panel">
+      <h3>Past reads</h3>
+      <div class="reads" id="reads"><div class="vs-hint">none yet</div></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="vs-panel" id="empty">
+      <h3>The script lands here</h3>
+      <div class="vs-hint" style="line-height:1.75">
+        Pick a clip on the left and hit <b>Read this video</b>. The reader finds the real cut points
+        with scene detection, pulls keyframes from every scene, transcribes the voice-over locally,
+        then Claude watches the frames and writes the shot list back out — subject, framing, camera,
+        lighting, on-screen text, what's said over it, and what each beat is doing for retention.
+        <br><br>
+        Every scene comes with a shooting instruction and an Image→Video prompt, so any beat can be
+        rebuilt with your own product in one click.
+      </div>
+    </div>
+
+    <div id="out" style="display:none">
+      <div class="vs-panel">
+        <h3 id="rtitle">Read
+          <span class="r">
+            <button class="vs-btn" id="copyall">📋 Copy full script</button>
+            <button class="vs-btn" id="dl">⬇ .md</button>
+            <button class="vs-btn" id="del">🗑</button>
+          </span>
+        </h3>
+        <div class="statrow" id="stats"></div>
+        <div id="oneline" style="font-size:15px;font-weight:600;line-height:1.55;margin-bottom:10px"></div>
+        <div class="facts" id="facts"></div>
+        <div id="why" style="margin-top:12px"></div>
+      </div>
+
+      <div class="vs-panel" id="castpanel">
+        <h3>Cast <span class="r vs-hint" id="ccount"></span></h3>
+        <div class="vs-hint" style="margin-bottom:10px">
+          Described once here — the shot list refers back by id, so a reshoot casts one
+          consistent person per role.
+        </div>
+        <div id="cast"></div>
+      </div>
+
+      <div class="vs-panel">
+        <h3>Shot list <span class="r vs-hint" id="scount"></span></h3>
+        <div id="scenes"></div>
+      </div>
+
+      <div class="vs-panel" id="vopanel">
+        <h3>Voice-over <span class="r"><button class="vs-btn" id="copyvo">📋 Copy</button></span></h3>
+        <div class="vo" id="vo"></div>
+      </div>
+
+      <div class="vs-panel" id="ostpanel">
+        <h3>On-screen text, in order</h3>
+        <div class="vo" id="ost"></div>
+      </div>
+
+      <div class="vs-panel" id="briefpanel">
+        <h3>Reshoot brief</h3>
+        <div class="vo" id="rbrief"></div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<div id="lightbox"><img id="lbimg" alt=""></div>
+
+<script src="/static/js/vs-core.js"></script>
+<script>
+(async () => {
+  const $ = s => document.querySelector(s);
+  const esc = VS.esc;
+  let picked = null, model = "sonnet", chars = 0, busy = false, current = null, currentBatch = null;
+
+  // ---------------------------------------------------------------- health
+  try {
+    const h = await VS.api("/api/reader/health");
+    const pill = (ok, txt) =>
+      `<span class="tag" style="border-color:${ok ? "#2c7" : "var(--bad,#c0392b)"};
+        color:${ok ? "#4d9" : "#e77"}">${ok ? "✓" : "✕"} ${esc(txt)}</span>`;
+    $("#health").innerHTML =
+      pill(h.claude, h.claude ? "Claude vision" : "claude CLI missing") +
+      pill(h.whisper, h.whisper ? "whisper" : "no whisper venv — picture only") +
+      pill(h.ffmpeg, h.ffmpeg ? "ffmpeg" : "ffmpeg missing");
+    if (!h.whisper) $("#tr").checked = false;
+  } catch (e) { /* health is a nicety */ }
+
+  // ---------------------------------------------------------------- sources
+  async function loadSources() {
+    let d;
+    try { d = await VS.api("/api/reader/sources"); }
+    catch (e) { $("#srclist").innerHTML = '<div class="vs-hint">could not list clips</div>'; return; }
+    const all = [...(d.uploads || []), ...(d.library || [])];
+    if (!all.length) {
+      $("#srclist").innerHTML = '<div class="vs-hint">no clips yet — drop one above</div>';
+      return;
+    }
+    $("#srclist").innerHTML = all.map(r => `
+      <div class="srcrow${picked === r.path ? " on" : ""}" data-p="${esc(r.path)}">
+        <span class="nm">${esc(r.name)}</span>
+        <span class="kd">${r.kind === "upload" ? "uploaded" : "library"} · ${VS.fmtSize(r.size)}</span>
+      </div>`).join("");
+    $("#srclist").querySelectorAll(".srcrow").forEach(el => {
+      el.onclick = () => { pick(el.dataset.p, el.querySelector(".nm").textContent); };
+    });
+  }
+
+  function pick(path, name) {
+    picked = path;
+    $("#pick").innerHTML = `reading: <b>${esc(name || path.split("/").pop())}</b>`;
+    $("#srclist").querySelectorAll(".srcrow").forEach(el =>
+      el.classList.toggle("on", el.dataset.p === path));
+    refresh();
+  }
+  function refresh() { $("#run").disabled = busy || !picked; }
+
+  // ---------------------------------------------------------------- upload
+  const drop = $("#drop"), file = $("#file");
+
+  // Miss the drop zone by a few pixels and the browser's default is to NAVIGATE
+  // to the dropped file — the page vanishes and it reads as "it failed". Swallow
+  // drops everywhere else, and treat a near-miss as a real drop.
+  document.addEventListener("dragover", e => e.preventDefault());
+  document.addEventListener("drop", e => {
+    e.preventDefault();
+    if (drop.contains(e.target)) return;               // the zone handles its own
+    const f = (e.dataTransfer.files || [])[0];
+    if (f) { VS.toast("Caught it — uploading"); upload(f); }
+  });
+
+  drop.onclick = () => file.click();
+  file.onchange = e => { if (e.target.files[0]) upload(e.target.files[0]); };
+  ["dragenter", "dragover"].forEach(ev =>
+    drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add("drag"); }));
+  ["dragleave", "drop"].forEach(ev =>
+    drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove("drag"); }));
+  drop.addEventListener("drop", e => {
+    const f = (e.dataTransfer.files || [])[0];
+    if (f) upload(f);
+  });
+
+  async function upload(f) {
+    $("#dropmsg").innerHTML = `uploading <b>${esc(f.name)}</b>…`;
+    const fd = new FormData();
+    fd.append("file", f);
+    try {
+      const r = await fetch("/api/reader/upload", { method: "POST", body: fd });
+      if (!r.ok) throw new Error((await r.text()).slice(0, 200));
+      const d = await r.json();
+      $("#dropmsg").innerHTML = `⬆ Drop the video that's working<br>
+        <span class="vs-hint">mp4 · mov · webm — yours or a competitor's</span>`;
+      await loadSources();
+      pick(d.path, d.name);
+      VS.toast("Uploaded — hit Read");
+    } catch (err) {
+      const msg = String(err.message || err);
+      $("#dropmsg").innerHTML = `<span style="color:var(--bad,#c0392b)">${esc(msg)}</span>`;
+      VS.toast("Upload failed — " + msg.slice(0, 90));
+      console.error("[frame-reader] upload failed", err);
+    }
+  }
+
+  // ---------------------------------------------------------------- run
+  $("#model").onclick = e => {
+    if (!e.target.dataset.m) return;
+    model = e.target.dataset.m;
+    document.querySelectorAll("#model .chipbtn").forEach(b => b.classList.toggle("on", b === e.target));
+  };
+
+  const CHARHINT = {
+    0: `Auto lets the reader work it out — it can waver between "same woman, new angle"
+        and "second actress" across cuts. Telling it the real count locks one description
+        per person, so the shot list and every Image→Video prompt stay on the same face.`,
+    1: `One person, every frame. Every face, every pair of hands and the voice all get
+        tied to a single locked description — the safest setting for a solo UGC clip.`,
+    2: `Two people. The reader keeps them straight scene by scene instead of blurring
+        them into one "the talent".`,
+  };
+  $("#chars").onclick = e => {
+    if (!e.target.dataset.c) return;
+    chars = +e.target.dataset.c;
+    document.querySelectorAll("#chars .chipbtn").forEach(b => b.classList.toggle("on", b === e.target));
+    $("#charhint").textContent = CHARHINT[chars]
+      || `${chars} people on camera — each one gets its own locked description that the
+          shot list refers back to.`;
+  };
+
+  $("#run").onclick = async () => {
+    if (!picked || busy) return;
+    busy = true; refresh();
+    $("#prog").style.display = "";
+    $("#log").textContent = "";
+    $("#proglbl").textContent = "reading…";
+    let r;
+    try {
+      r = await VS.post("/api/reader/run", {
+        video: picked,
+        brief: $("#brief").value.trim(),
+        scenes: +$("#scenes").value || 24,
+        frames: +$("#frames").value || 40,
+        transcribe: $("#tr").checked,
+        characters: chars,
+        model,
+      });
+    } catch (e) {
+      busy = false; refresh();
+      $("#proglbl").textContent = "❌ " + String(e.message || e);
+      return;
+    }
+    const status = await watch(r.job_id);
+    await loadReads();
+    if (status === "done") {
+      const batch = lastBatchFromLog();
+      if (batch) await show(batch);
+      else {
+        const d = await VS.api("/api/reader/reads");
+        if ((d.reads || []).length) await show(d.reads[0].batch);
+      }
+    }
+  };
+
+  function lastBatchFromLog() {
+    const m = /BATCH\s+(\S+)/.exec($("#log").textContent || "");
+    return m ? m[1] : null;
+  }
+
+  async function watch(jobId) {
+    let off = 0, status = "running";
+    while (status === "running") {
+      await new Promise(r => setTimeout(r, 2000));
+      let j;
+      try { j = await VS.api(`/api/job/${jobId}?offset=${off}`); } catch (e) { continue; }
+      for (const line of (j.lines || [])) {
+        const d = document.createElement("div");
+        d.textContent = line;
+        if (/fail|error|traceback/i.test(line)) d.style.color = "var(--bad,#c0392b)";
+        else if (/^=== stage|^Wrote|^BATCH/.test(line)) d.style.color = "#4d9";
+        $("#log").appendChild(d);
+        const st = /^=== stage: (\w+)/.exec(line);
+        if (st) $("#proglbl").textContent = ({
+          cuts: "finding the cuts…", frames: "pulling keyframes…",
+          transcribe: "transcribing the voice-over…", read: "Claude is watching the frames…",
+        })[st[1]] || st[1];
+      }
+      $("#log").scrollTop = $("#log").scrollHeight;
+      off = j.next_offset != null ? j.next_offset : off + (j.lines || []).length;
+      status = j.status;
+    }
+    busy = false; refresh();
+    $("#proglbl").textContent = status === "done" ? "✅ read complete" : "❌ " + status;
+    VS.toast(status === "done" ? "✅ Script is ready" : "Read " + status + " — see the log");
+    return status;
+  }
+
+  // ---------------------------------------------------------------- past reads
+  async function loadReads() {
+    let d;
+    try { d = await VS.api("/api/reader/reads"); } catch (e) { return; }
+    const rs = d.reads || [];
+    if (!rs.length) { $("#reads").innerHTML = '<div class="vs-hint">none yet</div>'; return; }
+    $("#reads").innerHTML = rs.map(r => `
+      <div class="readcard${r.batch === currentBatch ? " on" : ""}" data-b="${esc(r.batch)}">
+        ${r.thumb ? `<img src="${esc(r.thumb)}" alt="">` : ""}
+        <div class="m"><b>${esc(r.source || r.batch)}</b>
+          ${(r.stats || {}).scenes || 0} scenes · ${(r.stats || {}).duration_s || 0}s</div>
+      </div>`).join("");
+    $("#reads").querySelectorAll(".readcard").forEach(el => {
+      el.onclick = () => show(el.dataset.b);
+    });
+  }
+
+  // ---------------------------------------------------------------- render
+  async function show(batch) {
+    let d;
+    try { d = await VS.api(`/api/reader/read/${encodeURIComponent(batch)}`); }
+    catch (e) { VS.toast("Could not open that read"); return; }
+    current = d; currentBatch = batch;
+    $("#empty").style.display = "none";
+    $("#out").style.display = "";
+    loadReads();
+
+    const st = d.stats || {}, s = d.summary || {}, src = d.source || {};
+    $("#rtitle").firstChild.nodeValue = `${src.name || batch} `;
+    $("#stats").innerHTML = [
+      [st.duration_s + "s", "length"],
+      [st.scenes, "scenes"],
+      [st.cuts, "cuts"],
+      [st.avg_shot_s + "s", "avg shot"],
+      [st.frames_read, "frames read"],
+      [st.wpm || "—", "words / min"],
+      [src.aspect || "—", "aspect"],
+    ].map(([v, l]) => `<div class="stat"><b>${esc(v)}</b><span>${esc(l)}</span></div>`).join("");
+
+    $("#oneline").textContent = s.one_line || "";
+    $("#facts").innerHTML = [
+      ["Format", s.format], ["Hook", s.hook_type], ["Product", s.product],
+      ["Target viewer", s.target_viewer], ["Pacing", s.pacing], ["Audio", s.audio],
+      ["Caption style", s.on_screen_text_style], ["Production", s.production_level],
+    ].filter(([, v]) => v).map(([k, v]) => `<div><b>${esc(k)}:</b> ${esc(v)}</div>`).join("");
+
+    $("#why").innerHTML =
+      (s.why_it_works ? `<div class="shoot"><b>Why it works</b><br>${esc(s.why_it_works)}</div>` : "") +
+      (s.weakest_link ? `<div class="shoot" style="margin-top:8px"><b>Weakest link</b><br>${esc(s.weakest_link)}</div>` : "");
+
+    const cast = d.cast || [];
+    $("#castpanel").style.display = cast.length ? "" : "none";
+    $("#ccount").textContent = cast.length
+      + (d.characters_told ? ` · you said ${d.characters_told}` : " · auto-detected")
+      + (d.characters_told && d.characters_told !== cast.length ? " ⚠" : "");
+    $("#cast").innerHTML = cast.map(m => `
+      <div class="shoot" style="margin-top:0;margin-bottom:9px">
+        <b>${esc(m.id)}${m.role ? " — " + esc(m.role) : ""}</b>
+        ${m.on_camera ? `<span class="tag" style="margin-left:7px">${esc(m.on_camera)}</span>` : ""}
+        ${m.appearance ? `<div style="margin-top:5px">${esc(m.appearance)}</div>` : ""}
+        ${m.wardrobe ? `<div style="margin-top:4px"><b style="color:var(--dim)">Wardrobe:</b> ${esc(m.wardrobe)}</div>` : ""}
+        ${(m.scenes || []).length ? `<div class="vs-hint" style="margin-top:4px">scenes ${m.scenes.join(", ")}</div>` : ""}
+      </div>`).join("");
+
+    const scenes = d.scenes || [];
+    $("#scount").textContent = `${scenes.length} scenes`;
+    $("#scenes").innerHTML = scenes.map(renderScene).join("");
+    wireScenes();
+
+    $("#vopanel").style.display = d.vo_script ? "" : "none";
+    $("#vo").textContent = d.vo_script || "";
+    const ost = d.text_overlays || [];
+    $("#ostpanel").style.display = ost.length ? "" : "none";
+    $("#ost").textContent = ost.map((t, i) => `${i + 1}. ${t}`).join("\n");
+    $("#briefpanel").style.display = d.reshoot_brief ? "" : "none";
+    $("#rbrief").textContent = d.reshoot_brief || "";
+  }
+
+  function renderScene(c) {
+    const strip = (c.frames || []).filter(f => f.url).map(f =>
+      `<img src="${esc(f.url)}" alt="" data-full="${esc(f.url)}">
+       <div class="tt">${f.t}s</div>`).join("");
+    const tech = [c.shot_type, c.angle, c.camera].filter(Boolean).join("  ·  ");
+    const kv = [
+      ["Subject", c.subject], ["Action", c.action], ["Setting", c.setting],
+      ["Props", (c.props || []).join(", ")], ["Wardrobe", c.wardrobe],
+      ["Lighting", c.lighting], ["Colour", c.color], ["Mood", c.mood],
+      ["Cut in", c.cut_in], ["Audio", c.audio_note],
+    ].filter(([, v]) => v).map(([k, v]) => `<div><b>${esc(k)}:</b> ${esc(v)}</div>`).join("");
+    return `
+      <div class="scene">
+        <div class="strip">${strip || '<div class="vs-hint">no frame</div>'}</div>
+        <div>
+          <h4><span class="num">${c.n}.</span> ${esc(c.label)}
+            ${c.function ? `<span class="tag fn">${esc(c.function)}</span>` : ""}
+            ${(c.characters || []).map(id => `<span class="tag cast">👤 ${esc(id)}</span>`).join("")}
+            <span class="tag">${c.t_start.toFixed(2)}–${c.t_end.toFixed(2)}s · ${c.duration.toFixed(2)}s</span>
+          </h4>
+          ${tech ? `<div class="tech">${esc(tech)}</div>` : ""}
+          <div class="kv">${kv}</div>
+          ${c.on_screen_text ? `<div class="ost">▣ on screen: ${esc(c.on_screen_text)}</div>` : ""}
+          ${c.spoken ? `<div class="said">“${esc(c.spoken)}”</div>` : ""}
+          ${c.retention_note ? `<div class="kv" style="margin-top:6px"><b>Retention:</b> ${esc(c.retention_note)}</div>` : ""}
+          ${c.how_to_shoot ? `<div class="shoot"><b>Shoot it:</b> ${esc(c.how_to_shoot)}</div>` : ""}
+          ${c.i2v_prompt ? `
+            <div class="i2v">
+              <code>${esc(c.i2v_prompt)}</code>
+              <button class="mini" data-copy="${esc(c.i2v_prompt)}">📋</button>
+              <button class="mini" data-i2v="${esc(c.i2v_prompt)}">→ Image→Video</button>
+            </div>` : ""}
+        </div>
+      </div>`;
+  }
+
+  function wireScenes() {
+    $("#scenes").querySelectorAll("[data-copy]").forEach(b => {
+      b.onclick = () => { copy(b.dataset.copy); };
+    });
+    $("#scenes").querySelectorAll("[data-i2v]").forEach(b => {
+      b.onclick = () => {
+        try { sessionStorage.setItem("vs.i2v.prompt", b.dataset.i2v); } catch (e) { /* private mode */ }
+        location.href = "/image-to-video?prompt=" + encodeURIComponent(b.dataset.i2v);
+      };
+    });
+    $("#scenes").querySelectorAll(".strip img").forEach(img => {
+      img.onclick = () => { $("#lbimg").src = img.dataset.full; $("#lightbox").style.display = "flex"; };
+    });
+  }
+  $("#lightbox").onclick = () => { $("#lightbox").style.display = "none"; };
+
+  // ---------------------------------------------------------------- actions
+  function copy(text) {
+    navigator.clipboard.writeText(text)
+      .then(() => VS.toast("Copied"))
+      .catch(() => VS.toast("Copy blocked by the browser"));
+  }
+  $("#copyall").onclick = () => current && copy(current.markdown || "");
+  $("#copyvo").onclick = () => current && copy(current.vo_script || "");
+  $("#dl").onclick = () => {
+    if (!current) return;
+    const blob = new Blob([current.markdown || ""], { type: "text/markdown" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `${currentBatch}.md`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+  };
+  $("#del").onclick = async () => {
+    if (!currentBatch || !confirm("Delete this read? The video itself is untouched.")) return;
+    try { await VS.post("/api/reader/delete", { batch: currentBatch }); } catch (e) { return; }
+    current = null; currentBatch = null;
+    $("#out").style.display = "none";
+    $("#empty").style.display = "";
+    loadReads();
+  };
+
+  await loadSources();
+  await loadReads();
+  const pre = new URLSearchParams(location.search).get("read");
+  if (pre) show(pre);
+})();
+</script>
+</body>
+</html>

@@ -28,7 +28,13 @@ from pathlib import Path
 
 
 def log(m: str) -> None:
-    print(m, flush=True)
+    # cp1252 console: non-ASCII would raise and kill the run after the paid
+    # fal.ai step has already completed. See the same guard in i2v_gen.py.
+    try:
+        print(m, flush=True)
+    except UnicodeEncodeError:
+        enc = getattr(sys.stdout, "encoding", None) or "ascii"
+        print(m.encode(enc, "replace").decode(enc, "replace"), flush=True)
 
 
 def die(m: str) -> None:

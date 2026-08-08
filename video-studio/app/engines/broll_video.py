@@ -25,6 +25,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -217,6 +218,20 @@ NEW SCRIPT (this is what the new video must say and show):
 """
 
 
+PRODUCT_BLOCK = """
+=== THE REAL PRODUCT (this is what the ad is selling) ===
+{name_line}The actual product photo(s) are on disk - READ THEM with the Read tool before you write a single shot:
+{images}{inspo}
+Write the product beats around the object you can SEE in those photos, not a generic version of it: its real size in a hand, how it is opened or held, where it would sit in a normal home. Never describe it wrongly (do not invent a different colour, shape, container or label).
+
+On EVERY shot add `"product_in_shot": true` or `false` - true only where the object is actually visible in frame. Exactly {n_shots} shot(s) should be true; those are the ones that get painted from the real photo, so choose the beats where seeing it matters most (the turn, the routine moment, the payoff). Everywhere else it is false.
+"""
+
+INSPO_BLOCK = """
+These are LOOK references only - match their mood, colour and energy, never copy their content or text:
+{images}"""
+
+
 TAGS_PROMPT = """Write the ON-SCREEN TEXT for a UGC ad — the white sticker-text boxes viewers read while it plays.
 
 Most people watch with the sound OFF, so these tags must carry the STORY on their own: read top to bottom they should make someone understand the whole before -> shift -> after arc without hearing a word.
@@ -305,6 +320,25 @@ def extract_keyframes(video: Path, out_dir: Path, n: int = 6) -> list[Path]:
     return frames
 
 
+def _stage_images(paths, dest_dir: Path, kind: str) -> list[Path]:
+    """Copy the user's reference images into the batch so Claude (cwd=batch) can read them."""
+    out: list[Path] = []
+    for i, p in enumerate(paths or [], 1):
+        src = Path(p).resolve()
+        if not src.is_file():
+            log(f"  (skipping missing {kind} image: {src})")
+            continue
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        dest = dest_dir / f"{kind}-{i:02d}{src.suffix.lower() or '.png'}"
+        try:
+            shutil.copyfile(src, dest)
+        except OSError as exc:
+            log(f"  (could not stage {src.name}: {exc})")
+            continue
+        out.append(dest)
+    return out
+
+
 def cmd_storyboard(a: argparse.Namespace) -> int:
     script = Path(a.script).read_text(encoding="utf-8", errors="replace").strip() if Path(a.script).is_file() else a.script
     if not script or len(script.split()) < 5:
@@ -339,12 +373,30 @@ def cmd_storyboard(a: argparse.Namespace) -> int:
                 "motion": {"type": UGC_MOTION[idx], "intensity": 0.06},
                 "duration_s": 2.5, "emotional_beat": UGC_BEATS[idx],
                 "product_moment": "product_hero" if idx == 5 else ("before_state" if idx < 5 else "after_state"),
+                "product_in_shot": idx == 5,      # scene 6 is the casual product beat
                 "beat_tags": ["ugc", "handheld"], "avatar_fit": [],
             })
     else:
         ref = Path(a.ref).resolve() if getattr(a, "ref", None) else None
         claude = a.claude or "claude"
         tools = ["--disallowedTools", "Write,Edit,Bash,NotebookEdit,WebFetch,WebSearch"]
+
+        # The user's real object + any look references, shown to Claude directly.
+        # They are copied INTO the batch first: the CLI runs with cwd=work and only
+        # reads freely inside it, so an absolute path to _uploads would be refused.
+        prods = _stage_images(getattr(a, "product", None), work / "product", "product")
+        inspos = _stage_images(getattr(a, "inspiration", None), work / "product", "inspiration")
+        product_block = ""
+        if prods:
+            nm = (getattr(a, "product_name", "") or "").strip()
+            product_block = PRODUCT_BLOCK.format(
+                name_line=(f"It is: {nm}\n" if nm else ""),
+                images="\n".join(f"  {p}" for p in prods),
+                inspo=(INSPO_BLOCK.format(images="\n".join(f"  {p}" for p in inspos)) if inspos else ""),
+                n_shots=max(1, min(6, int(getattr(a, "product_shots", 0) or 2))))
+        elif inspos:
+            product_block = "\n=== LOOK REFERENCES ===" + INSPO_BLOCK.format(
+                images="\n".join(f"  {p}" for p in inspos)) + "\n"
 
         if ref and ref.is_file():
             # CLONE a proven UGC ad: read its visual DNA + structure, rebuild for this script
@@ -366,6 +418,13 @@ def cmd_storyboard(a: argparse.Namespace) -> int:
             prompt = (tmpl.format(shots_rule=shots_rule, script=script) if ugc else
                       tmpl.format(shots_rule=shots_rule, brand_block=(BRAND_BLOCK if a.brand else ""), script=script))
             log(f"storyboarding the script with Claude{' (UGC realism)' if ugc else ''}...")
+
+        if product_block:
+            prompt += "\n" + product_block
+            if "--allowedTools" not in tools:
+                tools = ["--allowedTools", "Read"] + tools
+            log(f"showing Claude your product ({len(prods)} photo(s))"
+                + (f" + {len(inspos)} look reference(s)" if inspos else "") + "...")
 
         out = run([claude, "-p", "--model", a.model or "sonnet", *tools],
                   "Claude storyboard", timeout=900, stdin=prompt, cwd=work)
@@ -403,6 +462,8 @@ def cmd_storyboard(a: argparse.Namespace) -> int:
                 "style_ref": "", "motion": {"type": mtype, "intensity": inten},
                 "duration_s": round(dur, 1),
                 "emotional_beat": s.get("emotional_beat") or "", "product_moment": s.get("product_moment") or "",
+                # true = this beat gets painted from the real product photo
+                "product_in_shot": bool(s.get("product_in_shot")),
                 "beat_tags": (s.get("beat_tags") or []) + (["ugc"] if ugc else []),
                 "avatar_fit": s.get("avatar_fit") or [],
             })
@@ -420,6 +481,9 @@ def cmd_storyboard(a: argparse.Namespace) -> int:
     total = sum(s["duration_s"] for s in shots)
     log("")
     log(f"OK storyboard: {len(shots)} shots, ~{total:.0f}s of footage planned")
+    hero = [s["id"] for s in shots if s.get("product_in_shot")]
+    if hero:
+        log(f"your product is in: {', '.join(hero)} — those shots get painted from the real photo")
     log("BATCH: " + work.name)
     return 0
 
@@ -453,6 +517,31 @@ def _ordered_clips(batch: Path) -> list[Path]:
         if cdir.is_dir():
             clips = sorted(cdir.glob("*.mp4"), key=lambda p: _shot_num(p.stem))
     return clips
+
+
+def banner_card(img: Path, dest: Path, w: int, h: int, seconds: float) -> Path:
+    """A still end card at the video's exact size: the banner over a blurred fill of itself."""
+    vf = (f"scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},"
+          f"gblur=sigma=28,setsar=1[bg];"
+          f"[1:v]scale={w}:{h}:force_original_aspect_ratio=decrease[fg];"
+          f"[bg][fg]overlay=(W-w)/2:(H-h)/2,fps=30,format=yuv420p")
+    ff(["-loop", "1", "-t", f"{seconds:.2f}", "-i", str(img),
+        "-loop", "1", "-t", f"{seconds:.2f}", "-i", str(img),
+        "-filter_complex", vf, "-c:v", "libx264", "-crf", "18",
+        "-pix_fmt", "yuv420p", "-r", "30", str(dest)], "build the offer end card")
+    return dest
+
+
+def banner_flash(video: Path, img: Path, dest: Path, w: int, h: int,
+                 at: float, seconds: float) -> Path:
+    """Punch the banner over the footage for a beat, centred, ~78% wide."""
+    bw = int(w * 0.78) // 2 * 2
+    vf = (f"[1:v]scale={bw}:-2[b];"
+          f"[0:v][b]overlay=(W-w)/2:(H-h)/2:enable='between(t,{at:.2f},{at + seconds:.2f})'")
+    ff(["-i", str(video), "-i", str(img), "-filter_complex", vf,
+        "-c:v", "libx264", "-crf", "18", "-pix_fmt", "yuv420p", "-r", "30", str(dest)],
+       "flash the offer banner")
+    return dest
 
 
 def has_audio(p: Path) -> bool:
@@ -527,6 +616,22 @@ def cmd_assemble(a: argparse.Namespace) -> int:
        "concat shots")
     vid_sec = probe_sec(silent)
 
+    # 2b) the offer banner, flashed over the middle of the footage
+    banner = Path(a.banner).resolve() if getattr(a, "banner", None) else None
+    if banner and not banner.is_file():
+        log(f"  (banner image not found: {banner} — skipping it)")
+        banner = None
+    bsec = max(0.5, min(6.0, float(getattr(a, "banner_seconds", 0) or 2.5)))
+    bmode = getattr(a, "banner_mode", "end") or "end"
+    if banner and bmode == "flash":
+        flashed = out_dir / "_broll-flash.mp4"
+        at = max(0.0, vid_sec * 0.55 - bsec / 2)
+        log(f"flashing the offer banner at {at:.1f}s for {bsec:.1f}s")
+        banner_flash(silent, banner, flashed, w, h, at, bsec)
+        silent.unlink(missing_ok=True)
+        flashed.rename(silent)
+        vid_sec = probe_sec(silent)
+
     # 3) if the footage is shorter than the narration, hold the last frame to fit
     if vo_sec and vid_sec + 0.05 < vo_sec:
         pad = round(vo_sec - vid_sec + 0.1, 2)
@@ -538,14 +643,32 @@ def cmd_assemble(a: argparse.Namespace) -> int:
         padded.rename(silent)
         vid_sec = probe_sec(silent)
 
-    # 4) mux narration (build to the VO length, never -shortest) or ship silent
+    # 3b) the offer end card, held after the last shot (the narration keeps
+    #     playing under it, so it lands as a closing frame, not a dead tail)
+    if banner and bmode == "end":
+        card = banner_card(banner, out_dir / "_banner-card.mp4", w, h, bsec)
+        joined = out_dir / "_broll-carded.mp4"
+        ff(["-i", str(silent), "-i", str(card),
+            "-filter_complex", f"[0:v][1:v]concat=n=2:v=1:a=0[v]", "-map", "[v]",
+            "-c:v", "libx264", "-crf", "18", "-pix_fmt", "yuv420p", "-r", "30", str(joined)],
+           f"append the {bsec:.1f}s offer end card")
+        silent.unlink(missing_ok=True)
+        card.unlink(missing_ok=True)
+        joined.rename(silent)
+        vid_sec = probe_sec(silent)
+        log(f"offer end card added — {bsec:.1f}s")
+
+    # 4) mux narration (build to the LONGER of voice/footage, never -shortest)
+    #    or ship silent. The end card sits past the narration, so the target
+    #    length is the video's, not the voice's.
     out = out_dir / "clip.mp4"
     if vo and vo_sec:
+        target = max(vo_sec, vid_sec)
         ff(["-i", str(silent), "-i", str(vo), "-map", "0:v:0", "-map", "1:a:0",
             "-c:v", "copy", "-filter:a", "apad", "-c:a", "aac", "-b:a", "192k",
-            "-t", f"{vo_sec:.3f}", str(out)], "mux narration")
-        guard_len(out, vo_sec)
-        final = vo_sec
+            "-t", f"{target:.3f}", str(out)], "mux narration")
+        guard_len(out, target)
+        final = target
     else:
         ff(["-i", str(silent), "-c", "copy", str(out)], "finalize (silent)")
         final = vid_sec
@@ -556,6 +679,9 @@ def cmd_assemble(a: argparse.Namespace) -> int:
         "model": "broll-video", "model_label": "Script -> AI B-Roll video",
         "aspect": recipe.get("aspect", "9:16"), "seconds": round(final, 2),
         "kind": "broll-video", "shots": len(clips), "narrated": bool(vo),
+        "product": (recipe.get("product") or {}).get("name") or "",
+        "product_stills": (recipe.get("product") or {}).get("stills") or 0,
+        "banner": (banner.name if banner else ""), "banner_mode": (bmode if banner else ""),
         "batch": batch.name, "created": time.strftime("%Y-%m-%d %H:%M:%S"),
     }, indent=1), encoding="utf-8")
 
@@ -583,6 +709,14 @@ def main() -> int:
     sb.add_argument("--ref-script", dest="ref_script", default="",
                     help="the reference's transcript (its hook/pacing informs the rebuild)")
     sb.add_argument("--frames", type=int, default=6, help="keyframes to sample from the reference")
+    sb.add_argument("--product", action="append", default=[],
+                    help="photo of YOUR real product — Claude writes the beats around it (repeatable)")
+    sb.add_argument("--inspiration", action="append", default=[],
+                    help="look/mood reference image, never copied (repeatable)")
+    sb.add_argument("--product-name", dest="product_name", default="",
+                    help="what the product is, in words")
+    sb.add_argument("--product-shots", dest="product_shots", type=int, default=2,
+                    help="how many shots should actually show the product (1-6)")
     sb.add_argument("--claude", help="path to the claude CLI")
     sb.add_argument("--model", default="sonnet", choices=("sonnet", "opus", "haiku"))
 
@@ -598,6 +732,12 @@ def main() -> int:
     asm.add_argument("--script", default="", help="override; else uses the batch's script.txt")
     asm.add_argument("--ref-video", dest="ref_video", help="video to clone the narration voice from")
     asm.add_argument("--voice", help="reference voice wav (Voice Bank) instead of --ref-video")
+    asm.add_argument("--banner", help="offer / sale banner image to show with the video")
+    asm.add_argument("--banner-mode", dest="banner_mode", default="end",
+                     choices=("end", "flash"),
+                     help="end = a closing card after the last shot; flash = punched over the middle")
+    asm.add_argument("--banner-seconds", dest="banner_seconds", type=float, default=2.5,
+                     help="how long the banner is on screen (0.5-6)")
     asm.add_argument("--ds-py", dest="ds_py", help="dubbing venv python (for narration)")
     asm.add_argument("--ds-app", dest="ds_app", help="dubbing-studio/app.py (for narration)")
 

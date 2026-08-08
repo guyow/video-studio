@@ -216,7 +216,10 @@
   .job .jbar i { display: block; height: 100%; background: linear-gradient(90deg,var(--accent),var(--accent2)); border-radius: 3px; transition: width .5s ease; }
   .job { flex-wrap: wrap; }
 </style>
-<link rel="stylesheet" href="/static/vs.css"><script src="/static/vs-nav.js" defer></script></head>
+<link rel="stylesheet" href="/static/vs.css"><script src="/static/vs-nav.js" defer></script>
+<!-- vs-core only DEFINES window.VS (its poller needs an explicit VS.start()), so this page
+     loads it purely to share the one copy of VS.VANILLA_PROMPT with the Creator + Editor -->
+<script src="/static/js/vs-core.js"></script></head>
 <body>
 <header>
   <h1>auto<span>VSL</span> — Mission Control</h1>
@@ -1033,6 +1036,8 @@ async function editScript(stem) {
         <button onclick="aiRewrite(this.textContent)">More emotional and personal</button>
         <button onclick="aiRewrite(this.textContent)">More natural, like real speech</button>
         <button onclick="aiRewrite('Shorten by about 20% while keeping the strongest lines.')">Shorten ~20%</button>
+        <button onclick="aiRewrite(VS.VANILLA_PROMPT, {vanilla: true})"
+          title="Safety pass, not a rewrite: keeps your script exactly as it is and only swaps the words that get ads flagged (psychedelic, microdose, high, cure, guaranteed, spoken URLs) for the nearest safe word — same lines, same rhythm, same length">🍦 Vanilla safe</button>
       </div>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
         <input id="aiinstruction" placeholder="Or describe what to change… e.g. 'make it about brain fog instead of stress'"
@@ -1097,23 +1102,32 @@ function bankRefs() {
 }
 
 let aiPrevText = null;
-async function aiRewrite(preset) {
+async function aiRewrite(preset, opts) {
   const ta = $('#scripttext');
+  const o = opts || {};
   const instruction = preset || $('#aiinstruction').value.trim();
   const go = $('#aigo'), status = $('#aistatus');
   if (!ta.value.trim()) { toast('Script is empty'); return; }
   go.disabled = true; ta.disabled = true;
-  status.textContent = 'Claude is rewriting… (can take up to a minute)';
+  status.textContent = o.vanilla
+    ? '🍦 Claude is swapping only the risky words — everything else stays exactly as you wrote it… (~25s)'
+    : 'Claude is rewriting… (can take up to a minute)';
   try {
+    // the vanilla pass sends no product context and no bank hooks — both feed Claude NEW
+    // copy to write, and this button's whole promise is "same script, safer words"
+    const body = o.vanilla ? {text: ta.value, instruction}
+      : {text: ta.value, instruction, slug: $('#aicontext').value, bank_refs: bankRefs()};
     const r = await api('/api/copywrite', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({text: ta.value, instruction, slug: $('#aicontext').value, bank_refs: bankRefs()}),
+      body: JSON.stringify(body),
     });
     aiPrevText = ta.value;
     ta.value = r.text;
     $('#aiundo').style.display = '';
     const w = ta.value.split(/\s+/).filter(Boolean).length;
-    status.textContent = `Done — ${w} words. Review it, tweak if needed, then Save.`;
+    status.textContent = o.vanilla
+      ? `🍦 Vanilla version — ${w} words. Compare it with your original (↩ Undo restores it), then Save.`
+      : `Done — ${w} words. Review it, tweak if needed, then Save.`;
   } catch (e) {
     status.textContent = '';
     toast('Copywriter error: ' + e.message.slice(0, 200));

@@ -57,7 +57,16 @@ NEG = "blurry, distorted, warped face, low quality, watermark, text artifacts"
 
 
 def log(m: str) -> None:
-    print(m, flush=True)
+    # The Windows console is cp1252 by default, so any non-ASCII in a message
+    # (emoji, en/em dashes, middots) raises UnicodeEncodeError. That would kill
+    # the process AFTER the paid fal.ai call has already succeeded, throwing
+    # away generated footage the user has been billed for. Never let a log line
+    # do that.
+    try:
+        print(m, flush=True)
+    except UnicodeEncodeError:
+        enc = getattr(sys.stdout, "encoding", None) or "ascii"
+        print(m.encode(enc, "replace").decode(enc, "replace"), flush=True)
 
 
 def load_env(env_file: Path) -> None:
@@ -88,10 +97,53 @@ def probe_dur(path: Path) -> float:
 
 
 def last_frame(video: Path, dest: Path) -> None:
-    """Grab a frame from the last 0.2s — the visual seed for the next segment."""
-    ff(["-sseof", "-0.2", "-i", str(video), "-frames:v", "1", "-q:v", "2", str(dest)])
+    """The TRUE final frame — the visual seed for the next segment.
+
+    `-update 1` rewrites the same file for every decoded frame, so the one left on
+    disk is the last. `-frames:v 1` grabbed the FIRST frame after the seek instead,
+    i.e. ~0.2s before the end, so every segment restarted from a moment that had
+    already played — a visible jump back at each join."""
+    ff(["-sseof", "-0.6", "-i", str(video), "-update", "1", "-q:v", "2", str(dest)])
     if not dest.is_file():                       # fallback: first frame of a reversed copy
         ff(["-i", str(video), "-vf", "reverse", "-frames:v", "1", "-q:v", "2", str(dest)])
+
+
+def assemble(seg_files: list[Path], final: Path, blend: float) -> None:
+    """Join the chained segments into one clip.
+
+    Each segment starts from the previous one's last frame, so the geometry already
+    lines up — what gives a join away is the encode/exposure step at the cut. A few
+    frames of dissolve absorb it. With blend=0 we instead drop each segment's first
+    frame, which is a re-render of the seed and would otherwise hold for two frames
+    (a small but visible stutter)."""
+    if len(seg_files) == 1:
+        ff(["-i", str(seg_files[0]), "-c:v", "libx264", "-crf", "18",
+            "-pix_fmt", "yuv420p", "-r", "30", str(final)])
+        return
+
+    inputs = []
+    for p in seg_files:
+        inputs += ["-i", str(p)]
+    norm = "fps=30,setsar=1,format=yuv420p"
+    parts = []
+    for i in range(len(seg_files)):
+        drop = "" if (blend > 0 or i == 0) else "trim=start_frame=1,setpts=PTS-STARTPTS,"
+        parts.append(f"[{i}:v]{drop}{norm}[a{i}]")
+    if blend > 0:
+        cur, run_len = "[a0]", probe_dur(seg_files[0])
+        for i in range(1, len(seg_files)):
+            offset = max(0.0, run_len - blend - 1 / 30)
+            parts.append(f"{cur}[a{i}]xfade=transition=fade:duration={blend:.4f}"
+                         f":offset={offset:.4f}[x{i}]")
+            cur = f"[x{i}]"
+            run_len = run_len + probe_dur(seg_files[i]) - blend
+        filt = ";".join(parts) + f";{cur}null[v]"
+        log(f"  joining {len(seg_files)} segments with a {blend * 30:.0f}-frame dissolve")
+    else:
+        streams = "".join(f"[a{i}]" for i in range(len(seg_files)))
+        filt = ";".join(parts) + f";{streams}concat=n={len(seg_files)}:v=1:a=0[v]"
+    ff([*inputs, "-filter_complex", filt, "-map", "[v]",
+        "-c:v", "libx264", "-crf", "18", "-pix_fmt", "yuv420p", "-r", "30", str(final)])
 
 
 def main() -> int:
@@ -104,6 +156,8 @@ def main() -> int:
     ap.add_argument("--aspect", default="9:16", choices=["9:16", "16:9", "1:1"])
     ap.add_argument("--seconds", type=int, default=30)
     ap.add_argument("--env-file")
+    ap.add_argument("--blend", type=float, default=0.12,
+                    help="seconds of dissolve between chained segments (0 = hard cut)")
     args = ap.parse_args()
 
     load_env(Path(args.env_file) if args.env_file else None)
@@ -179,17 +233,7 @@ def main() -> int:
 
     log("\n=== stage: assemble ===")
     final = work / "clip.mp4"
-    if len(seg_files) == 1:
-        ff(["-i", str(seg_files[0]), "-c:v", "libx264", "-crf", "18",
-            "-pix_fmt", "yuv420p", "-r", "30", str(final)])
-    else:
-        inputs = []
-        for p in seg_files:
-            inputs += ["-i", str(p)]
-        streams = "".join(f"[{i}:v]" for i in range(len(seg_files)))
-        filt = f"{streams}concat=n={len(seg_files)}:v=1:a=0[v]"
-        ff([*inputs, "-filter_complex", filt, "-map", "[v]",
-            "-c:v", "libx264", "-crf", "18", "-pix_fmt", "yuv420p", "-r", "30", str(final)])
+    assemble(seg_files, final, max(0.0, min(args.blend, seg_len * 0.3)))
     if not final.is_file() or final.stat().st_size == 0:
         sys.exit("assembly produced no output")
 

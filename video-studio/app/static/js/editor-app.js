@@ -753,6 +753,7 @@
       </div>
       <button class="ed-run ghostly" id="sc-liitt" title="turn ANY script — any brand, any product — into a liitt Fairy Flame script: detects what it sells, swaps the whole product world to microdose gummies, keeps the winning hook & beats, stays compliant">🔥 liitt</button>
       <button class="ed-run ghostly" id="sc-ai">✨ Rewrite with AI</button>
+      <button class="ed-run ghostly" id="sc-vanilla" title="Safety pass, not a rewrite: keeps your script exactly as it is and only swaps the words that get ads flagged (psychedelic, microdose, high, cure, guaranteed, spoken URLs) for the nearest safe word — same lines, same rhythm, same length, so the lip-sync still fits">🍦 Vanilla safe</button>
       <button class="ed-run ghostly" id="sc-goldies" title="Goldies is a cannabis brand — this rewrites its script as Fairy Flame: brand swap + every weed / flower / smoking / high reference becomes the microdose-gummies equivalent, tone lifted from stoner to premium">🔄 Goldies → Fairy Flame</button>
       <button class="ed-run" id="sc-save">💾 Save script</button>
       <div class="ed-cost free" id="sc-count"></div>
@@ -775,30 +776,37 @@
       catch (e) { VS.toast("Error: " + e.message); }
     };
     const brand = $("#sc-brand", el), aiBtn = $("#sc-ai", el),
-          gBtn = $("#sc-goldies", el), lBtn = $("#sc-liitt", el);
+          gBtn = $("#sc-goldies", el), lBtn = $("#sc-liitt", el), vBtn = $("#sc-vanilla", el);
+    const btns = [aiBtn, gBtn, lBtn, vBtn];
     const syncAi = () => { aiBtn.textContent = brand && brand.checked ? "🔥 Build Fairy Flame script" : "✨ Rewrite with AI"; };
     if (brand) brand.onchange = syncAi;
     syncAi();
-    const doRewrite = async (btn, busy, extra, forceBrand) => {
+    // vanilla:true = a pure safety pass — brand grounding and the News hook add-on are
+    // skipped (both pull the script toward NEW copy, which is what this button promises
+    // not to do). The steer box still applies: explicit user intent wins.
+    const doRewrite = async (btn, busy, extra, forceBrand, vanilla) => {
       if (!ta.value.trim()) { VS.toast("Load or write a script first"); return; }
-      const on = forceBrand || (brand && brand.checked);
+      const on = !vanilla && (forceBrand || (brand && brand.checked));
       const idle = btn.textContent;
-      aiBtn.disabled = gBtn.disabled = lBtn.disabled = true;
+      btns.forEach(b => { if (b) b.disabled = true; });
       btn.textContent = busy;
       const steer = $("#sc-steer", el).value.trim();
       const news = $("#sc-news", el), safe = $("#sc-safe", el);
       const body = {text: ta.value.trim(), instruction: [extra,
-        news && news.checked ? VS.NEWS_HOOK_PROMPT : "",
-        safe && safe.checked ? VS.META_SAFE_PROMPT : "",
+        !vanilla && news && news.checked ? VS.NEWS_HOOK_PROMPT : "",
+        !vanilla && safe && safe.checked ? VS.META_SAFE_PROMPT : "",
         steer].filter(Boolean).join("\n\n")};
       if (on) { body.brand = true; body.slug = "fairy-flame"; }   // grounded in products/fairy-flame/offer.md + hooks/angles banks
       try { const r = await VS.post("/api/copywrite", body);
         ta.value = r.text || ta.value; count();
-        VS.toast(on ? "🔥 Fairy Flame version ready — review then Save" : "Rewritten — review then Save"); }
+        VS.toast(vanilla ? "🍦 Vanilla — same script, safer words. Check it, then Save"
+          : on ? "🔥 Fairy Flame version ready — review then Save" : "Rewritten — review then Save"); }
       catch (e) { VS.toast("Rewrite failed: " + e.message); }
-      aiBtn.disabled = gBtn.disabled = lBtn.disabled = false;
+      btns.forEach(b => { if (b) b.disabled = false; });
       btn.textContent = idle; syncAi();
     };
+    vBtn.onclick = () => doRewrite(vBtn, "🍦 swapping the risky words… (~25s)",
+      VS.VANILLA_PROMPT, false, true);
     // the universal one-press: ANY script, ANY brand/category → a liitt Fairy Flame
     // script. Prompt lives in vs-core.js (VS.LIITT_PROMPT) — shared with the Creator.
     lBtn.onclick = () => doRewrite(lBtn, "🔥 making it liitt… (~45s)", VS.LIITT_PROMPT, true);

@@ -25,6 +25,25 @@
   .clipcard .meta { padding:9px 12px; font-size:12px; color:var(--dim); }
   .gallery { display:grid; grid-template-columns:repeat(auto-fill,minmax(220px,1fr)); gap:12px; }
   .est { font-size:13px; color:var(--warn); font-weight:600; }
+
+  /* your product / inspiration / offer banner */
+  .assetrow { display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr)); gap:10px; }
+  .assetbox { background:var(--panel2); border:1px solid var(--line); border-radius:11px; padding:10px 11px; }
+  .assetbox.drag { border-color:var(--accent); background:rgba(124,92,255,.08); }
+  .assetlbl { font-size:12.5px; font-weight:600; margin-bottom:7px; }
+  .thumbs { display:flex; gap:6px; flex-wrap:wrap; }
+  .thumbs:empty { display:none; }
+  .thumbs figure { position:relative; margin:0; width:56px; height:56px; border-radius:8px;
+    overflow:hidden; border:1px solid var(--line); background:#0a0d14; }
+  .thumbs img { width:100%; height:100%; object-fit:cover; display:block; }
+  .thumbs button { position:absolute; top:1px; right:1px; width:17px; height:17px; line-height:15px;
+    padding:0; border:0; border-radius:5px; background:rgba(0,0,0,.72); color:#fff;
+    font-size:12px; cursor:pointer; }
+  .thumbs button:hover { background:var(--bad,#c0392b); }
+  .assetadd { display:inline-block; margin-top:7px; font-size:12px; color:var(--accent2);
+    border:1px dashed var(--line); border-radius:8px; padding:5px 9px; cursor:pointer; }
+  .assetadd:hover { border-color:var(--accent); background:rgba(124,92,255,.07); }
+  .assetadd.full { opacity:.4; pointer-events:none; }
 </style>
 </head>
 <body>
@@ -48,6 +67,10 @@
       <textarea class="vs-ta" id="prompt" rows="4"
         placeholder="e.g. slow cinematic push-in, gentle camera drift, warm light, subtle steam rising"></textarea>
       <div class="vs-hint" style="margin-top:6px">Tip: describe camera motion + mood. The picture stays the subject.</div>
+      <div class="vs-hint" style="margin-top:9px;padding-top:9px;border-top:1px solid var(--line)">
+        Cloning a video that already works? <a href="/frame-reader" style="color:var(--accent2)">🔬 Frame
+        Reader</a> watches it scene by scene and hands you a ready prompt for every beat.
+      </div>
     </div>
 
     <div class="vs-panel">
@@ -89,7 +112,10 @@
       <div class="vs-hint" style="margin-bottom:10px">Drop a brand UGC ad that already works. It's transcribed, then
         Claude <b>watches its keyframes</b> and learns what makes it win — the beat order, the pacing, the settings.
         Your script is rebuilt on that proven structure as handheld UGC shots, generated on fal.ai and narrated in
-        the reference speaker's cloned voice. Modelling a winner, never copying it.</div>
+        the reference speaker's cloned voice. Modelling a winner, never copying it.<br><br>
+        Add a photo of <b>your actual product</b> and it stops being generic: Claude writes the beats around the real
+        object, those shots are painted from your photo, and only then animated — so what viewers see is the thing
+        you sell, in your packaging. Drop in a look reference and an offer banner too.</div>
 
       <div class="vs-hint">1 · The reference UGC <span style="opacity:.7">(its structure, pacing + voice get modelled)</span></div>
       <label class="drop-img" id="vdrop" style="min-height:96px;margin-top:5px">
@@ -101,11 +127,55 @@
         <span class="vs-hint" id="vtransmsg"></span>
       </div>
 
-      <div class="vs-hint" style="margin-top:14px">2 · The new script <span style="opacity:.7">(this becomes the narration)</span></div>
+      <div class="vs-hint" style="margin-top:16px">2 · Your product <span style="opacity:.7">(optional — but this
+        is what puts <b>your</b> object on screen instead of one the AI invented)</span></div>
+      <div class="assetrow" style="margin-top:5px">
+        <div class="assetbox" data-slot="product">
+          <div class="assetlbl">📦 Your product<span class="vs-hint"> · up to 3</span></div>
+          <div class="thumbs" id="th-product"></div>
+          <label class="assetadd">＋ add a photo
+            <input type="file" accept="image/png,image/jpeg,image/webp" multiple style="display:none"></label>
+          <div class="vs-hint">A clean, well-lit shot. Add the packaging and an in-hand angle
+            if you have them — the more it sees, the more faithful the object stays.</div>
+        </div>
+        <div class="assetbox" data-slot="inspiration">
+          <div class="assetlbl">✨ Inspiration<span class="vs-hint"> · up to 3</span></div>
+          <div class="thumbs" id="th-inspiration"></div>
+          <label class="assetadd">＋ add a look reference
+            <input type="file" accept="image/png,image/jpeg,image/webp" multiple style="display:none"></label>
+          <div class="vs-hint">Mood, colour and framing only — never copied. Use an ad or a photo
+            whose <i>feel</i> you want.</div>
+        </div>
+        <div class="assetbox" data-slot="banner">
+          <div class="assetlbl">🏷 Sale banner<span class="vs-hint"> · 1</span></div>
+          <div class="thumbs" id="th-banner"></div>
+          <label class="assetadd">＋ add your offer graphic
+            <input type="file" accept="image/png,image/jpeg,image/webp" style="display:none"></label>
+          <div class="vs-row" style="gap:8px;margin-top:6px">
+            <select class="vs-sel" id="bvbannermode" style="width:auto">
+              <option value="end" selected>end card — after the last shot</option>
+              <option value="flash">flash — punched over the middle</option>
+            </select>
+            <label class="vs-hint">for
+              <input type="number" id="bvbannersec" value="2.5" min="0.5" max="6" step="0.5"
+                style="width:56px;margin-left:4px">s</label>
+          </div>
+        </div>
+      </div>
+      <div class="vs-row" style="gap:10px;flex-wrap:wrap;margin-top:9px">
+        <input class="vs-in" id="bvprodname" style="flex:1;min-width:240px"
+          placeholder="what it is, in words — e.g. Fairy Flame, magenta flame-shaped gummies in an amber glass jar">
+        <label class="vs-hint">in
+          <input type="number" id="bvprodshots" value="2" min="1" max="6" style="width:52px;margin:0 4px">shots</label>
+        <select class="vs-sel" id="bvstillmodel" style="width:auto"></select>
+      </div>
+      <div class="vs-hint" id="bvprodnote" style="margin-top:6px;opacity:.85"></div>
+
+      <div class="vs-hint" style="margin-top:16px">3 · The new script <span style="opacity:.7">(this becomes the narration)</span></div>
       <textarea class="vs-ta" id="bvscript" rows="6" style="margin-top:5px"
         placeholder="transcribe above to load the original words, then rewrite them — or just paste your new script here"></textarea>
 
-      <div class="vs-hint" style="margin-top:12px">3 · How it renders</div>
+      <div class="vs-hint" style="margin-top:12px">4 · How it renders</div>
       <div class="vs-row" style="gap:10px;flex-wrap:wrap;margin-top:5px">
         <label class="vs-hint">shots
           <input type="number" id="bvshots" value="6" min="2" max="12" style="width:58px;margin-left:5px"></label>
@@ -185,6 +255,18 @@
   $("#prompt").oninput = () => refreshGen();
 
   function refreshGen() { $("#gen").disabled = busy || !uploaded || $("#prompt").value.trim().length < 3; }
+
+  // handed over from the Frame Reader ("→ Image→Video" on a scene) — the URL
+  // carries it, sessionStorage survives anything the URL truncates.
+  (() => {
+    let p = new URLSearchParams(location.search).get("prompt");
+    try { p = p || sessionStorage.getItem("vs.i2v.prompt"); } catch (e) { /* private mode */ }
+    if (!p) return;
+    $("#prompt").value = p;
+    try { sessionStorage.removeItem("vs.i2v.prompt"); } catch (e) { /* ignore */ }
+    if (location.search) history.replaceState(null, "", location.pathname);
+    refreshGen();
+  })();
 
   // image upload
   const drop = $("#drop"), file = $("#file");
@@ -422,6 +504,77 @@
     btn.disabled = false;
   };
 
+  /* ═══ Your product / inspiration / offer banner ═══
+     Three small pickers over the same upload store. The product photos are the
+     ones that matter: they get painted into the shots that show the object, so
+     what ships is the thing you actually sell. */
+  const ASSETS = {product: [], inspiration: [], banner: []};
+  const ASSET_MAX = {product: 3, inspiration: 3, banner: 1};
+
+  function drawAssets(slot) {
+    const box = $(`#th-${slot}`);
+    box.innerHTML = ASSETS[slot].map((p, i) =>
+      `<figure><img src="/media/${p}" alt=""><button data-i="${i}" title="remove">×</button></figure>`).join("");
+    box.querySelectorAll("button").forEach(b => b.onclick = () => {
+      ASSETS[slot].splice(+b.dataset.i, 1); drawAssets(slot); productNote();
+    });
+    const add = document.querySelector(`.assetbox[data-slot="${slot}"] .assetadd`);
+    add.classList.toggle("full", ASSETS[slot].length >= ASSET_MAX[slot]);
+  }
+
+  async function addAssets(slot, files) {
+    for (const f of [...files]) {
+      if (ASSETS[slot].length >= ASSET_MAX[slot]) { VS.toast(`${slot}: max ${ASSET_MAX[slot]}`); break; }
+      const fd = new FormData(); fd.append("file", f);
+      try {
+        const r = await fetch("/api/i2v/upload", {method: "POST", body: fd});
+        if (!r.ok) throw new Error((await r.text()).slice(0, 120));
+        ASSETS[slot].push((await r.json()).image);
+      } catch (e) { VS.toast("Upload failed: " + e.message); }
+    }
+    drawAssets(slot); productNote();
+  }
+
+  document.querySelectorAll(".assetbox").forEach(box => {
+    const slot = box.dataset.slot, inp = box.querySelector("input[type=file]");
+    inp.onchange = e => { addAssets(slot, e.target.files); e.target.value = ""; };
+    ["dragover", "dragleave", "drop"].forEach(ev => box.addEventListener(ev, e => {
+      e.preventDefault();
+      box.classList.toggle("drag", ev === "dragover");
+      if (ev === "drop" && e.dataTransfer.files.length) addAssets(slot, e.dataTransfer.files);
+    }));
+  });
+
+  // product stills are painted on fal.ai, so price them honestly up front
+  let stillCost = 0.039;
+  try {
+    const im = await VS.api("/api/img/models");
+    const models = im.models || [];
+    $("#bvstillmodel").innerHTML = models.map(m =>
+      `<option value="${m.key}" data-c="${m.cost}">${VS.esc(m.label.split(" — ")[0])} · $${m.cost}/still</option>`)
+      .join("");
+    const pick = () => { stillCost = +$("#bvstillmodel").selectedOptions[0].dataset.c || 0.039; productNote(); };
+    $("#bvstillmodel").onchange = pick; if (models.length) pick();
+  } catch (e) {
+    $("#bvstillmodel").innerHTML = '<option value="nano-banana">Nano Banana · $0.039/still</option>';
+  }
+
+  function productNote() {
+    const n = ASSETS.product.length, note = $("#bvprodnote");
+    const shots = Math.max(1, Math.min(6, +$("#bvprodshots").value || 2));
+    if (!n) {
+      note.textContent = ASSETS.banner.length
+        ? "No product photo — the footage stays AI-invented, but your banner is still added."
+        : "No product photo yet — the shots will show an AI-invented version of your product.";
+      return;
+    }
+    note.innerHTML = `✓ Your product goes into <b>${shots}</b> shot${shots > 1 ? "s" : ""} — painted from `
+      + `your ${n} photo${n > 1 ? "s" : ""}, then animated through image→video so the object stays yours. `
+      + `Adds ~$${(shots * stillCost).toFixed(2)}. <span style="opacity:.75">Needs the fal.ai text→video engine.</span>`;
+  }
+  $("#bvprodshots").oninput = productNote;
+  productNote();
+
   // paid text->video models (no local GPU) + show/hide with the engine picker
   try {
     const t = await VS.api("/api/t2v/models");
@@ -443,10 +596,30 @@
     const script = $("#bvscript").value.trim();
     if (script.split(/\s+/).filter(Boolean).length < 5) { VS.toast("Write or transcribe a script first"); return; }
     const sty = $("#bvstyle").value;
+    // painting your real product into a shot needs the fal image model, which
+    // only the fal text->video path uses — say so instead of failing at the server
+    if (ASSETS.product.length && $("#bvmotion").value !== "fal-t2v") {
+      if (!confirm("Your product photo can only be painted into the shots on the fal.ai text→video "
+        + "engine.\n\nSwitch to it and continue? (Cancel = keep the current engine and generate "
+        + "without your product)")) {
+        VS.toast("Generating without your real product");
+      } else {
+        $("#bvmotion").value = "fal-t2v";
+        $("#bvmotion").dispatchEvent(new Event("change"));
+      }
+    }
     const body = {script, file: bvFile || "", shots: +$("#bvshots").value || 6,
       motion: $("#bvmotion").value, t2v_model: $("#bvt2v").value || "veo3-fast",
       aspect, brand: $("#bvbrand").checked, tags: $("#bvtags").checked,
-      ugc: sty !== "cine", preset: sty === "ugc10" ? "ugc10" : ""};
+      ugc: sty !== "cine", preset: sty === "ugc10" ? "ugc10" : "",
+      product_images: $("#bvmotion").value === "fal-t2v" ? ASSETS.product : [],
+      inspiration_images: ASSETS.inspiration,
+      product_name: $("#bvprodname").value.trim(),
+      product_shots: Math.max(1, Math.min(6, +$("#bvprodshots").value || 2)),
+      still_model: $("#bvstillmodel").value || "nano-banana",
+      banner_image: ASSETS.banner,
+      banner_mode: $("#bvbannermode").value,
+      banner_seconds: +$("#bvbannersec").value || 2.5};
     const hdr = {"Content-Type": "application/json"};
     bvBusy = true; $("#bvgo").disabled = true; $("#bvmsg").textContent = "";
     try {

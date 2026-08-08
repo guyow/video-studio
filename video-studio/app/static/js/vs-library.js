@@ -23,7 +23,9 @@
       : v.dub ? '<span class="vs-badge dub">dubbed</span>' : "";
     return `<div class="vs-card" data-name="${VS.esc(v.name)}">
       <div class="vs-thumb"><img loading="lazy" src="/api/thumb/${encodeURIComponent(v.name)}" alt="">
-        ${badge}</div>
+        ${badge}
+        <button class="vs-cut" data-cut="${VS.esc(v.name)}" title="Open in the Timeline editor">✂</button>
+        <button class="vs-del" data-del="${VS.esc(v.name)}" title="Delete video (goes to .trash, restorable)">🗑</button></div>
       <div class="vs-cardbody">
         <div class="vs-cardtitle" title="${VS.esc(v.name)}">${VS.esc(title)}</div>
         <div class="vs-cardmeta">
@@ -51,6 +53,57 @@
       el.onclick = () => {
         const v = VS.state.videos.find(x => x.name === el.dataset.name);
         if (v) VS.modal.open(v);
+      };
+    });
+    // ✂ open in Timeline: find (or create) this video's cut project and jump in.
+    // The Creator runs the AI pipeline; the Timeline is where you cut — this
+    // button is the bridge between the two.
+    VS.$$(".vs-cut", grid).forEach(b => {
+      b.onclick = async e => {
+        e.stopPropagation();
+        b.disabled = true;
+        const name = b.dataset.cut;
+        const slug = ("cut-" + name.replace(/\.[^.]+$/, ""))
+          .toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60);
+        try {
+          const list = await VS.api("/api/seq/projects");
+          if ((list.projects || []).some(p => p.slug === slug)) {
+            location.href = "/timeline?p=" + slug;
+            return;
+          }
+          const d = await VS.post("/api/seq/projects",
+            {name: "Cut — " + name.replace(/\.[^.]+$/, ""), slug, w: 1080, h: 1920, fps: 30});
+          await VS.post("/api/seq/" + d.slug + "/op",
+            {op: "add", src: "uploads/" + name, append: true});
+          location.href = "/timeline?p=" + d.slug;
+        } catch (err) {
+          VS.toast("Could not open in Timeline: " + err.message);
+          b.disabled = false;
+        }
+      };
+    });
+    // two-step armed delete (confirm() popups are blocked in embedded panes):
+    // first click arms the button for 3s, the second click actually deletes
+    VS.$$(".vs-del", grid).forEach(b => {
+      b.onclick = async e => {
+        e.stopPropagation();
+        if (!b.classList.contains("armed")) {
+          b.classList.add("armed");
+          b.textContent = "sure?";
+          setTimeout(() => { b.classList.remove("armed"); b.textContent = "🗑"; }, 3000);
+          return;
+        }
+        b.disabled = true;
+        try {
+          await VS.post("/api/creator/delete", {name: b.dataset.del});
+          VS.toast(`Deleted ${b.dataset.del} — restorable from .trash`);
+          await VS.refreshLibrary();
+        } catch (err) {
+          VS.toast("Delete failed: " + err.message);
+          b.disabled = false;
+          b.classList.remove("armed");
+          b.textContent = "🗑";
+        }
       };
     });
     const n = VS.state.videos;

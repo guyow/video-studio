@@ -27,47 +27,58 @@ import time
 from pathlib import Path
 
 # dur: how the model wants duration — "str" ('5'), "strs" ('8s'), or "int" (8)
+# i2v: the same model's IMAGE-to-video endpoint. A shot that carries a `still`
+# (painted from the user's real product) renders through this one instead, so
+# the object on screen is theirs and not something the model invented.
 MODELS = {
     "veo3": {
         "label": "Veo 3 — best quality, native audio (premium)",
-        "endpoint": "fal-ai/veo3", "dur": "strs", "durations": ["4s", "6s", "8s"],
+        "endpoint": "fal-ai/veo3", "i2v": "fal-ai/veo3/image-to-video",
+        "dur": "strs", "durations": ["4s", "6s", "8s"],
         "aspects": ["16:9", "9:16"], "cost_per_s": 0.40, "audio": True, "resolution": "1080p",
     },
     "veo3-fast": {
         "label": "Veo 3 Fast — Veo quality, cheaper (recommended)",
-        "endpoint": "fal-ai/veo3/fast", "dur": "strs", "durations": ["4s", "6s", "8s"],
+        "endpoint": "fal-ai/veo3/fast", "i2v": "fal-ai/veo3/fast/image-to-video",
+        "dur": "strs", "durations": ["4s", "6s", "8s"],
         "aspects": ["16:9", "9:16"], "cost_per_s": 0.15, "audio": True, "resolution": "720p",
     },
     "sora-2": {
         "label": "Sora 2 — OpenAI, strong realism",
-        "endpoint": "fal-ai/sora-2/text-to-video", "dur": "int", "durations": [4, 8, 12],
+        "endpoint": "fal-ai/sora-2/text-to-video", "i2v": "fal-ai/sora-2/image-to-video",
+        "dur": "int", "durations": [4, 8, 12],
         "aspects": ["16:9", "9:16"], "cost_per_s": 0.30, "audio": True, "resolution": "720p",
     },
     "kling-2.5-pro": {
         "label": "Kling 2.5 Turbo Pro — great motion",
-        "endpoint": "fal-ai/kling-video/v2.5-turbo/pro/text-to-video", "dur": "str",
+        "endpoint": "fal-ai/kling-video/v2.5-turbo/pro/text-to-video",
+        "i2v": "fal-ai/kling-video/v2.5-turbo/pro/image-to-video", "dur": "str",
         "durations": ["5", "10"], "aspects": ["16:9", "9:16", "1:1"], "cost_per_s": 0.07,
     },
     "kling-2.1-master": {
         "label": "Kling 2.1 Master — cinematic",
-        "endpoint": "fal-ai/kling-video/v2.1/master/text-to-video", "dur": "str",
+        "endpoint": "fal-ai/kling-video/v2.1/master/text-to-video",
+        "i2v": "fal-ai/kling-video/v2.1/master/image-to-video", "dur": "str",
         "durations": ["5", "10"], "aspects": ["16:9", "9:16", "1:1"], "cost_per_s": 0.09,
     },
     "seedance-pro": {
         "label": "Seedance 1.0 Pro — 1080p, flexible length",
-        "endpoint": "fal-ai/bytedance/seedance/v1/pro/text-to-video", "dur": "str",
+        "endpoint": "fal-ai/bytedance/seedance/v1/pro/text-to-video",
+        "i2v": "fal-ai/bytedance/seedance/v1/pro/image-to-video", "dur": "str",
         "durations": [str(n) for n in range(2, 13)],
         "aspects": ["16:9", "9:16", "1:1", "4:3", "3:4", "21:9"],
         "cost_per_s": 0.12, "resolution": "1080p",
     },
     "hailuo-02": {
         "label": "MiniMax Hailuo 02 — lively motion, cheap",
-        "endpoint": "fal-ai/minimax/hailuo-02/standard/text-to-video", "dur": "str",
+        "endpoint": "fal-ai/minimax/hailuo-02/standard/text-to-video",
+        "i2v": "fal-ai/minimax/hailuo-02/standard/image-to-video", "dur": "str",
         "durations": ["6", "10"], "aspects": ["16:9", "9:16", "1:1"], "cost_per_s": 0.05,
     },
     "wan-2.2": {
         "label": "Wan 2.2 — budget",
-        "endpoint": "fal-ai/wan/v2.2-a14b/text-to-video", "dur": "str",
+        "endpoint": "fal-ai/wan/v2.2-a14b/text-to-video",
+        "i2v": "fal-ai/wan/v2.2-a14b/image-to-video", "dur": "str",
         "durations": ["5"], "aspects": ["16:9", "9:16", "1:1"], "cost_per_s": 0.04,
     },
 }
@@ -185,20 +196,56 @@ def main() -> int:
         dur_val, real = pick_duration(model, float(s.get("duration_s") or 4))
         prompt = (s.get("prompt") or "").strip()
         log(f"\n[{i}/{len(shots)}] {sid} — {(s.get('title') or prompt)[:58]}")
-        log(f"    {real:.0f}s on {model['endpoint']}")
-        args_ = {"prompt": prompt, "aspect_ratio": aspect, "duration": dur_val}
+
+        # a shot with a `still` holds the user's REAL product: animate that exact
+        # frame instead of letting the model invent the object from words.
+        still = Path(s["still"]) if s.get("still") else None
+        still_url = None
+        if still and still.is_file() and model.get("i2v"):
+            try:
+                still_url = fal_client.upload_file(str(still))
+            except Exception as exc:              # noqa: BLE001
+                log(f"    (could not upload {still.name}: {str(exc)[:120]} — text-to-video instead)")
+        elif still and still.is_file():
+            log(f"    ({a.model} has no image-to-video endpoint — text-to-video instead)")
+
+        endpoint = model["i2v"] if still_url else model["endpoint"]
+        args_ = {"prompt": prompt, "duration": dur_val}
+        if not still_url:
+            # image-to-video takes its aspect from the still itself; passing one
+            # is a validation error on several of these endpoints.
+            args_["aspect_ratio"] = aspect
+        else:
+            args_["image_url"] = still_url
         if model.get("resolution"):
             args_["resolution"] = model["resolution"]
         if model.get("audio"):
             args_["generate_audio"] = False        # narration is added at assembly
         if a.model.startswith("kling"):
             args_["negative_prompt"] = (s.get("negative") or NEG)[:900]
+        log(f"    {real:.0f}s on {endpoint}" + ("  · your product still" if still_url else ""))
         try:
-            res = fal_client.subscribe(model["endpoint"], arguments=args_, with_logs=False)
+            res = fal_client.subscribe(endpoint, arguments=args_, with_logs=False)
         except Exception as exc:                  # noqa: BLE001
-            log(f"    FAILED: {str(exc)[:200]}")
-            failed.append(sid)
-            continue
+            # these endpoints differ in which optional params they accept; a
+            # schema rejection is worth one retry on the bare minimum before
+            # writing the shot off.
+            msg = str(exc)
+            retry = still_url and any(w in msg.lower() for w in ("422", "validation", "unprocessable",
+                                                                "extra", "not permitted", "unexpected"))
+            if not retry:
+                log(f"    FAILED: {msg[:200]}")
+                failed.append(sid)
+                continue
+            log(f"    schema rejected the extras ({msg[:100]}) — retrying minimal ...")
+            try:
+                res = fal_client.subscribe(endpoint, arguments={
+                    "prompt": prompt, "image_url": still_url, "duration": dur_val},
+                    with_logs=False)
+            except Exception as exc2:             # noqa: BLE001
+                log(f"    FAILED: {str(exc2)[:200]}")
+                failed.append(sid)
+                continue
         v = res.get("video") or {}
         url = v.get("url") if isinstance(v, dict) else v
         if not url:

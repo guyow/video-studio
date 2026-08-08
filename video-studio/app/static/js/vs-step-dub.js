@@ -69,12 +69,14 @@
                 <a href="/voices" target="_blank" class="vs-hint" style="margin-left:6px">manage ↗</a></label>
               <label class="vs-hint">lip-sync
                 <select class="vs-sel" id="dub-llip">
-                  <option value="wav2lip-hd" selected>Wav2Lip HD (GFPGAN, free)</option>
-                  <option value="wav2lip">Wav2Lip (faster, softer)</option>
-                  <option value="none">voice only</option>
-                  <option value="latentsync">latentsync (fal, $)</option>
-                  <option value="veed">veed (fal, $)</option>
-                  <option value="standard">sync v2 (fal, $$)</option>
+                  <option value="wav2lip-hd" selected>💸 CHEAPEST — Wav2Lip HD, local GPU (FREE)</option>
+                  <option value="latentsync">⭐ BEST VALUE — LatentSync, near-best quality ~$0.20/40s 💰</option>
+                  <option value="pro">🏆 BEST — sync v2 PRO, studio-grade (priciest ~$6/min) 💰</option>
+                  <option value="musetalk">MuseTalk — fal.ai, fast + balanced ~$0.20/40s 💰</option>
+                  <option value="wav2lip">Wav2Lip — local GPU, faster but soft mouth (FREE)</option>
+                  <option value="none">None — keep the original mouth (FREE)</option>
+                  <option value="veed">VEED lipsync — fal.ai ~$0.40/min 💰</option>
+                  <option value="standard">sync-lipsync v2 — fal.ai ~$3/min 💰</option>
                 </select></label>
               <label class="vs-hint">language
                 <select class="vs-sel" id="dub-lang">
@@ -86,16 +88,17 @@
             <div id="dub-fal" class="vs-row" style="display:none">
               <label class="vs-hint">voice
                 <select class="vs-sel" id="dub-tts">
-                  <option value="hd" selected>MiniMax HD</option>
-                  <option value="turbo">MiniMax turbo</option>
-                  <option value="f5">F5 zero-shot (no clone fee)</option>
+                  <option value="hd" selected>MiniMax speech-02-hd — best voice ($0.10/1k + $1.50 clone) 💰</option>
+                  <option value="turbo">MiniMax speech-02-turbo (+$1.50 one-time clone) 💰</option>
+                  <option value="f5">F5-TTS — $0.05/1k chars, clones free from source 💰</option>
                 </select></label>
               <label class="vs-hint">lip-sync tier
                 <select class="vs-sel" id="dub-tier">
-                  <option value="standard" selected>sync v2 standard</option>
-                  <option value="pro">sync v2 pro (best)</option>
-                  <option value="veed">veed (cheap)</option>
-                  <option value="latentsync">latentsync (cheapest)</option>
+                  <option value="standard" selected>sync-lipsync v2 — ~$3/min 💰</option>
+                  <option value="pro">🏆 BEST — sync v2 PRO, studio-grade (priciest ~$6/min) 💰</option>
+                  <option value="latentsync">⭐ BEST VALUE — LatentSync, near-best quality ~$0.20/40s 💰</option>
+                  <option value="musetalk">MuseTalk — fast + balanced ~$0.20/40s 💰</option>
+                  <option value="veed">VEED lipsync — ~$0.40/min 💰</option>
                 </select></label>
             </div>
             <div class="vs-row">

@@ -233,6 +233,20 @@ the migration is additive and path-based, nothing in the source projects ever ch
 
 ## Post-migration additions
 
+- [x] **Ad Batches** *(2026-08-08)* — new tab `/batches` (Brand & Ads group): the three-layer
+  batch system (Template / Copy / Production) from guy's BATCH template doc, with the layer
+  gates enforced server-side — production edits 403 until the copy layer carries a named
+  approval, and editing approved copy voids the approval. Blueprint `app/api_batches.py`
+  (modeled on api_sequence). Storage: `<autovsl>/output/ad-batches/<slug>/batch.json` +
+  template library at `<autovsl>/banks/ad-templates.json`. Automation: instant local
+  compliance scanner (meta-safe word list: restricted vocab, disease claims, spoken URLs —
+  auto-ticks the checklist), 🤖 AI compliance review via Claude CLI, hook picker reading
+  `/api/bank/hooks`, job attach from `/api/jobs`, one-click export of the filled markdown
+  batch record, accepted-batch template graduation into the library, and 📄 brief→template:
+  upload a brief PDF (pypdf, installed in the autoVSL venv) or paste text → Claude proposes
+  the Layer-1 template, editable, then saved to the library or applied to the open batch.
+  Verified E2E: offline Flask-client suite (15 checks) + live browser pass (create, autosave,
+  dirty scan 4 blockers, clean scan, approve → Layer 3 unlock) + real brief analysis.
 - [x] **Visual Repair** *(2026-07-16)* — `app/engines/visual_repair.py`: restores lip-sync visual
   damage (mangled objects/background/face) from the ORIGINAL video, frame-matched, no AI, free.
   ZNCC alignment on masked thumbnails (anchors → identity/offset/retime model fit → held-out

@@ -10,10 +10,12 @@ via subprocess — nothing in those folders is modified.
 """
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
 import subprocess
+import sys
 import threading
 import time
 import uuid
@@ -1766,7 +1768,8 @@ def api_file():
 def media(rel):
     target = (ROOT / rel).resolve()
     if not str(target).startswith(str(ROOT)) or target.suffix.lower() not in (
-            ".mp4", ".mov", ".mkv", ".webm", ".m4v", ".mp3", ".m4a", ".wav", ".png", ".jpg", ".jpeg"):
+            ".mp4", ".mov", ".mkv", ".webm", ".m4v", ".mp3", ".m4a", ".wav",
+            ".png", ".jpg", ".jpeg", ".webp"):
         abort(403)
     if not target.is_file():
         abort(404)
@@ -2247,6 +2250,46 @@ def api_creator_library():
         "tags": sorted({t for v in vids for t in v["tags"]}),
         "fal_spend": round(float(load_spend().get("total", 0.0)), 2),
     })
+
+
+@app.post("/api/creator/delete")
+def api_creator_delete():
+    """Delete an uploaded video and everything derived from it.
+
+    Soft everywhere — every piece goes to .trash and is restorable via
+    /api/trash/restore, matching how the rest of the app deletes things.
+    """
+    b = request.get_json(force=True)
+    name = Path(b.get("name") or "").name
+    src = UPLOADS / name
+    if not name or not src.is_file() or src.suffix.lower() not in CREATOR_VIDEO_EXTS:
+        abort(404, "no such video")
+    stem = src.stem
+    if _cleanup_is_busy(stem):
+        abort(409, "a job is still running on this video — stop it first")
+
+    trashed = []
+    targets = [
+        (src, f"upload-{stem}"),                              # the video itself
+        (UPLOADS / ".originals" / name, f"original-{stem}"),  # pre-clean backup
+        (SWAP_WORK / stem, f"workdir-{stem}"),                # dubs/scripts/takes
+        (TRANSCRIPTS / f"{stem}.md", f"transcript-{stem}"),
+        (SUBSTUDIO_OUT / stem, f"captions-{stem}"),           # caption workdir
+    ]
+    for target, label in targets:
+        if target.exists():
+            try:
+                trashed.append(soft_delete(target, label))
+            except Exception as exc:
+                # stop rather than half-delete silently; what moved is listed
+                abort(500, f"stopped at {target.name}: {exc} (already trashed: {trashed})")
+    with library_lock:
+        m = library_meta()
+        if name in m:
+            m.pop(name)
+            LIBRARY_FILE.write_text(json.dumps(m, indent=1), encoding="utf-8")
+    cleanup.cancel(stem)      # a queued auto-cleanup for it no longer applies
+    return jsonify({"deleted": name, "trashed": trashed})
 
 
 @app.post("/api/creator/meta")
@@ -3321,6 +3364,14 @@ def api_exports():
         for d in sorted(I2V_OUT.iterdir()):
             if d.is_dir() and d.name != "_uploads" and (d / "clip.mp4").is_file():
                 items.append(_export_item(d / "clip.mp4", "i2v", f"{d.name} (image→video)"))
+    if IMG_OUT.is_dir():                       # newest version of each edited image
+        for d in sorted(IMG_OUT.iterdir()):
+            if not d.is_dir() or d.name == "_refs":
+                continue
+            vers = [p for p in sorted(d.glob("v[0-9][0-9].*"))
+                    if p.suffix.lower() in IMG_EXTS]
+            if vers:
+                items.append(_export_item(vers[-1], "image", f"{d.name} ({vers[-1].stem})"))
     items.sort(key=lambda x: x["mtime"], reverse=True)
     return jsonify({"items": items, "exports_dir": str(EXPORTS_DIR)})
 
@@ -3337,8 +3388,10 @@ def api_exports_send():
     else:
         rel = (body.get("path") or "").replace("\\", "/")
         src = (ROOT / rel).resolve()
-        if not str(src).startswith(str(ROOT / "output")) or src.suffix != ".mp4":
-            abort(400, "path must be an .mp4 under output/")
+        # images are deliverables too (Image Editor) — keep everything else mp4-only
+        if not str(src).startswith(str(ROOT / "output")) or src.suffix.lower() not in (
+                {".mp4"} | IMG_EXTS):
+            abort(400, "path must be an .mp4 or an image under output/")
         parts = src.relative_to(ROOT / "output").parts
         flat = src.name if len(parts) == 1 else f"{parts[-2]}-{src.name}"
     if not src.is_file():
@@ -3346,7 +3399,7 @@ def api_exports_send():
     EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
     dest, n = EXPORTS_DIR / flat, 2
     while dest.exists():                       # never clobber an earlier export
-        dest = EXPORTS_DIR / f"{Path(flat).stem}-{n}.mp4"
+        dest = EXPORTS_DIR / f"{Path(flat).stem}-{n}{src.suffix}"
         n += 1
     shutil.copy2(src, dest)
 
@@ -3612,6 +3665,30 @@ def _fit_work(stem: str) -> Path:
     return work
 
 
+def _fit_aspect(src: Path, want: str) -> str:
+    """'auto' → the aspect the SOURCE actually is. Generating 9:16 filler for a 16:9
+    clip means the extension gets cropped or letterboxed halfway through the video —
+    the most visible seam there is. Defaults to the closest of the three."""
+    if want != "auto":
+        return want
+    v = next((s for s in (ffprobe_json(src).get("streams") or [])
+              if s.get("codec_type") == "video"), {})
+    try:
+        ratio = float(v["width"]) / float(v["height"])
+    except (KeyError, TypeError, ValueError, ZeroDivisionError):
+        return "9:16"
+    return min((("9:16", 9 / 16), ("1:1", 1.0), ("16:9", 16 / 9)),
+               key=lambda kv: abs(kv[1] - ratio))[0]
+
+
+def _fit_blend(b: dict) -> float:
+    """Seconds of dissolve over the join. 0 = frame-exact hard cut."""
+    try:
+        return max(0.0, min(0.6, float(b.get("blend", 0.17))))
+    except (TypeError, ValueError):
+        return 0.17
+
+
 def _fit_need(gap: float, seg: int) -> int:
     """Seconds to request from i2v: the gap rounded UP to a whole segment, so the
     generated footage is never short of the gap (a segment multiple also makes the
@@ -3690,8 +3767,9 @@ def api_fit_run():
     aspect = b.get("aspect", "9:16")
     if model not in I2V_MODELS:
         abort(400, "unknown model")
-    if aspect not in ("9:16", "16:9", "1:1"):
+    if aspect not in ("9:16", "16:9", "1:1", "auto"):
         abort(400, "bad aspect")
+    aspect = _fit_aspect(src, aspect)
     seg = I2V_MODELS[model]["seg"]
     need = _fit_need(float(plan.get("gap") or 0), seg)
     est = _i2v_estimate(model, need)
@@ -3702,12 +3780,40 @@ def api_fit_run():
     cmd = [cv_py, str(FIT_ENGINE), "--mode", "extend", "--source", str(src),
            "--stem", stem, "--work", str(work), "--cv-py", cv_py, "--i2v", str(I2V_ENGINE),
            "--env-file", str(FAL_ENV_FILE), "--model", model, "--aspect", aspect,
-           "--seconds", str(need), "--seg", str(seg), "--uploads", str(UPLOADS)]
+           "--seconds", str(need), "--seg", str(seg), "--uploads", str(UPLOADS),
+           "--blend", f"{_fit_blend(b):.3f}"]
     if prompt:
         cmd += ["--prompt", prompt]
     job_id = jobs_create("fit-extend", stem, f"Fit to script — {stem} [{model}]")
     threading.Thread(target=run_fit_job, args=(job_id, cmd, stem, est), daemon=True).start()
     return jsonify({"job_id": job_id, "stem": stem, "estimate": est})
+
+
+@app.post("/api/fit/join")
+def api_fit_join():
+    """Re-do ONLY the join, from footage fal.ai already generated — free. Lets you
+    retry the seam (softer dissolve, hard cut, no colour match) without paying for
+    the same seconds twice."""
+    b = request.get_json(force=True)
+    name = (b.get("file") or "").strip()
+    src = (UPLOADS / name).resolve()
+    if not str(src).startswith(str(UPLOADS.resolve())) or not src.is_file():
+        abort(400, "video not found")
+    stem = Path(name).stem
+    work = _fit_work(stem)
+    if not (read_json(work / "plan.json") or {}):
+        abort(400, "run Analyze first")
+    if not (work / "gen" / "clip.mp4").is_file():
+        abort(400, "nothing generated yet — run the extend once, then you can re-join for free")
+    cv_py = CONFIG["venvs"]["cv"]
+    cmd = [cv_py, str(FIT_ENGINE), "--mode", "join", "--source", str(src),
+           "--stem", stem, "--work", str(work), "--uploads", str(UPLOADS),
+           "--blend", f"{_fit_blend(b):.3f}"]
+    if b.get("no_match"):
+        cmd.append("--no-match")
+    job_id = jobs_create("fit-join", stem, f"Re-join the seam — {stem}")
+    threading.Thread(target=run_job, args=(job_id, cmd), daemon=True).start()
+    return jsonify({"job_id": job_id, "stem": stem, "cost": 0.0})
 
 
 # ── Text-to-Video: continue a copied clip ───────────────────────────────────
@@ -3781,6 +3887,7 @@ def api_t2v_continue():
 #   -> assemble (concat + cloned-voice narration) -> output/i2v/<slug> (Media).
 BROLLVID_ENGINE = APP_DIR / "engines" / "broll_video.py"
 T2V_FAL_ENGINE = APP_DIR / "engines" / "t2v_fal.py"
+PRODUCT_STILL_ENGINE = APP_DIR / "engines" / "product_still.py"
 # mirror of t2v_fal.MODELS for the pre-storyboard estimate (min billable length
 # per shot x $/s). Endpoints verified against fal's live OpenAPI schemas.
 T2V_FAL_MODELS = {
@@ -3847,6 +3954,40 @@ def api_brollvid_run():
     if motion == "fal-t2v" and t2v_model not in T2V_FAL_MODELS:
         abort(400, "unknown text-to-video model")
     shots = max(2, min(12, int(b.get("shots") or 6)))
+
+    # optional real-world assets: the user's actual product (so the object on
+    # screen is theirs, not something the model invented), look references, and
+    # an offer banner. All three come from the same /api/i2v/upload store.
+    def _assets(key: str, limit: int) -> list[Path]:
+        out: list[Path] = []
+        raw = b.get(key) or []
+        if isinstance(raw, str):
+            raw = [raw]
+        for rel in raw[:limit]:
+            p = (ROOT / str(rel).replace("\\", "/")).resolve()
+            if not str(p).startswith(str(I2V_UPLOADS.resolve())) or not p.is_file():
+                abort(400, f"{key}: upload that image again — it isn't on disk")
+            out.append(p)
+        return out
+
+    product_imgs = _assets("product_images", 3)
+    inspiration_imgs = _assets("inspiration_images", 3)
+    banner_imgs = _assets("banner_image", 1)
+    product_name = (b.get("product_name") or "").strip()[:300]
+    product_shots = max(1, min(6, int(b.get("product_shots") or 2)))
+    still_model = b.get("still_model", "nano-banana")
+    if still_model not in IMG_MODELS:
+        abort(400, "unknown product-still model")
+    banner_mode = b.get("banner_mode", "end")
+    if banner_mode not in ("end", "flash"):
+        abort(400, "banner mode must be 'end' or 'flash'")
+    banner_seconds = max(0.5, min(6.0, float(b.get("banner_seconds") or 2.5)))
+    # painting the product into a still needs an image model, so it is fal-only
+    use_product = bool(product_imgs) and motion == "fal-t2v"
+    if product_imgs and not use_product:
+        abort(400, "putting your real product in the shots needs the fal.ai text→video engine "
+                   "(the local engines paint their own stills in ComfyUI)")
+
     # optional reference video: its STRUCTURE is modelled (keyframes -> Claude vision)
     # and its voice is cloned for the narration.
     ref = None
@@ -3888,9 +4029,15 @@ def api_brollvid_run():
     elif motion == "fal-t2v":
         m = T2V_FAL_MODELS[t2v_model]
         total = round(shots * m["min_s"] * m["cost_per_s"], 2)
-        est = {"this_run": total, "engine": "fal-t2v", "model": t2v_model,
-               "summary": f"~{shots} shots x {m['min_s']}s on {m['label'].split(' — ')[0]} "
-                          f"≈ ${total:.2f} (estimate — the real shot list is written first)"}
+        summary = (f"~{shots} shots x {m['min_s']}s on {m['label'].split(' — ')[0]} "
+                   f"≈ ${total:.2f} (estimate — the real shot list is written first)")
+        if use_product:
+            stills_cost = round(product_shots * IMG_MODELS[still_model]["cost"], 2)
+            total = round(total + stills_cost, 2)
+            summary += (f"\n+ {product_shots} product still(s) on "
+                        f"{IMG_MODELS[still_model]['label'].split(' — ')[0]} ≈ ${stills_cost:.2f}"
+                        f"\n= ~${total:.2f} total")
+        est = {"this_run": total, "engine": "fal-t2v", "model": t2v_model, "summary": summary}
     if est and not b.get("confirm_cost"):
         return jsonify({"needs_confirm": True, "estimate": est}), 402
 
@@ -3915,7 +4062,24 @@ def api_brollvid_run():
          + (["--ugc"] if b.get("ugc", True) else [])
          + (["--preset", "ugc10"] if b.get("preset") == "ugc10" else [])
          + (["--ref", str(ref)] if ref else [])
-         + (["--ref-script", ref_words[:4000]] if ref and ref_words else [])),
+         + (["--ref-script", ref_words[:4000]] if ref and ref_words else [])
+         + [arg for p in product_imgs for arg in ("--product", str(p))]
+         + [arg for p in inspiration_imgs for arg in ("--inspiration", str(p))]
+         + (["--product-name", product_name] if product_name else [])
+         + (["--product-shots", str(product_shots)] if product_imgs else [])),
+    ]
+    if use_product:
+        # paint the user's ACTUAL product into the stills for the beats that show
+        # it; those shots then render through image->video instead of text->video.
+        steps.append(
+            ("your product — paint the real object into the shots that show it",
+             [cv_py, str(PRODUCT_STILL_ENGINE), "--recipe", str(work / "recipe.json"),
+              "--aspect", aspect, "--model", still_model, "--max", str(product_shots),
+              "--env-file", str(FAL_ENV_FILE)]
+             + [arg for p in product_imgs for arg in ("--product", str(p))]
+             + [arg for p in inspiration_imgs for arg in ("--inspiration", str(p))]
+             + (["--product-name", product_name] if product_name else [])))
+    steps += [
         # fal text-to-video goes prompt -> clip with no ComfyUI in the loop;
         # the local engines still paint their still in ComfyUI first.
         ("generate — render a clip for every shot",
@@ -3929,7 +4093,9 @@ def api_brollvid_run():
          [cv_py, str(BROLLVID_ENGINE), "assemble", "--batch", str(work),
           "--out-dir", str(out_dir), "--ds-py", str(DUB_VENV_PY),
           "--ds-app", str(Path(CONFIG["dubbing_studio"]) / "app.py")]
-         + (["--ref-video", str(ref)] if ref else [])),
+         + (["--ref-video", str(ref)] if ref else [])
+         + (["--banner", str(banner_imgs[0]), "--banner-mode", banner_mode,
+             "--banner-seconds", f"{banner_seconds:g}"] if banner_imgs else [])),
     ]
     if b.get("tags") and CLAUDE_EXE:
         # on-screen story text so the ad reads with the sound off
@@ -5051,6 +5217,1041 @@ def api_broll_bank_update():
             hit[k] = [str(t).strip() for t in b[k] if str(t).strip()]
     _broll_write_rows(rows)
     return jsonify({"ok": True, "row": hit})
+
+
+# ------------------------------------------------ Frame Reader
+# Upload a winning UGC clip → real cut detection → keyframes → whisper VO →
+# Claude vision → the shot-by-shot script that produced it, with a per-scene
+# image-to-video prompt so any beat can be rebuilt on /image-to-video.
+# Free end to end: local ffmpeg + local whisper + the `claude` CLI (subscription,
+# no API key). Engine: app/engines/frame_reader.py.
+
+READER_ENGINE = APP_DIR / "engines" / "frame_reader.py"
+READER_OUT = ROOT / "output" / "frame-reads"
+READER_REFS = READER_OUT / "_refs"
+READER_EXTS = {".mp4", ".mov", ".mkv", ".webm", ".m4v", ".avi"}
+READER_MAX_BYTES = 600 * 1024 * 1024
+
+
+def _reader_dir(batch: str) -> Path:
+    d = (READER_OUT / Path(batch or "").name).resolve()
+    if not str(d).startswith(str(READER_OUT.resolve())) or d == READER_OUT.resolve():
+        abort(400, "bad read id")
+    return d
+
+
+def _reader_url(rel: str | None) -> str | None:
+    """Repo-relative frame path → a servable /reader-file/ URL."""
+    if not rel:
+        return None
+    p = (ROOT / str(rel).replace("\\", "/")).resolve()
+    if str(p).startswith(str(READER_OUT.resolve())) and p.is_file():
+        return "/reader-file/" + str(p.relative_to(READER_OUT.resolve())).replace("\\", "/")
+    return None
+
+
+@app.get("/frame-reader")
+def page_frame_reader():
+    return send_from_directory(STATIC, "frame-reader.html")
+
+
+@app.get("/reader-file/<path:rel>")
+def reader_file(rel: str):
+    p = (READER_OUT / rel.replace("\\", "/")).resolve()
+    if not str(p).startswith(str(READER_OUT.resolve())):
+        abort(403, "outside the reads dir")
+    if not p.is_file():
+        abort(404)
+    return send_file(str(p), conditional=True)
+
+
+@app.get("/api/reader/health")
+def api_reader_health():
+    return jsonify({
+        "claude": bool(CLAUDE_EXE),
+        "whisper": TRANSCRIBE_VENV_PY.is_file() and TRANSCRIBE_PY.is_file(),
+        "ffmpeg": FFMPEG_BIN.is_dir() or bool(shutil.which("ffmpeg")),
+    })
+
+
+@app.post("/api/reader/upload")
+def api_reader_upload():
+    f = request.files.get("file")
+    if not f or not f.filename:
+        abort(400, "no file")
+    ext = Path(f.filename).suffix.lower()
+    if ext not in READER_EXTS:
+        abort(400, f"video must be one of: {', '.join(sorted(READER_EXTS))}")
+    READER_REFS.mkdir(parents=True, exist_ok=True)
+    base = secure_filename(Path(f.filename).stem).strip(".-_") or "clip"
+    name = f"{base}-{time.strftime('%H%M%S')}{ext}"
+    dest = READER_REFS / name
+    f.save(dest)
+    if dest.stat().st_size > READER_MAX_BYTES:
+        dest.unlink(missing_ok=True)
+        abort(400, "that file is over 600 MB — trim it first")
+    return jsonify({"name": name, "path": f"output/frame-reads/_refs/{name}"})
+
+
+@app.get("/api/reader/sources")
+def api_reader_sources():
+    """Clips already on the box, so a winner in the library needs no re-upload."""
+    def rows(d: Path, prefix: str, kind: str, limit: int) -> list[dict]:
+        out = []
+        if not d.is_dir():
+            return out
+        for p in sorted(d.iterdir(), key=lambda x: x.stat().st_mtime, reverse=True):
+            if p.is_file() and p.suffix.lower() in READER_EXTS:
+                out.append({"name": p.name, "path": f"{prefix}/{p.name}", "kind": kind,
+                            "size": p.stat().st_size, "mtime": p.stat().st_mtime})
+            if len(out) >= limit:
+                break
+        return out
+
+    return jsonify({
+        "uploads": rows(READER_REFS, "output/frame-reads/_refs", "upload", 40),
+        "library": rows(UPLOADS, "uploads", "library", 60),
+    })
+
+
+@app.post("/api/reader/run")
+def api_reader_run():
+    b = request.get_json(force=True)
+    rel = str(b.get("video") or "").replace("\\", "/").strip()
+    if not rel:
+        abort(400, "pick a video to read")
+    if not CLAUDE_EXE:
+        abort(500, "claude CLI not found — install Claude Code or add it to PATH")
+    src = (ROOT / rel).resolve()
+    ok = any(str(src).startswith(str(base.resolve()))
+             for base in (READER_REFS, UPLOADS, ROOT / "output"))
+    if not ok or not src.is_file():
+        abort(400, f"video not readable: {rel}")
+    if src.suffix.lower() not in READER_EXTS:
+        abort(400, "that is not a video file")
+
+    transcribe = bool(b.get("transcribe", True))
+    if transcribe and not (TRANSCRIBE_VENV_PY.is_file() and TRANSCRIBE_PY.is_file()):
+        transcribe = False          # read the picture anyway rather than refusing
+
+    cmd = [_cv_py(), str(READER_ENGINE), "read", "--video", str(src),
+           "--max-scenes", str(max(4, min(40, int(b.get("scenes", 24))))),
+           "--max-frames", str(max(6, min(80, int(b.get("frames", 40))))),
+           # 0 = let the reader work it out; a real count keeps one consistent
+           # person per role instead of a fresh description at every cut
+           "--characters", str(max(0, min(8, int(b.get("characters", 0) or 0)))),
+           "--model", b.get("model") if b.get("model") in ("sonnet", "opus", "haiku") else "sonnet"]
+    if (b.get("brief") or "").strip():
+        cmd += ["--brief", (b.get("brief") or "").strip()[:1200]]
+    if transcribe:
+        cmd += ["--whisper-python", str(TRANSCRIBE_VENV_PY),
+                "--whisper-script", str(TRANSCRIBE_PY)]
+    else:
+        cmd.append("--no-transcribe")
+    batch = secure_filename(b.get("batch") or "").strip(".-_")
+    if batch:
+        cmd += ["--batch", batch]
+
+    job_id = jobs_create("frame-read", batch or src.stem[:24],
+                         f"Frame read — {src.name}", gpu=transcribe)
+    threading.Thread(target=run_job, args=(job_id, cmd), daemon=True).start()
+    return jsonify({"job_id": job_id})
+
+
+@app.get("/api/reader/reads")
+def api_reader_reads():
+    items = []
+    if READER_OUT.is_dir():
+        for d in sorted(READER_OUT.iterdir(), key=lambda x: x.stat().st_mtime, reverse=True):
+            if not d.is_dir() or d.name.startswith("_"):
+                continue
+            data = read_json(d / "read.json") or {}
+            if not data:
+                continue
+            items.append({
+                "batch": d.name,
+                "source": (data.get("source") or {}).get("name"),
+                "created": data.get("created"),
+                "stats": data.get("stats") or {},
+                "one_line": (data.get("summary") or {}).get("one_line"),
+                "format": (data.get("summary") or {}).get("format"),
+                "thumb": _reader_url(((data.get("scenes") or [{}])[0].get("frames") or [{}])[0]
+                                     .get("path")),
+                "mtime": d.stat().st_mtime,
+            })
+    return jsonify({"reads": items[:60]})
+
+
+@app.get("/api/reader/read/<batch>")
+def api_reader_read(batch: str):
+    d = _reader_dir(batch)
+    data = read_json(d / "read.json")
+    if not data:
+        abort(404, "no such read")
+    for sc in data.get("scenes") or []:
+        for fr in sc.get("frames") or []:
+            fr["url"] = _reader_url(fr.get("path"))
+    md = d / "script.md"
+    data["markdown"] = md.read_text(encoding="utf-8") if md.is_file() else ""
+    return jsonify(data)
+
+
+@app.post("/api/reader/delete")
+def api_reader_delete():
+    b = request.get_json(force=True)
+    d = _reader_dir(str(b.get("batch") or ""))
+    if not d.is_dir():
+        abort(404, "no such read")
+    shutil.rmtree(d, ignore_errors=True)
+    return jsonify({"ok": True})
+
+
+# ------------------------------------------------ Image Editor (Nano Banana / fal.ai)
+# Replace an object, erase an object, add something, restyle, or re-frame into
+# another aspect ratio — all in plain English. Nano Banana has NO inpaint mask
+# (it is prompt-driven), so the prompt templates below do the aiming and the
+# optional region box is turned into words. Cropping/converting is free + local;
+# only the AI calls hit fal.ai, and those go through the same 402 cost gate as
+# dubbing and Image→Video. Engine: app/engines/image_edit.py.
+
+IMG_ENGINE = APP_DIR / "engines" / "image_edit.py"
+IMG_OUT = ROOT / "output" / "images"
+IMG_REFS = IMG_OUT / "_refs"
+IMG_EXTS = {".jpg", ".jpeg", ".png", ".webp"}
+IMG_MAX_BYTES = 25 * 1024 * 1024
+
+# mirror of image_edit.py MODELS (label + $/image) so estimates never spawn python
+IMG_MODELS = {
+    "nano-banana":     {"label": "Nano Banana — fast & cheapest (recommended)", "cost": 0.039,
+                        "resolutions": []},
+    "nano-banana-2":   {"label": "Nano Banana 2 — sharper, still cheap",        "cost": 0.08,
+                        "resolutions": ["0.5K", "1K", "2K", "4K"]},
+    "nano-banana-pro": {"label": "Nano Banana Pro — best quality (pricey)",     "cost": 0.15,
+                        "resolutions": ["1K", "2K", "4K"]},
+}
+IMG_RES_MULT = {"nano-banana-2":   {"0.5K": 0.75, "1K": 1.0, "2K": 1.5, "4K": 2.0},
+                "nano-banana-pro": {"1K": 1.0, "2K": 1.0, "4K": 2.0}}
+IMG_ASPECTS = ["auto", "21:9", "16:9", "3:2", "4:3", "5:4", "1:1",
+               "4:5", "3:4", "2:3", "9:16"]
+IMG_MODES = ["replace", "erase", "add", "style", "reframe", "generate"]
+
+# free local crop/convert targets — one click gives every size an ad needs
+IMG_PRESETS = {
+    "reel":    {"label": "Reel / Story / TikTok", "aspect": "9:16", "w": 1080, "h": 1920},
+    "ig45":    {"label": "Instagram feed",        "aspect": "4:5",  "w": 1080, "h": 1350},
+    "square":  {"label": "Square / Meta ad",      "aspect": "1:1",  "w": 1080, "h": 1080},
+    "wide":    {"label": "Landscape / YouTube",   "aspect": "16:9", "w": 1920, "h": 1080},
+    "pin":     {"label": "Pinterest",             "aspect": "2:3",  "w": 1000, "h": 1500},
+    "shopify": {"label": "Shopify product",       "aspect": "1:1",  "w": 2048, "h": 2048},
+}
+
+_IMG_PRESERVE = ("Keep everything else in the image exactly as it is — the same camera angle, "
+                 "framing, lighting, shadows, colours, background and composition. Change only "
+                 "what was asked and keep the result photorealistic.")
+_IMG_REF = ("Use the additional reference image(s) as the exact appearance of the object being "
+            "placed — match its shape, colour, label, text and branding precisely.")
+
+_IMG_TEMPLATES = {
+    "replace": "Edit this photo: replace {t}. " + _IMG_PRESERVE,
+    "erase":   ("Edit this photo: completely remove {t}. Rebuild whatever was behind it so the "
+                "area looks natural and untouched — match the surrounding texture, lighting, "
+                "shadows and grain. Leave no outline, blur, smudge or ghost where it used to be. "
+                + _IMG_PRESERVE),
+    "add":     ("Edit this photo: add {t}. Match the existing lighting direction, shadow softness, "
+                "perspective, depth of field and colour grade so it looks photographed in the "
+                "original scene, not pasted on. " + _IMG_PRESERVE),
+    "style":   ("Edit this photo: {t}. Keep the subject, composition and framing unchanged — this "
+                "is a look/finish change, not a re-composition."),
+    "reframe": ("This image sits on a larger canvas with flat grey empty areas around it. Extend "
+                "the photo to fill every grey area seamlessly: continue the existing background, "
+                "surfaces, lighting, perspective and grain outwards so the result looks like one "
+                "single wider photograph. Do not alter, move, rescale, crop or restyle the "
+                "original subject, and leave no grey, seam or border anywhere in the output.{t}"),
+    "generate": "{t}",
+}
+
+
+def _img_region_phrase(region) -> str:
+    """Turn a drawn box into words — Nano Banana has no mask, so we aim in prose."""
+    if not isinstance(region, dict):
+        return ""
+    try:
+        x, y = float(region["x"]), float(region["y"])
+        w, h = float(region["w"]), float(region["h"])
+    except (KeyError, TypeError, ValueError):
+        return ""
+    cx, cy = x + w / 2, y + h / 2
+    col = "left" if cx < 0.34 else ("right" if cx > 0.66 else "horizontal centre")
+    row = "top" if cy < 0.34 else ("bottom" if cy > 0.66 else "vertical middle")
+    size = "small" if (w * h) < 0.06 else ("large" if (w * h) > 0.35 else "medium-sized")
+    where = f"the {row} {col}" if "centre" not in col and "middle" not in row else f"the {row}, {col}"
+    return (f" The target is the {size} area at {where} of the frame, roughly "
+            f"{round(cx * 100)}% across and {round(cy * 100)}% down.")
+
+
+def _img_compose(mode: str, text: str, region=None, has_refs: bool = False) -> str:
+    """Build the final instruction the model actually receives."""
+    core = _IMG_TEMPLATES[mode].format(t=text.strip().rstrip("."))
+    extra = _img_region_phrase(region) if mode != "generate" else ""
+    if has_refs and mode in ("replace", "add"):
+        extra += " " + _IMG_REF
+    return (core + extra).strip()
+
+
+def _img_cost(model: str, resolution: str = "1K") -> float:
+    m = IMG_MODELS.get(model) or IMG_MODELS["nano-banana"]
+    return round(m["cost"] * IMG_RES_MULT.get(model, {}).get(resolution, 1.0), 4)
+
+
+def _img_estimate(model: str, num: int, resolution: str = "1K") -> dict:
+    num = max(1, min(4, int(num or 1)))
+    per = _img_cost(model, resolution)
+    total = round(per * num, 4)
+    m = IMG_MODELS.get(model) or IMG_MODELS["nano-banana"]
+    res = f" @ {resolution}" if resolution in m["resolutions"] else ""
+    return {"this_run": total, "num": num, "per_image": per,
+            "engine": "fal-image", "model": model,
+            "summary": f"{num} × {m['label'].split(' — ')[0]}{res} ≈ ${total:.3f}"}
+
+
+def _img_workdir(slug: str) -> Path:
+    """Resolve a slug to its workdir, refusing anything outside output/images."""
+    d = (IMG_OUT / Path(slug or "").name).resolve()
+    if not str(d).startswith(str(IMG_OUT.resolve())) or not d.is_dir():
+        abort(404, "no such image")
+    return d
+
+
+def _img_file(work: Path, name: str) -> Path:
+    """Resolve a version filename inside a workdir (no traversal, images only)."""
+    p = (work / Path(name or "").name).resolve()
+    if not str(p).startswith(str(work.resolve())) or p.suffix.lower() not in IMG_EXTS \
+            or not p.is_file():
+        abort(404, "no such version")
+    return p
+
+
+def _img_versions(work: Path) -> list[dict]:
+    hist = {h.get("file"): h for h in (read_json(work / "edits.json") or [])}
+    out = []
+    for p in sorted(work.glob("v[0-9][0-9].*")):
+        if p.suffix.lower() not in IMG_EXTS:
+            continue
+        h = hist.get(p.name, {})
+        thumb = work / f"thumb-{p.stem}.jpg"
+        out.append({
+            "file": p.name, "version": p.stem,
+            "url": f"/media/output/images/{work.name}/{p.name}",
+            "thumb": f"/media/output/images/{work.name}/{thumb.name}" if thumb.is_file()
+                     else f"/media/output/images/{work.name}/{p.name}",
+            "mode": h.get("mode", "original"), "user_text": h.get("user_text"),
+            "prompt": h.get("prompt"), "model_label": h.get("model_label"),
+            "aspect": h.get("aspect"), "est_cost": h.get("est_cost"),
+            "alts": [{"file": a, "url": f"/media/output/images/{work.name}/{a}"}
+                     for a in (h.get("alts") or [])],
+            "mtime": p.stat().st_mtime, "size": p.stat().st_size,
+        })
+    return out
+
+
+@app.get("/api/img/models")
+def api_img_models():
+    return jsonify({
+        "models": [{"key": k, **v} for k, v in IMG_MODELS.items()],
+        "aspects": IMG_ASPECTS, "modes": IMG_MODES,
+        "presets": [{"key": k, **v} for k, v in IMG_PRESETS.items()],
+    })
+
+
+@app.post("/api/img/upload")
+def api_img_upload():
+    """Start a new image (kind=base → new workdir with v00) or add a reference photo."""
+    f = request.files.get("file")
+    if not f or not f.filename:
+        abort(400, "no image")
+    ext = Path(f.filename).suffix.lower()
+    if ext not in IMG_EXTS:
+        abort(400, f"image must be one of: {', '.join(sorted(IMG_EXTS))}")
+    kind = (request.form.get("kind") or "base").strip()
+    base_name = secure_filename(Path(f.filename).stem).strip(".-_") or "img"
+
+    if kind == "ref":
+        IMG_REFS.mkdir(parents=True, exist_ok=True)
+        name = f"{base_name}-{time.strftime('%H%M%S')}{ext}"
+        dest = IMG_REFS / name
+        f.save(dest)
+        if dest.stat().st_size > IMG_MAX_BYTES:
+            dest.unlink(missing_ok=True)
+            abort(400, "image is larger than 25 MB")
+        return jsonify({"kind": "ref", "path": str(dest), "name": name,
+                        "url": f"/media/output/images/_refs/{name}"})
+
+    slug = f"{base_name}-{time.strftime('%H%M%S')}"
+    work = IMG_OUT / slug
+    work.mkdir(parents=True, exist_ok=True)
+    dest = work / f"v00{ext}"
+    f.save(dest)
+    if dest.stat().st_size > IMG_MAX_BYTES:
+        shutil.rmtree(work, ignore_errors=True)
+        abort(400, "image is larger than 25 MB")
+    try:
+        from PIL import Image
+        im = Image.open(dest)
+        im.verify()                                    # reject anything that isn't a real image
+        im = Image.open(dest)
+        if im.mode in ("RGBA", "P"):
+            im = im.convert("RGB")
+        im.thumbnail((480, 480))
+        im.save(work / "thumb-v00.jpg", "JPEG", quality=86)
+    except Exception as exc:                           # noqa: BLE001
+        shutil.rmtree(work, ignore_errors=True)
+        abort(400, f"not a readable image: {exc}")
+    return jsonify({"slug": slug, "versions": _img_versions(work)})
+
+
+@app.post("/api/img/estimate")
+def api_img_estimate():
+    b = request.get_json(force=True)
+    return jsonify(_img_estimate(b.get("model", "nano-banana"), b.get("num", 1),
+                                 b.get("resolution", "1K")))
+
+
+@app.post("/api/img/preview-prompt")
+def api_img_preview_prompt():
+    """Show the exact instruction the model will get (free — no fal call)."""
+    b = request.get_json(force=True)
+    mode = b.get("mode", "replace")
+    if mode not in IMG_MODES:
+        abort(400, "unknown mode")
+    return jsonify({"prompt": _img_compose(mode, b.get("text", ""), b.get("region"),
+                                           bool(b.get("refs")))})
+
+
+def run_img_job(job_id: str, cmd: list[str], slug: str, est: dict) -> None:
+    run_job(job_id, cmd)
+    job = jobs[job_id]
+    if job["status"] != "done":
+        return
+    try:
+        res = record_spend(slug, est)
+        with jobs_lock:
+            job["lines"].append("")
+            job["lines"].append(f"💰 This edit cost ~${res['this_run']:.3f} on fal.ai  ({est['summary']})")
+            job["lines"].append(f"🧾 Total spent on fal.ai so far: ${res['total']:.2f}")
+        job["cost"] = {"this_run": res["this_run"], "total": res["total"], "summary": est["summary"]}
+    except Exception as exc:                           # noqa: BLE001
+        with jobs_lock:
+            job["lines"].append(f"(cost tracking skipped: {exc})")
+
+
+@app.post("/api/img/run")
+def api_img_run():
+    b = request.get_json(force=True)
+    mode = b.get("mode", "replace")
+    model = b.get("model", "nano-banana")
+    text = (b.get("text") or "").strip()
+    aspect = b.get("aspect", "auto")
+    fmt = b.get("format", "png")
+    num = max(1, min(4, int(b.get("num", 1))))
+    resolution = b.get("resolution", "1K")
+
+    if mode not in IMG_MODES:
+        abort(400, "unknown mode")
+    if model not in IMG_MODELS:
+        abort(400, "unknown model")
+    if aspect not in IMG_ASPECTS:
+        abort(400, "bad aspect ratio")
+    if fmt not in ("png", "jpeg", "webp"):
+        abort(400, "format must be png, jpeg or webp")
+    if mode != "reframe" and len(text) < 3:
+        abort(400, "describe what you want changed")
+    if mode == "reframe" and aspect == "auto":
+        abort(400, "pick a real aspect ratio to re-frame into")
+
+    work = _img_workdir(b.get("slug"))
+    base = _img_file(work, b.get("base") or "v00.png") if mode != "generate" else None
+
+    if mode == "reframe" and base is not None:
+        # already that shape? extending would invent a 1px sliver — refuse rather
+        # than charge for a no-op. Cropping to the same ratio is free anyway.
+        from PIL import Image
+        with Image.open(base) as _im:
+            cur = _im.size[0] / _im.size[1]
+        a, bb = aspect.split(":")
+        if abs(cur - float(a) / float(bb)) < 0.01:
+            abort(400, f"this picture is already {aspect} — nothing to extend. "
+                       f"Use the free format export if you just want it resized.")
+
+    refs: list[Path] = []
+    for r in (b.get("refs") or [])[:3]:
+        p = (Path(r) if Path(r).is_absolute() else IMG_REFS / Path(r).name).resolve()
+        if not str(p).startswith(str(IMG_REFS.resolve())) or not p.is_file():
+            abort(400, "bad reference image")
+        refs.append(p)
+
+    est = _img_estimate(model, num, resolution)
+    if not b.get("confirm_cost"):
+        return jsonify({"needs_confirm": True, "estimate": est}), 402
+
+    prompt = _img_compose(mode, text, b.get("region"), bool(refs))
+    focus = b.get("focus") or [0.5, 0.5]
+    cv_py = Path(CONFIG["venvs"]["cv"])
+    cmd = [str(cv_py), str(IMG_ENGINE), "--work", str(work), "--mode", mode,
+           "--prompt", prompt, "--model", model, "--num", str(num),
+           "--aspect", aspect, "--resolution", resolution, "--format", fmt,
+           "--focus", f"{float(focus[0])},{float(focus[1])}",
+           "--user-text", text, "--env-file", str(FAL_ENV_FILE)]
+    if base is not None:
+        cmd += ["--base", base.name]
+    for r in refs:
+        cmd += ["--ref", str(r)]
+    if b.get("no_pad"):
+        cmd.append("--no-pad")
+    # re-frame defaults to STRICT: the original pixels are stamped back over the
+    # model's output, so only the newly-invented edges are AI (the model always
+    # re-renders the whole frame otherwise — prompt wording can't prevent that).
+    if b.get("protect") is False:
+        cmd.append("--no-protect")
+    blend = int(b.get("seam_blend") or 0)
+    if blend:
+        cmd += ["--seam-blend", str(max(0, min(64, blend)))]
+    # replace/erase/add/style: if the user pointed at the object, keep the model's
+    # work inside that box only and restore their original pixels everywhere else
+    reg = b.get("region")
+    if mode != "reframe" and isinstance(reg, dict) and b.get("protect") is not False:
+        try:
+            cmd += ["--protect-region",
+                    f"{float(reg['x'])},{float(reg['y'])},{float(reg['w'])},{float(reg['h'])}"]
+        except (KeyError, TypeError, ValueError):
+            pass                                   # malformed box → just skip protection
+
+    job_id = jobs_create("imgedit", work.name, f"Image {mode} — {work.name} [{model}]")
+    threading.Thread(target=run_img_job, args=(job_id, cmd, work.name, est), daemon=True).start()
+    return jsonify({"job_id": job_id, "slug": work.name, "estimate": est, "prompt": prompt})
+
+
+@app.get("/api/img/list")
+def api_img_list():
+    items = []
+    if IMG_OUT.is_dir():
+        for d in sorted(IMG_OUT.iterdir(), key=lambda x: x.stat().st_mtime, reverse=True):
+            if not d.is_dir() or d.name == "_refs":
+                continue
+            vers = _img_versions(d)
+            if not vers:
+                continue
+            latest = vers[-1]
+            with jobs_lock:
+                cand = [j for j in jobs.values()
+                        if j["slug"] == d.name and j["action"] == "imgedit"]
+                job = max(cand, key=lambda j: j["started"]) if cand else None
+            items.append({
+                "slug": d.name, "versions": len(vers), "latest": latest,
+                "spent": round(sum(v.get("est_cost") or 0 for v in vers), 3),
+                "mtime": d.stat().st_mtime,
+                "job": {"id": job["id"], "status": job["status"]} if job else None,
+            })
+    return jsonify({"items": items})
+
+
+@app.get("/api/img/item/<slug>")
+def api_img_item(slug):
+    work = _img_workdir(slug)
+    formats = []
+    fdir = work / "formats"
+    if fdir.is_dir():
+        for p in sorted(fdir.iterdir(), key=lambda x: x.stat().st_mtime, reverse=True):
+            if p.suffix.lower() in IMG_EXTS:
+                formats.append({"file": p.name, "size": p.stat().st_size,
+                                "url": f"/media/output/images/{work.name}/formats/{p.name}"})
+    return jsonify({"slug": work.name, "versions": _img_versions(work),
+                    "history": read_json(work / "edits.json") or [], "formats": formats})
+
+
+SMART_ENGINE = APP_DIR / "engines" / "smart_crop.py"
+
+
+def _img_smart_crop(work: Path, src: Path, targets: list, fmt: str, quality: int,
+                    debug: bool = False):
+    """Content-aware reframing: find the subject, then slide the biggest window
+    of the target shape over it. Never zooms in, never pads. See smart_crop.py.
+
+    One engine run covers every distinct ratio; each preset is then downscaled
+    from its ratio's crop (downscale only — an output is never upscaled).
+    """
+    from PIL import Image
+
+    ext = ".jpg" if fmt in ("jpg", "jpeg") else f".{fmt}"
+    eng_fmt = "jpg" if fmt in ("jpg", "jpeg") else fmt
+    out_dir = work / "formats"
+    tmp = out_dir / "_smart"
+    if tmp.exists():
+        shutil.rmtree(tmp, ignore_errors=True)
+    tmp.mkdir(parents=True, exist_ok=True)
+
+    ratios = list(dict.fromkeys(t[3] for t in targets))
+    cmd = [str(Path(CONFIG["venvs"]["cv"])), str(SMART_ENGINE),
+           "--image", str(src), "--out", str(tmp), "--stem", src.stem,
+           "--ratios", ",".join(ratios), "--format", eng_fmt,
+           "--quality", str(quality), "--device", "cpu"]
+    if debug:
+        cmd.append("--debug")
+    try:
+        # force UTF-8 on the child: a captured pipe defaults to cp1252 on Windows
+        # and the engine's ✅/⚠ log lines would kill it mid-run
+        r = subprocess.run(cmd, capture_output=True, timeout=300,
+                           env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+                           text=True, encoding="utf-8", errors="replace")
+    except subprocess.TimeoutExpired:
+        shutil.rmtree(tmp, ignore_errors=True)
+        abort(500, "smart crop timed out")
+    if r.returncode != 0:
+        shutil.rmtree(tmp, ignore_errors=True)
+        abort(500, "smart crop failed: " + (r.stderr or r.stdout or "")[-300:])
+
+    rep = read_json(tmp / f"{src.stem}-smartcrop.json") or {}
+    by_ratio = {x["ratio"]: x for x in rep.get("results", [])}
+
+    written = []
+    for key, tw, th, asp in targets:
+        info = by_ratio.get(asp)
+        if not info:
+            continue
+        crop_path = tmp / info["file"]
+        if not crop_path.is_file():
+            continue
+        dest = out_dir / f"{src.stem}-{key}-{tw}x{th}-smart{ext}"
+        with Image.open(crop_path) as im:
+            im = im.convert("RGB")
+            if tw <= im.size[0] and th <= im.size[1]:      # downscale only
+                im = im.resize((tw, th), Image.LANCZOS)
+            if ext == ".jpg":
+                im.save(dest, "JPEG", quality=quality, optimize=True)
+            elif ext == ".webp":
+                im.save(dest, "WEBP", quality=quality)
+            else:
+                im.save(dest, "PNG", optimize=True)
+        written.append({
+            "preset": key, "file": dest.name, "w": im.size[0], "h": im.size[1],
+            "fit": "smart", "pad": None, "size": dest.stat().st_size,
+            "kept_area": info.get("kept_area"), "faces_intact": info.get("faces_intact"),
+            "url": f"/media/output/images/{work.name}/formats/{dest.name}",
+        })
+
+    if debug:                                    # keep the heat-map overlays alongside
+        for p in tmp.glob("*-debug.jpg"):
+            shutil.move(str(p), str(out_dir / p.name))
+    shutil.rmtree(tmp, ignore_errors=True)
+
+    clipped = [w["preset"] for w in written if w.get("faces_intact") is False]
+    return jsonify({"written": written, "cost": 0.0, "fit": "smart",
+                    "faces": len(rep.get("faces") or []), "clipped": clipped,
+                    "dir": str(out_dir)})
+
+
+@app.post("/api/img/format")
+def api_img_format():
+    """FREE + local: resize/convert a version into any set of ad formats.
+
+    No fal call, no job, no cost — this is Pillow. Two ways to change shape:
+
+      fit  (default) — the WHOLE picture is kept, scaled down to fit inside the
+                       target and padded (blurred copy / white / black / clear).
+                       Nothing is cropped, nothing is zoomed in.
+      crop           — fill the frame edge to edge, cutting whatever doesn't fit,
+                       positioned by the focus point.
+    """
+    from PIL import Image, ImageFilter
+
+    b = request.get_json(force=True)
+    work = _img_workdir(b.get("slug"))
+    src = _img_file(work, b.get("file") or "v00.png")
+    fmt = (b.get("format") or "jpg").lower()
+    if fmt not in ("jpg", "jpeg", "png", "webp"):
+        abort(400, "format must be jpg, png or webp")
+    quality = max(40, min(100, int(b.get("quality", 90))))
+    focus = b.get("focus") or [0.5, 0.5]
+    fx, fy = min(max(float(focus[0]), 0.0), 1.0), min(max(float(focus[1]), 0.0), 1.0)
+
+    targets = []
+    for key in (b.get("presets") or []):
+        p = IMG_PRESETS.get(key)
+        if not p:
+            abort(400, f"unknown preset: {key}")
+        targets.append((key, p["w"], p["h"], p["aspect"]))
+    custom = b.get("custom")
+    if isinstance(custom, dict):
+        cw, ch = int(custom.get("w", 0)), int(custom.get("h", 0))
+        if not (16 <= cw <= 8000 and 16 <= ch <= 8000):
+            abort(400, "custom size must be 16-8000 px per side")
+        g = math.gcd(cw, ch) or 1
+        targets.append(("custom", cw, ch, f"{cw // g}:{ch // g}"))
+    if not targets:
+        abort(400, "pick at least one format")
+
+    ext = ".jpg" if fmt in ("jpg", "jpeg") else f".{fmt}"
+    pil_fmt = {"jpg": "JPEG", "jpeg": "JPEG", "png": "PNG", "webp": "WEBP"}[fmt]
+    out_dir = work / "formats"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    im = Image.open(src)
+    if im.mode in ("P", "LA"):
+        im = im.convert("RGBA")
+    if pil_fmt == "JPEG" and im.mode in ("RGBA", "LA"):
+        flat = Image.new("RGB", im.size, (255, 255, 255))
+        flat.paste(im, mask=im.split()[-1])
+        im = flat
+
+    fit_mode = (b.get("fit") or "smart").lower()
+    if fit_mode not in ("smart", "fit", "crop"):
+        abort(400, "fit must be 'smart', 'fit' or 'crop'")
+
+    if fit_mode == "smart":
+        return _img_smart_crop(work, src, targets, fmt, quality, bool(b.get("debug")))
+
+    pad_style = (b.get("pad") or "blur").lower()
+    if pad_style not in ("blur", "white", "black", "transparent"):
+        abort(400, "pad must be blur, white, black or transparent")
+    if pad_style == "transparent" and pil_fmt == "JPEG":
+        pad_style = "white"                        # jpeg has no alpha
+
+    written = []
+    for key, tw, th, _asp in targets:
+        w, h = im.size
+        if fit_mode == "crop":                     # fill the frame, cut the rest
+            scale = max(tw / w, th / h)
+            nw, nh = max(tw, round(w * scale)), max(th, round(h * scale))
+            big = im.resize((nw, nh), Image.LANCZOS)
+            x, y = round((nw - tw) * fx), round((nh - th) * fy)
+            crop = big.crop((x, y, x + tw, y + th))
+        else:                                      # keep the WHOLE picture, pad around it
+            scale = min(tw / w, th / h)
+            nw, nh = max(1, round(w * scale)), max(1, round(h * scale))
+            small = im.resize((nw, nh), Image.LANCZOS)
+            if pad_style == "blur":                # a blurred blow-up of the same photo
+                cover = max(tw / w, th / h)
+                bw, bh = max(tw, round(w * cover)), max(th, round(h * cover))
+                bg = im.resize((bw, bh), Image.LANCZOS).crop(
+                    (round((bw - tw) / 2), round((bh - th) / 2),
+                     round((bw - tw) / 2) + tw, round((bh - th) / 2) + th))
+                bg = bg.convert("RGB").filter(
+                    ImageFilter.GaussianBlur(max(8, min(tw, th) // 18)))
+            elif pad_style == "transparent":
+                bg = Image.new("RGBA", (tw, th), (0, 0, 0, 0))
+            else:
+                bg = Image.new("RGB", (tw, th),
+                               (255, 255, 255) if pad_style == "white" else (0, 0, 0))
+            box = ((tw - nw) // 2, (th - nh) // 2)
+            if bg.mode == "RGBA":
+                bg.paste(small.convert("RGBA"), box)
+            else:
+                bg.paste(small.convert("RGB"), box)
+            crop = bg
+        dest = out_dir / f"{src.stem}-{key}-{tw}x{th}-{fit_mode}{ext}"
+        if pil_fmt == "JPEG":
+            crop.convert("RGB").save(dest, pil_fmt, quality=quality, optimize=True)
+        elif pil_fmt == "WEBP":
+            crop.save(dest, pil_fmt, quality=quality)
+        else:
+            crop.save(dest, pil_fmt, optimize=True)
+        written.append({"preset": key, "file": dest.name, "w": tw, "h": th,
+                        "fit": fit_mode, "pad": pad_style if fit_mode == "fit" else None,
+                        "size": dest.stat().st_size,
+                        "url": f"/media/output/images/{work.name}/formats/{dest.name}"})
+    return jsonify({"written": written, "cost": 0.0, "fit": fit_mode, "dir": str(out_dir)})
+
+
+ERASE_ENGINE = APP_DIR / "engines" / "local_erase.py"
+
+
+def _img_erase_cmd(work: Path, src: Path, b: dict, mask_only: bool) -> list:
+    mode = (b.get("mask_mode") or "box").lower()
+    if mode not in ("box", "object", "brush", "file"):
+        abort(400, "mask_mode must be box, object, brush or file")
+    cmd = [str(Path(CONFIG["venvs"]["cv"])), str(ERASE_ENGINE),
+           "--image", str(src), "--work", str(work), "--mode", mode,
+           "--grow", str(max(0, min(80, int(b.get("grow", 8)))))]
+    if mode == "file":                     # reuse the AI mask from /api/img/mask-ai
+        mf = work / "_mask.png"
+        if not mf.is_file():
+            abort(400, "no AI mask yet — describe the object first")
+        cmd += ["--mask-file", str(mf)]
+    reg = b.get("region")
+    if isinstance(reg, dict):
+        try:
+            cmd += ["--box", f"{float(reg['x'])},{float(reg['y'])},"
+                             f"{float(reg['w'])},{float(reg['h'])}"]
+        except (KeyError, TypeError, ValueError):
+            abort(400, "bad region")
+    strokes = b.get("strokes")
+    if isinstance(strokes, list) and strokes:
+        try:
+            cmd += ["--strokes", ";".join(
+                f"{float(s['x'])},{float(s['y'])},{float(s['r'])}" for s in strokes[:4000])]
+        except (KeyError, TypeError, ValueError):
+            abort(400, "bad strokes")
+    if mask_only:
+        cmd.append("--mask-only")
+    elif b.get("text"):
+        cmd += ["--user-text", str(b["text"])[:200]]
+    return cmd
+
+
+def _run_engine(cmd: list, timeout: int = 300):
+    """Spawn an engine and return (stdout, stderr). UTF-8 forced — a captured
+    pipe is cp1252 on Windows and the engines' ✅ log lines would kill them."""
+    try:
+        r = subprocess.run(cmd, capture_output=True, timeout=timeout,
+                           env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+                           text=True, encoding="utf-8", errors="replace")
+    except subprocess.TimeoutExpired:
+        abort(500, "engine timed out")
+    if r.returncode != 0:
+        abort(400, ((r.stderr or r.stdout or "").strip().splitlines() or ["engine failed"])[-1][:300])
+    return r.stdout or "", r.stderr or ""
+
+
+@app.post("/api/img/mask-preview")
+def api_img_mask_preview():
+    """Show exactly what would be erased — free, instant, no model run."""
+    b = request.get_json(force=True)
+    work = _img_workdir(b.get("slug"))
+    src = _img_file(work, b.get("file") or "v00.png")
+    out, _ = _run_engine(_img_erase_cmd(work, src, b, True), timeout=90)
+    try:
+        info = json.loads(out.strip().splitlines()[-1])
+    except Exception:                                # noqa: BLE001
+        info = {}
+    return jsonify({"preview": f"/media/output/images/{work.name}/_mask-preview.jpg?t={time.time()}",
+                    "coverage": info.get("coverage"), "cost": 0.0})
+
+
+@app.post("/api/img/erase-local")
+def api_img_erase_local():
+    """Erase inside the mask with local LaMa. Free, and provably mask-only:
+    every pixel outside the mask is byte-identical to the source."""
+    b = request.get_json(force=True)
+    work = _img_workdir(b.get("slug"))
+    src = _img_file(work, b.get("file") or "v00.png")
+    out, _ = _run_engine(_img_erase_cmd(work, src, b, False), timeout=600)
+    try:
+        info = json.loads(out.strip().splitlines()[-1])
+    except Exception:                                # noqa: BLE001
+        abort(500, "erase finished but returned no report")
+    for p in (work / "_mask.png", work / "_mask-preview.jpg"):
+        p.unlink(missing_ok=True)
+    info["versions"] = _img_versions(work)
+    info["cost"] = 0.0
+    return jsonify(info)
+
+
+MASKEDIT_ENGINE = APP_DIR / "engines" / "mask_edit.py"
+SAM_COST = 0.005
+FILL_MODELS = {
+    "flux-fill":    {"label": "FLUX.1 [pro] Fill — best quality inpainting",
+                     "per_mp": 0.05, "flat": 0.0, "needs_prompt": True},
+    "bria-genfill": {"label": "Bria GenFill — cheap, commercially licensed",
+                     "per_mp": 0.0, "flat": 0.04, "needs_prompt": True},
+    "bria-eraser":  {"label": "Bria Eraser — cloud object removal",
+                     "per_mp": 0.0, "flat": 0.04, "needs_prompt": False},
+}
+
+
+def _fill_estimate(model: str, src: Path) -> dict:
+    from PIL import Image
+    m = FILL_MODELS[model]
+    with Image.open(src) as im:
+        w, h = im.size
+    total = round(m["flat"] + m["per_mp"] * (w * h / 1_000_000.0), 4)
+    mp = round(w * h / 1_000_000.0, 2)
+    return {"this_run": total, "engine": "fal-fill", "model": model,
+            "megapixels": mp, "clone": 0.0, "tts": None,
+            "summary": f"{m['label'].split(' — ')[0]} on {w}×{h} ({mp} MP) ≈ ${total:.3f}"}
+
+
+@app.get("/api/img/fill-models")
+def api_img_fill_models():
+    return jsonify({"models": [{"key": k, **v} for k, v in FILL_MODELS.items()],
+                    "sam_cost": SAM_COST})
+
+
+@app.post("/api/img/mask-ai")
+def api_img_mask_ai():
+    """Phase 2 — describe the thing, EVF-SAM returns a pixel-accurate mask.
+
+    Cheap (~$0.005) and non-destructive: this only produces a mask + preview,
+    which you approve before any edit runs.
+    """
+    b = request.get_json(force=True)
+    work = _img_workdir(b.get("slug"))
+    src = _img_file(work, b.get("file") or "v00.png")
+    text = (b.get("text") or "").strip()
+    if len(text) < 2:
+        abort(400, "say what to find, e.g. “the coffee cup”")
+    if not b.get("confirm_cost"):
+        return jsonify({"needs_confirm": True,
+                        "estimate": {"this_run": SAM_COST, "engine": "fal-sam",
+                                     "summary": f"EVF-SAM mask ≈ ${SAM_COST:.3f}"}}), 402
+
+    cmd = [str(Path(CONFIG["venvs"]["cv"])), str(MASKEDIT_ENGINE),
+           "--work", str(work), "--image", str(src), "--task", "mask",
+           "--text", text[:300], "--expand", str(max(0, min(30, int(b.get("expand", 0))))),
+           "--grow", str(max(0, min(60, int(b.get("grow", 6))))),
+           "--env-file", str(FAL_ENV_FILE)]
+    out, _ = _run_engine(cmd, timeout=300)
+    try:
+        info = json.loads(out.strip().splitlines()[-1])
+    except Exception:                                # noqa: BLE001
+        abort(500, "mask finished but returned no report")
+    try:
+        res = record_spend(work.name, {"this_run": SAM_COST, "engine": "fal-sam",
+                                       "summary": f"EVF-SAM mask: “{text[:60]}”"})
+        info["spent_total"] = res["total"]
+    except Exception:                                # noqa: BLE001
+        pass
+    info["preview"] = f"/media/output/images/{work.name}/_mask-preview.jpg?t={time.time()}"
+    return jsonify(info)
+
+
+@app.post("/api/img/fill")
+def api_img_fill():
+    """Phase 3 — replace/erase ONLY what the mask covers, with a mask-native model.
+
+    The model is given image + mask, and we composite through that same mask and
+    measure what it did outside it. Cost-gated like every other paid call.
+    """
+    b = request.get_json(force=True)
+    work = _img_workdir(b.get("slug"))
+    src = _img_file(work, b.get("file") or "v00.png")
+    model = b.get("model", "flux-fill")
+    text = (b.get("text") or "").strip()
+    if model not in FILL_MODELS:
+        abort(400, "unknown fill model")
+    if FILL_MODELS[model]["needs_prompt"] and len(text) < 2:
+        abort(400, "say what should replace it")
+    mask = work / "_mask.png"
+    if not mask.is_file():
+        abort(400, "make a mask first — draw a box, paint it, or describe it")
+
+    est = _fill_estimate(model, src)
+    if not b.get("confirm_cost"):
+        return jsonify({"needs_confirm": True, "estimate": est}), 402
+
+    cmd = [str(Path(CONFIG["venvs"]["cv"])), str(MASKEDIT_ENGINE),
+           "--work", str(work), "--image", str(src), "--task", "fill",
+           "--model", model, "--text", text[:500], "--mask", str(mask),
+           "--env-file", str(FAL_ENV_FILE)]
+    out, _ = _run_engine(cmd, timeout=600)
+    try:
+        info = json.loads(out.strip().splitlines()[-1])
+    except Exception:                                # noqa: BLE001
+        abort(500, "fill finished but returned no report")
+    try:
+        res = record_spend(work.name, {**est, "summary": est["summary"]})
+        info["spent_total"] = res["total"]
+    except Exception:                                # noqa: BLE001
+        pass
+    for p in (work / "_mask.png", work / "_mask-preview.jpg"):
+        p.unlink(missing_ok=True)
+    info["versions"] = _img_versions(work)
+    return jsonify(info)
+
+
+@app.post("/api/img/send")
+def api_img_send():
+    """Hand a finished image to the next tool: Image→Video, or the Desktop folder."""
+    b = request.get_json(force=True)
+    work = _img_workdir(b.get("slug"))
+    name = Path(b.get("file") or "").name
+    src = (work / "formats" / name).resolve() if b.get("from_formats") else _img_file(work, name)
+    if b.get("from_formats"):
+        if not str(src).startswith(str((work / "formats").resolve())) or not src.is_file():
+            abort(404, "no such export")
+    where = b.get("to", "i2v")
+
+    if where == "i2v":
+        I2V_UPLOADS.mkdir(parents=True, exist_ok=True)
+        dest = I2V_UPLOADS / f"{work.name}-{src.name}"
+        shutil.copy2(src, dest)
+        return jsonify({"sent_to": "image-to-video",
+                        "image": f"output/i2v/_uploads/{dest.name}"})
+    if where == "desktop":
+        EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
+        flat, n = f"{work.name}-{src.name}", 2
+        dest = EXPORTS_DIR / flat
+        while dest.exists():                           # never clobber an earlier export
+            dest = EXPORTS_DIR / f"{Path(flat).stem}-{n}{src.suffix}"
+            n += 1
+        shutil.copy2(src, dest)
+        return jsonify({"sent_to": "desktop", "saved_to": str(dest)})
+    abort(400, "to must be 'i2v' or 'desktop'")
+
+
+@app.post("/api/img/delete")
+def api_img_delete():
+    """Soft-delete one version (never v00), one exported size, or the whole image."""
+    b = request.get_json(force=True)
+    work = _img_workdir(b.get("slug"))
+    name = Path(b.get("file") or "").name
+    if b.get("from_formats"):                    # an export, not a version
+        target = (work / "formats" / name).resolve()
+        if not str(target).startswith(str((work / "formats").resolve())) \
+                or target.suffix.lower() not in IMG_EXTS or not target.is_file():
+            abort(404, "no such export")
+        return jsonify({"deleted": name,
+                        "trash": soft_delete(target, f"export-{work.name}-{target.stem}")})
+    if not name:
+        return jsonify({"deleted": work.name, "trash": soft_delete(work, f"image-{work.name}")})
+    if name.startswith("v00"):
+        abort(400, "the original is never deleted")
+    target = _img_file(work, name)
+    label = soft_delete(target, f"image-{work.name}-{target.stem}")
+    (work / f"thumb-{target.stem}.jpg").unlink(missing_ok=True)
+    return jsonify({"deleted": name, "trash": label})
+
+
+@app.get("/image-editor")
+def image_editor_page():
+    return send_from_directory(STATIC, "image-editor.html")
+
+
+# ---------------------------------------------------------------- timeline editor
+# The sequence editor is a real NLE: a clip document (EDL) plus a renderer. It
+# lives in its own blueprint because server.py is already large enough, and a
+# NEW blueprint can't disturb any existing route.
+import api_sequence  # noqa: E402
+
+SEQ_RENDER_PY = APP_DIR / "engines" / "sequence_render.py"
+SEQ_GEN_PY = APP_DIR / "engines" / "seq_generate.py"
+api_sequence.init(
+    ROOT, SEQ_RENDER_PY, jobs_create, run_job, ff_tool, sys.executable,
+    gen_py=SEQ_GEN_PY,                       # fal generation runs in the cv venv
+    cv_py=str(Path(CONFIG["venvs"]["cv"])),  # (fal_client + httpx live there)
+    fal_env=FAL_ENV_FILE,
+    claude_exe=CLAUDE_EXE or "",
+    record_spend=record_spend,
+    whisper_py=str(TRANSCRIBE_VENV_PY),      # faster-whisper venv for transcripts
+)
+app.register_blueprint(api_sequence.bp)
+
+
+@app.get("/timeline")
+def timeline_page():
+    return send_from_directory(STATIC, "timeline.html")
+
+
+# ---------------------------------------------------------------- ad batches
+# Three-layer batch system (Template / Copy / Production) — its own blueprint
+# for the same reason the timeline editor is one.
+import api_batches  # noqa: E402
+
+api_batches.init(ROOT, claude_exe=CLAUDE_EXE or "")
+app.register_blueprint(api_batches.bp)
+
+
+@app.get("/batches")
+def batches_page():
+    return send_from_directory(STATIC, "batches.html")
 
 
 if __name__ == "__main__":

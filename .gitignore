@@ -106,3 +106,8 @@ Thumbs.db
 # live config holds this machine's session key + phone PIN - config.example.json is the template
 /video-studio/config.json
 /video-studio/jobs/
+
+# video-studio runtime (569MB of generated media + server logs — never source)
+video-studio/output/
+video-studio/server.log
+video-studio/server.err.log

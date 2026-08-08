@@ -1,0 +1,254 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Timeline — Video Studio</title>
+<link rel="stylesheet" href="/static/vs.css">
+<link rel="stylesheet" href="/static/timeline.css">
+</head>
+<body>
+
+<div id="tl-app">
+
+  <!-- ══ top bar ══ -->
+  <header class="tb">
+    <button class="btn ghost" id="btn-projects">☰ Projects</button>
+    <input id="proj-name" class="titlein" placeholder="untitled" spellcheck="false">
+    <span class="saved" id="saved">saved</span>
+    <div class="spacer"></div>
+    <button class="btn ghost" id="btn-undo" title="Undo (Ctrl+Z)">↶ Undo</button>
+    <span class="sep"></span>
+    <button class="btn ghost" id="btn-draft" title="Fast half-size render">⚡ Draft</button>
+    <button class="btn go" id="btn-render">🎬 Export</button>
+  </header>
+
+  <!-- ══ body ══ -->
+  <main class="body">
+
+    <!-- left: the AI editor pipeline -->
+    <aside class="pane left">
+      <div class="tabs">
+        <button class="tab on" data-panel="ai">✨ AI Editor</button>
+        <button class="tab" data-panel="script">📝 Script</button>
+        <button class="tab" data-panel="insp">Inspector</button>
+      </div>
+
+      <!-- AI panel — top to bottom: see the video, feed it, say the change,
+           pick the model/duration/quality, generate -->
+      <div class="panel on" id="panel-ai">
+
+        <!-- 1. the video BEFORE the change -->
+        <div class="srcprev" id="src-prev">
+          <video id="vSrc" muted playsinline controls preload="metadata"></video>
+          <div class="srclabel" id="src-label">no clip yet — drop a video below</div>
+        </div>
+
+        <!-- 2. feed it -->
+        <div class="updrop" id="ai-drop" title="Upload straight onto the timeline">
+          <span class="upicon">⬆</span>
+          <span id="ai-dropmsg">Drop a video here — or click to upload</span>
+          <input type="file" id="ai-file" accept="video/*,audio/*" hidden multiple>
+        </div>
+
+        <!-- 3. say the change -->
+        <div id="chatlog" class="chatlog">
+          <div class="msg bot">What change do you want? Cuts, trims, text and
+            reordering happen straight away. Anything that needs a model to
+            redraw the picture comes back with a price first.</div>
+        </div>
+        <div class="chatin">
+          <textarea id="chatbox" rows="2" placeholder="what change do you want? e.g. cut the first 2 seconds · make it look like night"></textarea>
+          <button class="btn go" id="btn-send">✨ Generate</button>
+        </div>
+
+        <!-- 4. model · duration · quality → generate -->
+        <div class="genbox">
+          <div class="grow">
+            <label class="lbl">Model</label>
+            <select id="model-sel"><option>loading…</option></select>
+            <div class="modelnote" id="model-note"></div>
+          </div>
+          <div class="grow2">
+            <label class="lbl">Inspiration images <span id="ref-cap"></span></label>
+            <div class="refs" id="refs"></div>
+            <label class="reflink">＋ add image
+              <input type="file" id="ref-file" accept="image/*" hidden multiple>
+            </label>
+          </div>
+          <div class="grow3">
+            <label class="lbl">Duration <input type="number" id="gen-sec" value="5"
+                min="1" max="30" step="1"> <span class="lblhint" id="gen-max"></span></label>
+            <label class="lbl">Quality
+              <select id="gen-res"><option>720p</option><option>1080p</option></select>
+            </label>
+          </div>
+          <button class="btn go wide" id="btn-generate">▶ Run model on selected clip</button>
+          <div class="est" id="gen-est"></div>
+
+          <!-- 🎭 face swap: change the actor, keep the performance -->
+          <details class="fsbox" id="fs-box">
+            <summary>🎭 Face swap — change the actor</summary>
+            <label class="lbl">Avatars <span class="lblhint">(saved faces — reusable in every video)</span></label>
+            <div class="refs" id="fs-avatars"><span class="lblhint">none yet</span></div>
+            <div class="fsadd">
+              <input type="text" id="fs-name" placeholder="avatar name" spellcheck="false">
+              <label class="reflink">＋ image
+                <input type="file" id="fs-file" accept="image/*" hidden>
+              </label>
+              <button class="btn ghost sm" id="fs-grab" title="Save the face from the preview's current frame">📸 from preview</button>
+              <button class="btn ghost sm" id="fs-desc" title="Describe the actor in the preview frame — fills the Make prompt">🔍 Describe</button>
+            </div>
+            <div class="fsadd">
+              <input type="text" id="fs-genprompt" placeholder="✨ describe a new face — e.g. woman in her 30s, warm smile" spellcheck="false">
+              <button class="btn ghost sm" id="fs-gen" title="Generate a brand-new face with AI (~$0.04)">✨ Make</button>
+            </div>
+            <div class="fspreview" id="fs-preview">
+              <img id="fs-preview-img" alt="">
+              <div class="fsplabel" id="fs-preview-label">pick an avatar to see the face you're swapping in</div>
+            </div>
+            <label class="lbl" style="margin-top:7px">Engine</label>
+            <select id="fs-engine">
+              <option value="wan-replace">Wan Replace — best quality, may restyle wardrobe/set</option>
+              <option value="pixverse">PixVerse — keeps wardrobe &amp; set, cheaper</option>
+            </select>
+            <label class="lbl" style="margin-top:6px">Quality
+              <select id="fs-res"><option>720p</option><option>480p</option></select>
+            </label>
+            <button class="btn go wide" id="fs-go" style="margin-top:7px">🎭 Swap face on selected clip</button>
+            <div class="est" id="fs-est"></div>
+          </details>
+        </div>
+      </div>
+
+      <!-- script panel: edit the video by editing its words -->
+      <div class="panel" id="panel-script">
+        <div class="scripthead">
+          <button class="btn ghost sm" id="btn-transcribe">🎙 Transcribe</button>
+          <button class="btn ghost sm" id="btn-silence">🤫 Find silences</button>
+          <button class="btn go sm" id="btn-delwords" disabled>🗑 Delete words</button>
+        </div>
+        <div class="scripthint" id="script-hint">transcribe first — then click a word,
+          click another to select the span, and Delete ripples the video</div>
+        <div id="script-body" class="scriptbody"><div class="empty">no transcript yet</div></div>
+      </div>
+
+      <!-- inspector panel -->
+      <div class="panel" id="panel-insp">
+        <div id="inspector" class="insp"><div class="empty">select a clip</div></div>
+      </div>
+    </aside>
+
+    <div class="split v" id="sp-left" title="drag to resize · double-click resets"></div>
+
+    <!-- center: player -->
+    <section class="pane center">
+      <div class="stage" id="stage">
+        <div class="frame" id="frame">
+          <video id="vA" playsinline preload="auto"></video>
+          <video id="vB" playsinline preload="auto"></video>
+          <div class="overlay" id="overlay"></div>
+          <div class="noclip" id="noclip">add media to begin</div>
+          <div class="working" id="working">
+            <div class="spin"></div>
+            <div class="wtitle" id="wtitle">working…</div>
+            <div class="wsub" id="wsub"></div>
+            <div class="wlog" id="wlog"></div>
+          </div>
+        </div>
+      </div>
+      <div class="transport">
+        <button class="btn ghost" id="btn-start" title="Home">⏮</button>
+        <button class="btn play" id="btn-play" title="Space">▶</button>
+        <button class="btn ghost" id="btn-end" title="End">⏭</button>
+        <span class="tc" id="tc">00:00.0</span><span class="tcd" id="tcd">/ 00:00.0</span>
+        <div class="spacer"></div>
+        <button class="btn ghost" id="btn-split" title="Split at playhead (S)">⧉ Split</button>
+        <button class="btn ghost" id="btn-del" title="Delete (Del) · ripple (Shift+Del)">🗑 Delete</button>
+        <div class="spacer"></div>
+        <label class="zoomw">zoom
+          <input type="range" id="zoom" min="8" max="320" value="60">
+        </label>
+      </div>
+    </section>
+
+    <div class="split v" id="sp-right" title="drag to resize · double-click resets"></div>
+
+    <!-- right: media library + extend -->
+    <aside class="pane right">
+      <div class="tabs">
+        <button class="tab on" data-rpanel="media">🎞 Media</button>
+        <button class="tab" data-rpanel="extend">⏩ Extend</button>
+      </div>
+
+      <div class="panel on" id="rpanel-media">
+        <div class="ph">
+          <input id="media-search" class="search" placeholder="filter…" spellcheck="false">
+        </div>
+        <div class="hint">click to append to the timeline</div>
+        <div id="media-list" class="medialist"><div class="empty">loading…</div></div>
+      </div>
+
+      <div class="panel" id="rpanel-extend">
+        <div class="extbody">
+          <div class="grp"><h4>Video</h4>
+            <select id="ext-src"><option value="">— pick a video —</option></select>
+            <div class="modelnote" id="ext-info"></div>
+          </div>
+          <div class="grp"><h4>Extend to</h4>
+            <div class="row"><label>seconds</label>
+              <input type="number" id="ext-sec" value="30" min="2" max="600" step="1"></div>
+            <div class="modelnote">Seamless boomerang loop — forward then reversed,
+              no visible seam. Free &amp; local. Best for b-roll and product shots;
+              a talking head will show reversed motion.</div>
+          </div>
+          <button class="btn go wide" id="ext-go">⏩ Extend seamlessly (free)</button>
+          <div class="est" id="ext-status"></div>
+          <div id="ext-result" class="extresult"></div>
+        </div>
+      </div>
+    </aside>
+  </main>
+
+  <div class="split h" id="sp-tl" title="drag to resize · double-click resets"></div>
+
+  <!-- ══ timeline ══ -->
+  <footer class="tl" id="tl">
+    <div class="tlbar">
+      <span id="tl-status" class="tlstatus"></span>
+      <div class="spacer"></div>
+      <button class="btn ghost sm" id="btn-addtext">＋ Text</button>
+      <button class="btn ghost sm" id="btn-addtrack">＋ Video track</button>
+    </div>
+    <div class="tlscroll" id="tlscroll">
+      <div class="tlinner" id="tlinner">
+        <div class="ruler" id="ruler"></div>
+        <div class="lanes" id="lanes"></div>
+        <div class="playhead" id="playhead"><i></i></div>
+      </div>
+    </div>
+  </footer>
+
+  <!-- project picker -->
+  <div class="modal" id="projmodal">
+    <div class="sheet">
+      <div class="sh"><b>Projects</b><button class="x" id="proj-close">✕</button></div>
+      <div class="newrow">
+        <input id="new-name" placeholder="new project name" spellcheck="false">
+        <select id="new-ratio">
+          <option value="1080x1920">9:16 · 1080×1920</option>
+          <option value="1080x1080">1:1 · 1080×1080</option>
+          <option value="1920x1080">16:9 · 1920×1080</option>
+        </select>
+        <button class="btn go" id="new-go">Create</button>
+      </div>
+      <div id="proj-list" class="projlist"></div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast"></div>
+</div>
+
+<script src="/static/vs-nav.js"></script>
+<script src="/static/js/timeline.js"></script>
+</body>
+</html>

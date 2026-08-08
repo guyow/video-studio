@@ -1,0 +1,693 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ad Batches — Video Studio</title>
+<link rel="stylesheet" href="/static/vs.css">
+<script src="/static/vs-nav.js" defer></script>
+<style>
+  * { box-sizing:border-box; margin:0; }
+  body { background:radial-gradient(1100px 500px at 75% -10%, #1f1a36 0%, var(--bg) 55%);
+         color:var(--text); min-height:100vh; }
+  a { color:var(--accent2); text-decoration:none; }
+  .cols { display:grid; grid-template-columns:360px 1fr; gap:18px; align-items:start; }
+  @media (max-width:1000px){ .cols{ grid-template-columns:1fr; } }
+
+  .field { margin-bottom:10px; }
+  .field label { display:block; font-size:11.5px; color:var(--dim); margin-bottom:3px;
+                 text-transform:uppercase; letter-spacing:.4px; }
+  .field input[type=text], .field textarea, .field select {
+    width:100%; background:var(--panel2); border:1px solid var(--line); border-radius:8px;
+    color:var(--text); padding:8px 10px; font:13.5px/1.45 'Segoe UI',system-ui,sans-serif; }
+  .field textarea { resize:vertical; min-height:64px; }
+  .field input:focus, .field textarea:focus, .field select:focus { outline:none; border-color:var(--accent); }
+  .two { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+
+  .blist .item { padding:10px 12px; border:1px solid var(--line); border-radius:10px;
+                 margin-bottom:8px; cursor:pointer; background:var(--panel2); transition:border-color .15s; }
+  .blist .item:hover { border-color:var(--accent); }
+  .blist .item.on { border-color:var(--accent); box-shadow:inset 3px 0 0 var(--accent); }
+  .blist .bid { font-weight:700; font-size:12.5px; }
+  .blist .bmeta { color:var(--dim); font-size:11.5px; margin-top:2px; overflow:hidden;
+                  text-overflow:ellipsis; white-space:nowrap; }
+
+  .stbadge { display:inline-block; font-size:10.5px; font-weight:700; border-radius:9px;
+             padding:1px 8px; margin-left:6px; vertical-align:1px; }
+  .st-draft, .st-template { background:#2a3040; color:var(--dim); }
+  .st-copy      { background:#233a52; color:var(--accent2); }
+  .st-approved  { background:#20324a; color:#8fd0ff; }
+  .st-production{ background:#3a2f55; color:#c9b3ff; }
+  .st-review    { background:#453a1e; color:var(--warn); }
+  .st-accepted  { background:#1d3a2b; color:var(--ok); }
+  .st-rejected  { background:#42222a; color:var(--bad); }
+
+  .pipe { display:flex; gap:4px; margin:12px 0 18px; flex-wrap:wrap; }
+  .pipe span { font-size:11px; padding:4px 11px; border-radius:20px; background:var(--panel2);
+               border:1px solid var(--line); color:var(--dim); }
+  .pipe span.on { color:var(--text); border-color:var(--accent);
+                  background:linear-gradient(135deg,#33296b,#232a4d); }
+
+  .layer { position:relative; }
+  .layer.locked .inner { filter:blur(2px) brightness(.6); pointer-events:none; user-select:none; }
+  .lockmsg { position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+             z-index:5; flex-direction:column; gap:6px; text-align:center; color:var(--warn);
+             font-weight:700; }
+  .lockmsg small { color:var(--dim); font-weight:400; }
+
+  .check { display:flex; gap:8px; align-items:flex-start; margin:5px 0; font-size:13px; }
+  .check input { margin-top:3px; accent-color:var(--accent); }
+  .check.auto { color:var(--dim); }
+  .check.auto.pass { color:var(--ok); }
+  .check.auto.fail { color:var(--bad); }
+
+  .viol { border-left:3px solid var(--bad); background:#1c1420; border-radius:0 8px 8px 0;
+          padding:6px 10px; margin:6px 0; font-size:12.5px; }
+  .viol.warn { border-left-color:var(--warn); background:#1e1a14; }
+  .viol b { font-family:var(--mono); }
+  .viol .why { color:var(--dim); }
+
+  .steprow select { background:var(--panel2); border:1px solid var(--line); border-radius:7px;
+                    color:var(--text); padding:4px 8px; font-size:12.5px; }
+  .steprow input { width:100%; background:transparent; border:0; border-bottom:1px dashed var(--line);
+                   color:var(--text); padding:3px 2px; font-size:12.5px; }
+  .steprow input:focus { outline:none; border-bottom-color:var(--accent); }
+
+  .approvebox { border:1px solid var(--warn); border-radius:10px; padding:12px 14px; margin-top:14px;
+                background:#191507; }
+  .approvebox.ok { border-color:var(--ok); background:#0d1a12; }
+  .btnrow { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:10px; }
+  .savehint { font-size:11px; color:var(--dim); }
+  .empty { text-align:center; color:var(--dim); padding:80px 20px; }
+  .empty .big { font-size:42px; margin-bottom:12px; }
+  dialog { background:var(--panel); color:var(--text); border:1px solid var(--line);
+           border-radius:14px; padding:18px 20px; max-width:660px; width:92vw; }
+  dialog::backdrop { background:rgba(0,0,0,.6); }
+  .hookpick { max-height:340px; overflow:auto; }
+  .hookpick .item { padding:8px 10px; border:1px solid var(--line); border-radius:8px;
+                    margin-bottom:6px; cursor:pointer; font-size:12.5px; }
+  .hookpick .item:hover { border-color:var(--accent); }
+  .hookpick .hmeta { color:var(--dim); font-size:11px; margin-top:2px; }
+  pre.mdout { background:#0a0d13; border:1px solid var(--line); border-radius:10px;
+              padding:12px; font:11.5px/1.5 var(--mono); max-height:50vh; overflow:auto;
+              white-space:pre-wrap; }
+  #vs-toast { position:fixed; bottom:24px; left:50%; transform:translateX(-50%) translateY(200%);
+              background:var(--panel2); border:1px solid var(--line); border-radius:12px;
+              padding:11px 18px; font-size:13px; z-index:300; transition:transform .25s;
+              box-shadow:0 12px 34px rgba(0,0,0,.5); max-width:80vw; }
+  #vs-toast.on { transform:translateX(-50%) translateY(0); }
+</style>
+</head>
+<body>
+<div class="vs-page" style="max-width:1340px">
+  <h2>📦 Ad Batches <span class="hint" style="color:var(--dim);font-size:14px">— template → copy → production, in that order</span></h2>
+  <p class="lead">Layer 1 and Layer 2 get filled <b>before</b> anyone touches production. A weak hook is not a rendering problem.</p>
+
+  <div class="cols">
+    <div>
+      <div class="vs-panel">
+        <h3>New batch</h3>
+        <div class="field"><label>Short name</label><input type="text" id="n-shortname" placeholder="prince-hooks-v2"></div>
+        <div class="field"><label>Goal of this batch</label><input type="text" id="n-goal" placeholder="3 new hook variants for the cold Meta campaign"></div>
+        <div class="two">
+          <div class="field"><label>Quantity</label><input type="text" id="n-qty" placeholder="3 finished assets"></div>
+          <div class="field"><label>Deadline</label><input type="text" id="n-deadline" placeholder="2026-08-15"></div>
+        </div>
+        <div class="two">
+          <div class="field"><label>Requested by</label><input type="text" id="n-reqby" placeholder="guy"></div>
+          <div class="field"><label>Template</label><select id="n-template"><option value="">— NEW —</option></select></div>
+        </div>
+        <button class="vs-btn" id="btn-create">Create batch</button>
+      </div>
+
+      <div class="vs-panel">
+        <h3>Batches</h3>
+        <div class="blist" id="blist"><div class="savehint">loading…</div></div>
+      </div>
+
+      <div class="vs-panel">
+        <h3>Template library</h3>
+        <div class="blist" id="tpllist"><div class="savehint">empty — templates graduate here from accepted batches</div></div>
+        <div class="btnrow">
+          <button class="vs-btn ghost" id="btn-brief">📄 Template from brief (PDF)</button>
+        </div>
+        <input type="file" id="brief-file" accept=".pdf,.txt,.md" style="display:none">
+      </div>
+    </div>
+
+    <div id="detail">
+      <div class="empty"><div class="big">📦</div>Pick a batch on the left, or create one.<br>
+      <small>Everything autosaves as you type.</small></div>
+    </div>
+  </div>
+</div>
+
+<dialog id="dlg-hooks">
+  <h3 style="margin-bottom:10px">Pick a hook from the bank</h3>
+  <div class="hookpick" id="hookpick"></div>
+  <div class="btnrow"><button class="vs-btn ghost" onclick="document.getElementById('dlg-hooks').close()">Close</button></div>
+</dialog>
+
+<dialog id="dlg-jobs">
+  <h3 style="margin-bottom:10px">Attach a job to this batch</h3>
+  <div class="hookpick" id="jobpick"></div>
+  <div class="btnrow"><button class="vs-btn ghost" onclick="document.getElementById('dlg-jobs').close()">Close</button></div>
+</dialog>
+
+<dialog id="dlg-brief">
+  <h3 style="margin-bottom:4px">📄 Template from brief</h3>
+  <p class="savehint" style="margin-bottom:12px">AI read the brief and proposed this template. Edit anything, then save it.</p>
+  <div class="two">
+    <div class="field"><label>Template id</label><input type="text" id="bf-id"></div>
+    <div class="field"><label>Label</label><input type="text" id="bf-label"></div>
+  </div>
+  <div class="two" id="bf-fields"></div>
+  <div id="bf-hints" class="savehint" style="margin:6px 0 4px; white-space:pre-wrap"></div>
+  <div class="btnrow">
+    <button class="vs-btn" id="bf-save">Save to library</button>
+    <button class="vs-btn ghost" id="bf-apply" style="display:none">Apply to open batch (Layer 1)</button>
+    <button class="vs-btn ghost" onclick="document.getElementById('dlg-brief').close()">Close</button>
+  </div>
+</dialog>
+
+<dialog id="dlg-md">
+  <h3 style="margin-bottom:10px">Batch record exported</h3>
+  <div class="savehint" id="md-path" style="margin-bottom:8px"></div>
+  <pre class="mdout" id="md-out"></pre>
+  <div class="btnrow">
+    <button class="vs-btn" id="btn-md-copy">Copy markdown</button>
+    <button class="vs-btn ghost" onclick="document.getElementById('dlg-md').close()">Close</button>
+  </div>
+</dialog>
+
+<script src="/static/js/vs-core.js"></script>
+<script>
+(() => {
+  const $ = (s, r) => (r || document).querySelector(s);
+  const esc = VS.esc;
+  let batches = [], templates = [], cur = null, curStatus = "draft";
+  let saveTimers = {};
+
+  const STATUS_LABEL = {draft:"draft", template:"template", copy:"copy",
+    approved:"approved ✓", production:"production", review:"review",
+    accepted:"accepted ✔", rejected:"rejected ✖"};
+  const PIPE = ["draft","template","copy","approved","production","review","accepted"];
+
+  const TPL_FIELDS = [
+    ["format", "Format", "static image / short-form video / VSL cut"],
+    ["aspect_ratio", "Aspect ratio", "9:16 / 1:1 / 4:5"],
+    ["duration", "Duration (video only)", "30s"],
+    ["identity", "Spokesperson identity", "which character LoRA"],
+    ["scene", "Scene / setting", ""],
+    ["wardrobe", "Wardrobe / props", ""],
+    ["product_shown", "Product shown", "gummy / pouch / none"],
+    ["logo_placement", "Logo placement (composited in post)", "top-right, post"],
+    ["reference_images", "Reference images", "paths or links"],
+  ];
+  const BRAND_LOCK = [
+    ["palette", "Palette matches (dark purple / black / gold)"],
+    ["logo_composited", "Logo is composited, not generated"],
+    ["product_shape", "Product shape correct (flame-shaped gummy)"],
+    ["identity_owned", "Spokesperson is an identity we own"],
+  ];
+  const MANUAL_CHECKS = [
+    ["age_gate", "Age-gate / 18+ handling correct for destination"],
+    ["stim_warnings", "Kava and caffeine warnings respected where required"],
+    ["claims_true", "Guarantee and lab-report claims match what is actually true"],
+  ];
+  const PROD_STEPS = [
+    ["generate", "Generate / render"],
+    ["face_swap", "Face replacement (if used)"],
+    ["logo_composite", "Logo composite"],
+    ["export", "Export at required specs"],
+    ["filed", "Filed in asset library"],
+  ];
+  const REPRO = [
+    ["workflow_file", "Workflow file (git path / commit)"],
+    ["model", "Model + version"],
+    ["loras", "LoRA(s) used + strength"],
+    ["seed", "Seed"],
+    ["sampler", "Sampler settings"],
+  ];
+
+  // ---------------------------------------------------------------- data
+
+  async function refresh(keepCur) {
+    const d = await VS.api("/api/batches");
+    batches = d.batches; templates = d.templates;
+    renderList(); renderTemplates(); fillTemplateSelect();
+    if (keepCur && cur) {
+      const still = batches.find(b => b.slug === cur.slug);
+      if (!still) { cur = null; $("#detail").innerHTML = '<div class="empty"><div class="big">📦</div>Pick a batch.</div>'; }
+    }
+  }
+
+  async function open(slug) {
+    const d = await VS.api("/api/batches/" + slug);
+    cur = d.batch; curStatus = d.status;
+    renderList(); renderDetail();
+  }
+
+  function saveSection(section, patch, then) {
+    clearTimeout(saveTimers[section]);
+    saveTimers[section] = setTimeout(async () => {
+      try {
+        const d = await VS.post("/api/batches/" + cur.slug, {[section]: patch});
+        cur = d.batch; curStatus = d.status;
+        renderList(); paintStatus();
+        if (then) then();
+      } catch (e) { VS.toast("save failed: " + e.message); }
+    }, 500);
+    // optimistic local merge so the UI never fights the keyboard
+    for (const k in patch) {
+      if (patch[k] && typeof patch[k] === "object" && cur[section][k] && typeof cur[section][k] === "object")
+        Object.assign(cur[section][k], patch[k]);
+      else cur[section][k] = patch[k];
+    }
+  }
+
+  // ---------------------------------------------------------------- left column
+
+  function renderList() {
+    if (!batches.length) { $("#blist").innerHTML = '<div class="savehint">no batches yet</div>'; return; }
+    $("#blist").innerHTML = batches.map(b => `
+      <div class="item ${cur && cur.slug === b.slug ? "on" : ""}" data-slug="${b.slug}">
+        <div class="bid">${esc(b.id)}<span class="stbadge st-${b.status}">${STATUS_LABEL[b.status] || b.status}</span></div>
+        <div class="bmeta">${esc(b.goal || b.hook || "—")}</div>
+      </div>`).join("");
+    VS.$$(".item", $("#blist")).forEach(el =>
+      el.addEventListener("click", () => open(el.dataset.slug)));
+  }
+
+  function renderTemplates() {
+    if (!templates.length) {
+      $("#tpllist").innerHTML = '<div class="savehint">empty — templates graduate here from accepted batches</div>';
+      return;
+    }
+    $("#tpllist").innerHTML = templates.map(t => `
+      <div class="item" data-tpl="${esc(t.id)}">
+        <div class="bid">${esc(t.id)}</div>
+        <div class="bmeta">${esc([t.format, t.aspect_ratio, t.identity].filter(Boolean).join(" · ") || t.label)}</div>
+      </div>`).join("");
+    VS.$$(".item", $("#tpllist")).forEach(el =>
+      el.addEventListener("click", () => {
+        const t = templates.find(x => x.id === el.dataset.tpl);
+        if (t) VS.toast(`${t.id}: ${[t.format, t.aspect_ratio, t.scene, t.identity].filter(Boolean).join(" · ")}`, 6000);
+      }));
+  }
+
+  function fillTemplateSelect() {
+    $("#n-template").innerHTML = '<option value="">— NEW —</option>' +
+      templates.map(t => `<option value="${esc(t.id)}">${esc(t.id)}</option>`).join("");
+  }
+
+  // ---- template from brief (PDF → AI → proposed Layer-1 template) ----
+  $("#btn-brief").addEventListener("click", () => $("#brief-file").click());
+  $("#brief-file").addEventListener("change", async e => {
+    const file = e.target.files[0];
+    if (!file) return;
+    e.target.value = "";
+    const btn = $("#btn-brief");
+    btn.disabled = true; btn.textContent = "🤖 reading brief…";
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const d = await VS.api("/api/batches/brief-analyze", {method: "POST", body: fd});
+      openBriefDialog(d);
+    } catch (err) { VS.toast(err.message, 7000); }
+    btn.disabled = false; btn.textContent = "📄 Template from brief (PDF)";
+  });
+
+  function openBriefDialog(d) {
+    $("#bf-id").value = d.id_suggestion || "";
+    $("#bf-label").value = d.label || "";
+    $("#bf-fields").innerHTML = TPL_FIELDS.map(([k, l, ph]) =>
+      field(l, "bf-" + k, d.template[k], ph)).join("");
+    $("#bf-hints").textContent =
+      (d.goal_suggestion ? "Suggested batch goal: " + d.goal_suggestion + "\n" : "") +
+      (d.copy_angle ? "Copy angle: " + d.copy_angle + "\n" : "") +
+      (d.notes ? "Notes: " + d.notes : "");
+    const briefTpl = () => {
+      const t = {};
+      TPL_FIELDS.forEach(([k]) => t[k] = $("#bf-" + k).value);
+      return t;
+    };
+    $("#bf-save").onclick = async () => {
+      try {
+        const saved = await VS.post("/api/batches/templates",
+          {id: $("#bf-id").value, label: $("#bf-label").value, ...briefTpl()});
+        await refresh(true);
+        $("#dlg-brief").close();
+        VS.toast("template " + saved.template.id + " saved to the library");
+      } catch (err) { VS.toast(err.message); }
+    };
+    const applyBtn = $("#bf-apply");
+    applyBtn.style.display = cur ? "" : "none";
+    applyBtn.onclick = () => {
+      if (!cur) return;
+      saveSection("template", {ref: null, is_new: true, ...briefTpl()}, renderDetail);
+      $("#dlg-brief").close();
+      VS.toast("brief template applied to " + cur.id + " Layer 1");
+    };
+    $("#dlg-brief").showModal();
+  }
+
+  $("#btn-create").addEventListener("click", async () => {
+    try {
+      const d = await VS.post("/api/batches", {
+        shortname: $("#n-shortname").value, goal: $("#n-goal").value,
+        quantity: $("#n-qty").value, deadline: $("#n-deadline").value,
+        requested_by: $("#n-reqby").value, template: $("#n-template").value,
+      });
+      $("#n-shortname").value = $("#n-goal").value = $("#n-qty").value = $("#n-deadline").value = "";
+      await refresh(); await open(d.batch.slug);
+      VS.toast("batch " + d.batch.id + " created");
+    } catch (e) { VS.toast(e.message); }
+  });
+
+  // ---------------------------------------------------------------- detail
+
+  function field(label, id, value, ph, textarea) {
+    return `<div class="field"><label>${esc(label)}</label>` +
+      (textarea
+        ? `<textarea id="${id}" placeholder="${esc(ph || "")}">${esc(value || "")}</textarea>`
+        : `<input type="text" id="${id}" value="${esc(value || "")}" placeholder="${esc(ph || "")}">`) +
+      `</div>`;
+  }
+
+  function paintStatus() {
+    const el = $("#pipe");
+    if (!el) return;
+    const idx = PIPE.indexOf(curStatus === "rejected" ? "review" : curStatus);
+    el.innerHTML = PIPE.map((s, i) =>
+      `<span class="${i <= idx ? "on" : ""}">${s === "accepted" && curStatus === "rejected" ? "rejected" : s}</span>`).join("<span style='border:0;background:none'>→</span>");
+    const badge = $("#cur-badge");
+    if (badge) badge.outerHTML = `<span id="cur-badge" class="stbadge st-${curStatus}">${STATUS_LABEL[curStatus] || curStatus}</span>`;
+    // lock/unlock production
+    const prod = $("#layer3");
+    if (prod) {
+      const locked = !cur.copy.approved_by;
+      prod.classList.toggle("locked", locked);
+      $(".lockmsg", prod).style.display = locked ? "flex" : "none";
+    }
+    const ab = $("#approvebox");
+    if (ab) {
+      ab.classList.toggle("ok", !!cur.copy.approved_by);
+      $("#approve-state").innerHTML = cur.copy.approved_by
+        ? `✅ Approved by <b>${esc(cur.copy.approved_by)}</b> on ${esc(cur.copy.approved_date)} — production unlocked. <span class="savehint">Editing the copy voids this.</span>`
+        : `🔒 Production does not start until this box has a name in it.`;
+    }
+  }
+
+  function renderDetail() {
+    const b = cur, t = b.template, c = b.copy, p = b.production, r = b.review;
+    $("#detail").innerHTML = `
+      <div class="vs-panel">
+        <h3 style="font-size:17px;color:var(--text)">${esc(b.id)} <span id="cur-badge" class="stbadge st-${curStatus}">${STATUS_LABEL[curStatus]}</span></h3>
+        <div class="pipe" id="pipe"></div>
+        <div class="two">
+          ${field("Goal of this batch", "m-goal", b.meta.goal)}
+          ${field("Requested by", "m-reqby", b.meta.requested_by)}
+        </div>
+        <div class="two">
+          ${field("Quantity", "m-qty", b.meta.quantity)}
+          ${field("Deadline", "m-deadline", b.meta.deadline)}
+        </div>
+        <div class="btnrow">
+          <button class="vs-btn ghost" id="btn-export">📄 Export .md record</button>
+          <button class="vs-btn ghost" id="btn-delete" style="color:var(--bad)">Delete batch</button>
+          <span class="savehint">autosaves as you type</span>
+        </div>
+      </div>
+
+      <div class="vs-panel">
+        <h3>LAYER 1 — Template</h3>
+        <div class="field"><label>Template used</label>
+          <select id="t-ref">
+            <option value="">NEW — define below</option>
+            ${templates.map(x => `<option value="${esc(x.id)}" ${t.ref === x.id ? "selected" : ""}>${esc(x.id)}</option>`).join("")}
+          </select></div>
+        <div class="two">${TPL_FIELDS.map(([k, l, ph]) => field(l, "t-" + k, t[k], ph)).join("")}</div>
+        <div style="margin-top:8px"><b style="font-size:12.5px">Brand lock check</b>
+          ${BRAND_LOCK.map(([k, l]) => `
+            <label class="check"><input type="checkbox" data-bl="${k}" ${t.brand_lock[k] ? "checked" : ""}> ${esc(l)}</label>`).join("")}
+        </div>
+      </div>
+
+      <div class="vs-panel">
+        <h3>LAYER 2 — Copy</h3>
+        <div class="two">
+          ${field("Hook source (hooks DB id, or NEW)", "c-hook_source", c.hook_source, "hk-0001 / NEW")}
+          <div class="field"><label>&nbsp;</label>
+            <button class="vs-btn ghost" id="btn-hookpick" style="width:100%">🪝 Pick from hooks bank</button></div>
+        </div>
+        ${field("Hook", "c-hook", c.hook, "", true)}
+        ${field("Script / body", "c-script", c.script, "", true)}
+        ${field("CTA", "c-cta", c.cta, '"tap the link below" — never a spoken URL')}
+
+        <div style="margin-top:10px"><b style="font-size:12.5px">Compliance</b>
+          <div class="btnrow" style="margin:8px 0 4px">
+            <button class="vs-btn ghost" id="btn-scan">⚡ Scan (instant, local)</button>
+            <button class="vs-btn ghost" id="btn-aicheck">🤖 AI review (Claude)</button>
+            <span class="savehint" id="scan-when"></span>
+          </div>
+          <div id="scan-out"></div>
+          <div id="auto-checks"></div>
+          ${MANUAL_CHECKS.map(([k, l]) => `
+            <label class="check"><input type="checkbox" data-mc="${k}" ${c.manual_checks[k] ? "checked" : ""}> ${esc(l)} <span class="savehint">(manual)</span></label>`).join("")}
+        </div>
+
+        <div class="approvebox" id="approvebox">
+          <div id="approve-state"></div>
+          <div class="btnrow">
+            <input type="text" id="approve-name" placeholder="approver name" style="background:var(--panel2);border:1px solid var(--line);border-radius:8px;color:var(--text);padding:8px 10px">
+            <button class="vs-btn" id="btn-approve">Approve copy → unlock production</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="vs-panel layer" id="layer3">
+        <div class="lockmsg">🔒 LAYER 3 — locked<small>Production does not start until the copy box has a name in it.</small></div>
+        <div class="inner">
+          <h3>LAYER 3 — Production</h3>
+          <div class="two">
+            ${field("Assigned to", "p-assigned_to", p.assigned_to)}
+            ${field("Started", "p-started", p.started, "2026-08-08")}
+          </div>
+          <table class="vs-table"><thead><tr><th>Step</th><th>Status</th><th>Notes</th></tr></thead>
+            <tbody>${PROD_STEPS.map(([k, l]) => `
+              <tr class="steprow">
+                <td style="width:220px">${esc(l)}</td>
+                <td style="width:130px"><select data-step="${k}">
+                  ${["todo", "doing", "done", "skipped"].map(s => `<option ${p.steps[k].status === s ? "selected" : ""}>${s}</option>`).join("")}
+                </select></td>
+                <td><input type="text" data-stepnote="${k}" value="${esc(p.steps[k].notes)}"></td>
+              </tr>`).join("")}</tbody></table>
+
+          <div style="margin-top:14px"><b style="font-size:12.5px">Reproducibility record</b>
+            <span class="savehint">— an asset we can't reproduce is a one-off, not a system output</span>
+            <div class="two" style="margin-top:8px">${REPRO.map(([k, l]) => field(l, "r-" + k, p.repro[k])).join("")}</div>
+          </div>
+
+          <div class="btnrow">
+            <button class="vs-btn ghost" id="btn-jobattach">🔗 Attach a job</button>
+            <span id="joblist" class="savehint">${(p.jobs || []).map(j => `<span class="vs-badge">${esc(j.id)} ${esc(j.label || "")} · ${esc(j.status || "")}</span>`).join(" ")}</span>
+          </div>
+          <div class="two" style="margin-top:10px">
+            ${field("Output files", "p-outputs", p.outputs)}
+            ${field("Version", "p-version", p.version)}
+          </div>
+        </div>
+      </div>
+
+      <div class="vs-panel">
+        <h3>REVIEW</h3>
+        <div class="two">
+          ${field("Reviewed by", "rv-by", r.reviewed_by)}
+          ${field("Notes for next batch", "rv-notes", r.notes)}
+        </div>
+        <div class="btnrow">
+          <button class="vs-btn" id="btn-accept" style="background:linear-gradient(135deg,#1f9d5c,#157a45)">✔ Accept</button>
+          <button class="vs-btn" id="btn-reject" style="background:linear-gradient(135deg,#c9405a,#a02c44)">✖ Reject</button>
+          <select id="rv-layer" style="background:var(--panel2);border:1px solid var(--line);border-radius:8px;color:var(--text);padding:8px 10px">
+            <option value="">which layer failed?</option>
+            <option value="template">Template</option><option value="copy">Copy</option><option value="production">Production</option>
+          </select>
+          ${cur.template.is_new || !cur.template.ref ? `<label class="check" style="margin:0"><input type="checkbox" id="rv-grad" ${r.graduate ? "checked" : ""}> graduate template into the library</label>` : ""}
+        </div>
+        ${r.verdict ? `<p style="margin-top:10px" class="savehint">Current verdict: <b class="vs-status ${r.verdict === "accepted" ? "done" : "failed"}">${esc(r.verdict)}</b> by ${esc(r.reviewed_by)} on ${esc(r.date)}${r.failed_layer ? " — failed layer: " + esc(r.failed_layer) : ""}</p>` : ""}
+      </div>`;
+
+    paintStatus(); renderScan();
+    wireDetail();
+  }
+
+  function renderScan() {
+    const scan = cur.copy.scan, out = $("#scan-out"), auto = $("#auto-checks");
+    if (!out) return;
+    if (!scan) { out.innerHTML = ""; auto.innerHTML = ""; $("#scan-when").textContent = "not scanned yet"; return; }
+    $("#scan-when").textContent = "scanned " + VS.fmtAgo(scan.ran);
+    let html = "";
+    (scan.blocks || []).forEach(v => html += `<div class="viol">🚫 <b>${esc(v.match)}</b> in ${v.field} — <span class="why">${esc(v.why)}</span></div>`);
+    (scan.warns || []).forEach(v => html += `<div class="viol warn">⚠ <b>${esc(v.match)}</b> in ${v.field} — <span class="why">${esc(v.why)}</span></div>`);
+    if (!html) html = `<div class="viol" style="border-left-color:var(--ok);background:#0d1a12">✅ clean — no restricted words found</div>`;
+    const ai = cur.copy.ai_check;
+    if (ai) {
+      html += `<div class="viol ${ai.pass ? "" : "warn"}" style="${ai.pass ? "border-left-color:var(--ok);background:#0d1a12" : ""}">
+        🤖 AI review: <b>${ai.pass ? "pass" : "fail"}</b> · risk ${esc(ai.risk || "?")} — ${esc(ai.notes || "")}</div>`;
+      (ai.issues || []).forEach(i => html += `<div class="viol warn">↳ "<b>${esc(i.quote)}</b>" — ${esc(i.why)}. <i>Fix: ${esc(i.fix)}</i></div>`);
+    }
+    out.innerHTML = html;
+    const acheck = scan.auto_checks || {};
+    auto.innerHTML = [
+      ["microflame", '"micro-flame" used, not "microdosing"'],
+      ["no_disease_claims", "No disease or treatment claims"],
+      ["no_spoken_url", "No spoken/written URL in script or CTA"],
+    ].map(([k, l]) => `<div class="check auto ${acheck[k] ? "pass" : "fail"}">${acheck[k] ? "☑" : "☒"} ${esc(l)} <span class="savehint">(auto)</span></div>`).join("");
+  }
+
+  function bind(id, section, key) {
+    const el = $("#" + id);
+    if (el) el.addEventListener("input", () => saveSection(section, {[key]: el.value}));
+  }
+
+  function wireDetail() {
+    bind("m-goal", "meta", "goal"); bind("m-reqby", "meta", "requested_by");
+    bind("m-qty", "meta", "quantity"); bind("m-deadline", "meta", "deadline");
+    TPL_FIELDS.forEach(([k]) => bind("t-" + k, "template", k));
+    ["hook_source", "hook", "script", "cta"].forEach(k => bind("c-" + k, "copy", k));
+    bind("p-assigned_to", "production", "assigned_to"); bind("p-started", "production", "started");
+    bind("p-outputs", "production", "outputs"); bind("p-version", "production", "version");
+    REPRO.forEach(([k]) => {
+      const el = $("#r-" + k);
+      if (el) el.addEventListener("input", () => saveSection("production", {repro: {[k]: el.value}}));
+    });
+
+    $("#t-ref").addEventListener("change", async e => {
+      const ref = e.target.value;
+      if (ref) {
+        const t = templates.find(x => x.id === ref);
+        const patch = {ref, is_new: false};
+        TPL_FIELDS.forEach(([k]) => patch[k] = t[k] || "");
+        saveSection("template", patch, renderDetail);
+      } else saveSection("template", {ref: null, is_new: true});
+    });
+
+    VS.$$("[data-bl]").forEach(el => el.addEventListener("change", () =>
+      saveSection("template", {brand_lock: {[el.dataset.bl]: el.checked}, is_new: cur.template.ref ? false : true})));
+    VS.$$("[data-mc]").forEach(el => el.addEventListener("change", () =>
+      saveSection("copy", {manual_checks: {[el.dataset.mc]: el.checked}})));
+    VS.$$("[data-step]").forEach(el => el.addEventListener("change", () =>
+      saveSection("production", {steps: {[el.dataset.step]: {status: el.value, notes: cur.production.steps[el.dataset.step].notes}}})));
+    VS.$$("[data-stepnote]").forEach(el => el.addEventListener("input", () =>
+      saveSection("production", {steps: {[el.dataset.stepnote]: {status: cur.production.steps[el.dataset.stepnote].status, notes: el.value}}})));
+
+    $("#btn-scan").addEventListener("click", async () => {
+      clearTimeout(saveTimers.copy);
+      await VS.post("/api/batches/" + cur.slug, {copy: {
+        hook: $("#c-hook").value, script: $("#c-script").value, cta: $("#c-cta").value}});
+      const d = await VS.post("/api/batches/" + cur.slug + "/scan");
+      cur.copy.scan = d.scan; curStatus = d.status;
+      renderScan(); paintStatus();
+      VS.toast(d.scan.clean ? "✅ scan clean" : `🚫 ${d.scan.blocks.length} blocker(s), ${d.scan.warns.length} warning(s)`);
+    });
+
+    $("#btn-aicheck").addEventListener("click", async e => {
+      e.target.disabled = true; e.target.textContent = "🤖 reviewing…";
+      try {
+        const d = await VS.post("/api/batches/" + cur.slug + "/ai-check");
+        cur.copy.ai_check = d.ai_check; renderScan();
+        VS.toast(d.ai_check.pass ? "🤖 AI review: pass" : "🤖 AI review: issues found — see panel");
+      } catch (err) { VS.toast(err.message); }
+      e.target.disabled = false; e.target.textContent = "🤖 AI review (Claude)";
+    });
+
+    $("#btn-approve").addEventListener("click", async () => {
+      try {
+        const d = await VS.post("/api/batches/" + cur.slug + "/approve", {name: $("#approve-name").value});
+        cur = d.batch; curStatus = d.status; paintStatus(); renderList();
+        VS.toast("copy approved — production unlocked");
+      } catch (e) {
+        if (e.status === 409 && confirm(e.message + "\n\nApprove anyway (force)?")) {
+          const d = await VS.post("/api/batches/" + cur.slug + "/approve", {name: $("#approve-name").value, force: true});
+          cur = d.batch; curStatus = d.status; paintStatus(); renderList();
+        } else VS.toast(e.message);
+      }
+    });
+
+    $("#btn-hookpick").addEventListener("click", async () => {
+      const d = await VS.api("/api/bank/hooks");   // returns a bare array
+      const entries = Array.isArray(d) ? d : (d.entries || []);
+      $("#hookpick").innerHTML = entries.length ? entries.map(h => `
+        <div class="item" data-id="${esc(h.id)}">
+          <b>${esc(h.text_verbatim || "")}</b>
+          <div class="hmeta">${esc(h.id)} · ${esc(h.hook_class || "")} · ${esc(h.avatar || "")} · ${esc((h.tags || []).join(", "))}</div>
+        </div>`).join("") : '<div class="savehint">hooks bank is empty</div>';
+      VS.$$(".item", $("#hookpick")).forEach(el => el.addEventListener("click", () => {
+        const h = entries.find(x => x.id === el.dataset.id);
+        $("#c-hook_source").value = h.id; $("#c-hook").value = h.text_verbatim || "";
+        saveSection("copy", {hook_source: h.id, hook: h.text_verbatim || ""});
+        $("#dlg-hooks").close(); VS.toast("hook " + h.id + " loaded");
+      }));
+      $("#dlg-hooks").showModal();
+    });
+
+    $("#btn-jobattach").addEventListener("click", async () => {
+      const jobs = await VS.api("/api/jobs");
+      const recent = (jobs || []).slice(0, 30);
+      $("#jobpick").innerHTML = recent.length ? recent.map(j => `
+        <div class="item" data-id="${esc(j.id)}">
+          <b>${esc(j.label || j.action)}</b>
+          <div class="hmeta">${esc(j.id)} · ${esc(j.action)} · <span class="vs-status ${esc(j.status)}">${esc(j.status)}</span> · ${VS.fmtAgo(j.started)}</div>
+        </div>`).join("") : '<div class="savehint">no jobs yet</div>';
+      VS.$$(".item", $("#jobpick")).forEach(el => el.addEventListener("click", () => {
+        const j = recent.find(x => x.id === el.dataset.id);
+        const list = (cur.production.jobs || []).filter(x => x.id !== j.id);
+        list.push({id: j.id, label: j.label, action: j.action, status: j.status});
+        saveSection("production", {jobs: list}, renderDetail);
+        $("#dlg-jobs").close(); VS.toast("job attached");
+      }));
+      $("#dlg-jobs").showModal();
+    });
+
+    const review = verdict => async () => {
+      const body = {verdict, reviewed_by: $("#rv-by").value, notes: $("#rv-notes").value,
+                    failed_layer: $("#rv-layer").value,
+                    graduate: $("#rv-grad") ? $("#rv-grad").checked : false};
+      if (body.graduate) {
+        body.template_id = prompt("Template id for the library (e.g. PRINCE-GARDEN-01):", cur.id.replace("BATCH-", "TPL-"));
+        if (body.template_id === null) return;
+      }
+      try {
+        const d = await VS.post("/api/batches/" + cur.slug + "/review", body);
+        cur = d.batch; curStatus = d.status;
+        await refresh(true); renderDetail();
+        VS.toast(verdict === "accepted"
+          ? (d.graduated ? "accepted ✔ — template " + d.graduated + " entered the library" : "accepted ✔")
+          : "rejected — logged against the " + body.failed_layer + " layer");
+      } catch (e) { VS.toast(e.message); }
+    };
+    $("#btn-accept").addEventListener("click", review("accepted"));
+    $("#btn-reject").addEventListener("click", review("rejected"));
+
+    $("#btn-export").addEventListener("click", async () => {
+      const d = await VS.post("/api/batches/" + cur.slug + "/export");
+      $("#md-path").textContent = "saved to " + d.path;
+      $("#md-out").textContent = d.markdown;
+      $("#btn-md-copy").onclick = () => { navigator.clipboard.writeText(d.markdown); VS.toast("markdown copied"); };
+      $("#dlg-md").showModal();
+    });
+
+    $("#btn-delete").addEventListener("click", async () => {
+      if (!confirm("Delete batch " + cur.id + "? This removes its folder.")) return;
+      await VS.post("/api/batches/" + cur.slug + "/delete");
+      cur = null; await refresh();
+      $("#detail").innerHTML = '<div class="empty"><div class="big">📦</div>Pick a batch on the left, or create one.</div>';
+    });
+  }
+
+  refresh();
+})();
+</script>
+</body>
+</html>
