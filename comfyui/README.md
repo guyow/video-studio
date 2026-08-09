@@ -46,7 +46,8 @@ comfyui/
    - Install ComfyUI's `requirements.txt`
    - Clone each custom node from `custom_nodes.txt`
 4. Drop model files into the matching subdir under `models\`.
-5. Run `start.bat` → ComfyUI opens at `http://127.0.0.1:8188`.
+5. Drop custom nodes files into `custom_nodes\` and run `sync_custom_nodes.bat`.
+6. Run `start.bat` → ComfyUI opens at `http://127.0.0.1:8188`.
 
 ## Security defaults
 
