@@ -47,6 +47,38 @@
   // optional add-on: dodge Meta's restricted words with creative compliant wording
   VS.META_SAFE_PROMPT = `META-SAFE WORDING (this ad must survive Meta/Facebook ad review): the words psychedelic, psilocybin, magic mushroom(s), shrooms, microdose / microdosing, trip / trippy, high, and any drug slang are RESTRICTED — never write any of them, even where other instructions or the product doc say "microdose gummies". Play around the restriction creatively instead: "one tiny flame-shaped gummy", "Fairy Flame gummies", "a certain little ingredient scientists keep studying", "nature's mood molecule", "the ingredient we can't name on this app", or the knowing wink ("we can't say the word here — but you know the one"). Plain "mushroom" in a general functional sense is low-risk; "magic mushroom" never. News framing stays indirect: "a compound banned for 50 years is back in the lab", "researchers at a top university", "veterans are asking Congress for access" — say the news without the restricted noun. And no disease-treatment claims (never promise to treat depression/PTSD/anxiety; "for the days you feel flat" framing is fine).`;
 
+  // 🍦 Vanilla safe — the OPPOSITE of a creative rewrite. Keeps the script the user
+  // already likes and only swaps the words that get ads flagged, each for its nearest
+  // safe neighbour, so the rhythm (and therefore the lip-sync) survives untouched.
+  // Used as a standalone one-press pass in both Script UIs.
+  VS.VANILLA_PROMPT = `VANILLA SAFE PASS — this is NOT a creative rewrite and NOT a punch-up. Return the SAME script, word for word, with ONLY the risky words swapped for the nearest safe neighbour word. Think find-and-replace with taste. If you are tempted to improve a line, don't.
+
+ONLY THESE MAY BE TOUCHED:
+- Restricted platform vocabulary: psychedelic, psilocybin, magic mushroom(s), shrooms, microdose / microdosing, trip / trippy / tripping, high / getting high, stoned / baked / faded / blazed, and any other drug slang.
+- Medical / disease-claim wording: cure, treat, heal, fix, "cures depression / anxiety / PTSD / insomnia", "clinically proven", "doctor recommended".
+- Absolute promises: guaranteed, instantly, 100%, "it will make you…", "everyone who tries it…".
+- A spoken URL or domain in the CTA ("go to something dot com") → "the link is down below" / "tap the link below".
+- Anything promising a high, a buzz or intoxication (this product is sub-perceptual).
+
+NEAREST-NEIGHBOUR RULE: replace each flagged word with the closest ordinary word that keeps the same meaning, the same tone, and as close as possible the same syllable count and rhythm — the audio is lip-synced, so length and cadence matter more than elegance. Prefer a 1-for-1 word swap; only rephrase the smallest possible span when a single word can't carry it.
+
+SWAP BANK (pick the nearest fit; if a word repeats, rotate so it doesn't sound templated):
+- magic mushroom / shrooms / psilocybin / psychedelic → "mushroom", "one little gummy", "a certain ingredient", "the ingredient we can't name on here", "nature's mood molecule"
+- microdose / microdosing → "one tiny gummy", "one a day", "a little bit daily", "one small dose"
+- trip / trippy → "the feeling", "the shift", "how it feels"
+- high / stoned / buzzed → "lifted", "lighter", "clear", "calm", "like myself again"
+- cures / treats / heals X → "helped me with X", "for the days I feel X", "since I started, I feel…"
+- guaranteed / instantly → "for me it…", "within a few days"
+- "go to <site> dot com" → "the link is down below"
+
+HARD RULES:
+- Same number of lines and sentences, same order, same hook, same CTA in the same place, same punctuation and casing everywhere you did not have to change.
+- Word count within ±3% of the original.
+- Add nothing: no new claims, no new hook, no news angle, no extra sentence — and no tidying of lines that were already safe. Those come back identical, character for character.
+- Never invent facts, studies, numbers or names that weren't already in the script.
+- If the script is already clean, return it exactly as received.
+Output only the script.`;
+
   VS.api = async (path, opts) => {
     const r = await fetch(path, opts);
     if (!r.ok) {

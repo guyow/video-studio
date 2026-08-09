@@ -104,7 +104,10 @@
            box-shadow:0 8px 26px rgba(0,0,0,.45); max-width:80vw; }
   .empty { color:var(--dim); padding:40px; text-align:center; }
 </style>
-<link rel="stylesheet" href="/static/vs.css"><script src="/static/vs-nav.js" defer></script></head>
+<link rel="stylesheet" href="/static/vs.css"><script src="/static/vs-nav.js" defer></script>
+<!-- vs-core only DEFINES window.VS (its poller needs an explicit VS.start()), so this page
+     loads it purely to share the one copy of VS.VANILLA_PROMPT with the Creator + Editor -->
+<script src="/static/js/vs-core.js"></script></head>
 <body>
 <header>
   <div><h1>🎬 <b>Creator</b></h1><div class="sub">Turn existing videos into new ads — clean subs → new script → dub → done</div></div>
@@ -389,6 +392,7 @@ async function loadScript(){
         <button onclick="aiRewrite('Punch this up: stronger hook in the first line, vivid concrete language, keep it authentic.',this)">Punch up hook</button>
         <button onclick="aiRewrite('Make it sound like natural spoken conversation, not written copy.',this)">More natural</button>
         <button onclick="aiRewrite(fitInstr(),this)" title="Shortens/expands the words to match this video's length for clean lip-sync">✂ Fit video length</button>
+        <button onclick="vanillaRewrite(this)" title="Safety pass, not a rewrite: keeps your script exactly as it is and only swaps the words that get ads flagged (psychedelic, microdose, high, cure, guaranteed, spoken URLs) for the nearest safe word — same lines, same rhythm, same length">🍦 Vanilla safe</button>
         <input type="text" id="aiin" placeholder="or tell Claude what to change…" style="flex:1;min-width:150px">
         <button class="primary" onclick="aiRewrite($('#aiin').value.trim(),this)">Go</button>
         <button id="aiundo" style="display:none" onclick="aiUndo()">↩ Undo</button>
@@ -427,19 +431,32 @@ function fitInstr(){
   return `Rewrite to about ${target} words. The original speaker talks at ${rate.toFixed(1)} words/sec — match that exact pace so the new voice runs at the SAME speed and fills this ${d}s video for clean lip-sync. Keep the strongest lines; cut the rest.`;
 }
 let aiPrev=null;
-async function aiRewrite(instruction,btn){
-  const ta=$('#scripttext');
+async function aiRewrite(instruction,btn,opts){
+  const ta=$('#scripttext'); const o=opts||{};
   if(!ta||!ta.value.trim()){toast('Script is empty');return;}
   if(!instruction){toast('Tell Claude what to change');return;}
   if(btn)busyBtn(btn);
-  $('#aistat').textContent='✨ Claude is rewriting with your research + brand + the video\'s pace… (30-90s — don\'t close the panel)'; ta.disabled=true;
+  $('#aistat').textContent = o.vanilla
+    ? '🍦 Claude is swapping only the risky words — everything else stays exactly as you wrote it… (~25s)'
+    : '✨ Claude is rewriting with your research + brand + the video\'s pace… (30-90s — don\'t close the panel)';
+  ta.disabled=true;
   try{
-    const r=await post('/api/copywrite',{text:ta.value,instruction,brand:true,target_seconds:($('#d-vid').duration||0),rate:origRate()});
+    // the vanilla pass deliberately drops brand grounding AND the pace target — both push
+    // Claude toward NEW copy, and this button's whole promise is "same script, safer words"
+    const body = o.vanilla ? {text:ta.value,instruction}
+      : {text:ta.value,instruction,brand:true,target_seconds:($('#d-vid').duration||0),rate:origRate()};
+    const r=await post('/api/copywrite',body);
     aiPrev=ta.value; ta.value=r.text; $('#aiundo').style.display='';
-    $('#aistat').textContent='Done — '+ta.value.split(/\s+/).filter(Boolean).length+' words. Review, tweak, then 💾 Save.';
+    fitMeter();
+    $('#aistat').textContent = (o.vanilla ? '🍦 Vanilla version — ' : 'Done — ')
+      + ta.value.split(/\s+/).filter(Boolean).length
+      + (o.vanilla ? ' words. Compare it with your original (↩ Undo restores it), then 💾 Save.'
+                   : ' words. Review, tweak, then 💾 Save.');
   }catch(e){ $('#aistat').textContent=''; toast('Claude error: '+e.message); }
   finally{ ta.disabled=false; }
 }
+// 🍦 same prompt the Creator + Editor use — VS.VANILLA_PROMPT in js/vs-core.js
+function vanillaRewrite(btn){ aiRewrite(VS.VANILLA_PROMPT,btn,{vanilla:true}); }
 function aiUndo(){ if(aiPrev===null)return; $('#scripttext').value=aiPrev; aiPrev=null; $('#aiundo').style.display='none'; $('#aistat').textContent='Reverted.'; }
 async function saveScript(){
   const text=$('#scripttext').value.trim(); if(!text){toast('Script is empty');return;}

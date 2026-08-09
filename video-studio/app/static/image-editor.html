@@ -1,0 +1,1054 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Image Editor — Video Studio</title>
+<link rel="stylesheet" href="/static/vs-creator.css">
+<link rel="stylesheet" href="/static/vs.css">
+<script src="/static/vs-nav.js" defer></script>
+<style>
+  main.imged { max-width:1560px; margin:0 auto; padding:18px 24px;
+    display:grid; grid-template-columns:150px minmax(0,1fr) 400px; gap:16px; align-items:start; }
+  @media (max-width:1240px){ main.imged { grid-template-columns:1fr; } }
+
+  /* left rail — version history */
+  .vrail { display:flex; flex-direction:column; gap:8px; max-height:78vh; overflow:auto; }
+  .vthumb { border:2px solid var(--line); border-radius:10px; overflow:hidden; cursor:pointer;
+    background:var(--panel); position:relative; transition:.12s; }
+  .vthumb:hover { border-color:var(--accent2); }
+  .vthumb.on { border-color:var(--accent); box-shadow:0 0 0 3px rgba(124,92,255,.18); }
+  .vthumb img { width:100%; display:block; aspect-ratio:1; object-fit:cover; background:#0a0d14; }
+  .vthumb .tag { position:absolute; left:4px; top:4px; background:rgba(8,11,17,.86); color:var(--text);
+    font-size:10px; padding:2px 6px; border-radius:6px; letter-spacing:.02em; }
+  .vthumb .del { position:absolute; right:3px; top:3px; background:rgba(8,11,17,.8); border:0;
+    color:var(--dim); font-size:11px; border-radius:6px; cursor:pointer; padding:2px 5px; display:none; }
+  .vthumb:hover .del { display:block; }
+  .vthumb .cap { font-size:10px; color:var(--dim); padding:3px 5px; text-align:center;
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+
+  /* centre — canvas */
+  .stage { background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:12px; }
+  .canvaswrap { position:relative; background:
+      repeating-conic-gradient(#12161f 0% 25%, #0d1017 0% 50%) 50%/22px 22px;
+    border-radius:10px; overflow:hidden; display:flex; align-items:center; justify-content:center;
+    min-height:340px; max-height:66vh; user-select:none; }
+  .canvaswrap img.shot { max-width:100%; max-height:66vh; display:block; object-fit:contain; }
+  .canvaswrap.picking { cursor:crosshair; }
+  #rbox { position:absolute; border:2px solid var(--accent); background:rgba(124,92,255,.18);
+    border-radius:4px; display:none; pointer-events:none; }
+  #fdot { position:absolute; width:16px; height:16px; margin:-8px 0 0 -8px; border-radius:50%;
+    border:2px solid #fff; background:rgba(124,92,255,.85); display:none; pointer-events:none;
+    box-shadow:0 0 0 2px rgba(0,0,0,.45); }
+  .stagebar { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:10px; }
+  .stagebar .r { margin-left:auto; }
+
+  /* right — controls */
+  .modetabs { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:10px; }
+  .chipbtn { background:var(--panel2); border:1px solid var(--line); color:var(--text);
+    border-radius:9px; padding:7px 12px; font-size:13px; cursor:pointer; }
+  .chipbtn:hover { border-color:var(--accent2); }
+  .chipbtn.on { border-color:var(--accent); background:rgba(124,92,255,.16); }
+  .chipbtn.sm { padding:5px 9px; font-size:12px; }
+  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:9px; }
+  .row label.lbl { font-size:12px; color:var(--dim); min-width:70px; }
+  .est { font-size:13px; color:var(--warn); font-weight:600; margin-top:10px; }
+  .free { color:var(--good,#3ddc97); }
+  .refchip { display:inline-flex; align-items:center; gap:5px; background:var(--panel2);
+    border:1px solid var(--line); border-radius:8px; padding:3px 6px; font-size:11px; }
+  .refchip img { width:26px; height:26px; object-fit:cover; border-radius:4px; }
+  .refchip button { background:none; border:0; color:var(--dim); cursor:pointer; font-size:13px; }
+  .drop-img { border:2px dashed var(--line); border-radius:12px; min-height:150px; display:flex;
+    align-items:center; justify-content:center; text-align:center; color:var(--dim); cursor:pointer;
+    padding:14px; transition:.15s; }
+  .drop-img:hover,.drop-img.drag { border-color:var(--accent); color:var(--accent2);
+    background:rgba(124,92,255,.06); }
+  #log { background:#080b11; border:1px solid var(--line); border-radius:9px; padding:8px 10px;
+    font:12px/1.5 ui-monospace,Consolas,monospace; color:#9fb0c8; max-height:190px; overflow:auto;
+    white-space:pre-wrap; }
+  .fmtgrid { display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-top:6px; }
+  .fmtgrid label { font-size:12px; display:flex; gap:6px; align-items:center;
+    background:var(--panel2); border:1px solid var(--line); border-radius:8px; padding:6px 8px; cursor:pointer; }
+  .outgrid { display:grid; grid-template-columns:repeat(auto-fill,minmax(120px,1fr)); gap:8px; margin-top:8px; }
+  .outgrid .outcard { display:block; border:1px solid var(--line); border-radius:9px;
+    overflow:hidden; background:var(--panel2); text-decoration:none; cursor:zoom-in; }
+  .outgrid .outcard:hover { border-color:var(--accent); }
+  /* export viewer */
+  #lb { position:fixed; inset:0; z-index:90; display:flex; align-items:center;
+    justify-content:center; background:rgba(4,6,10,.86); backdrop-filter:blur(3px); }
+  #lb .box { background:var(--panel); border:1px solid var(--line); border-radius:14px;
+    padding:12px; max-width:92vw; max-height:92vh; display:flex; flex-direction:column; gap:10px; }
+  #lb img { max-width:88vw; max-height:74vh; border-radius:9px; display:block;
+    background:repeating-conic-gradient(#12161f 0% 25%, #0d1017 0% 50%) 50%/22px 22px; }
+  #lb .bar { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  #lb .bar .nm { font-size:12px; color:var(--dim); margin-right:auto; }
+  .outgrid img { width:100%; display:block; aspect-ratio:1; object-fit:cover; background:#0a0d14; }
+  .outgrid .m { font-size:10px; color:var(--dim); padding:4px 6px; }
+  .gallery { display:grid; grid-template-columns:repeat(auto-fill,minmax(170px,1fr)); gap:12px; }
+  .gcard { background:var(--panel); border:1px solid var(--line); border-radius:12px;
+    overflow:hidden; cursor:pointer; }
+  .gcard:hover { border-color:var(--accent2); }
+  .gcard img { width:100%; display:block; aspect-ratio:1; object-fit:cover; background:#0a0d14; }
+  .gcard .meta { padding:7px 9px; font-size:11px; color:var(--dim); }
+  details.pv { margin-top:8px; }
+  details.pv pre { background:#080b11; border:1px solid var(--line); border-radius:8px; padding:8px;
+    font:11px/1.5 ui-monospace,Consolas,monospace; color:#9fb0c8; white-space:pre-wrap; max-height:150px;
+    overflow:auto; }
+</style>
+</head>
+<body>
+<header class="vs-head">
+  <h1>🖼 Image <b>Editor</b></h1>
+  <div class="sub">replace an object · erase an object · re-frame to any size — Nano Banana on fal.ai.
+    Cropping &amp; converting is free; only the AI edits cost money.</div>
+</header>
+
+<main class="imged">
+  <!-- ── left: version history ─────────────────────────────────────────── -->
+  <section>
+    <div class="vs-hint" style="margin-bottom:6px">Versions</div>
+    <div class="vrail" id="vrail"><div class="vs-hint">no image yet</div></div>
+    <button class="vs-btn" id="newimg" style="width:100%;margin-top:10px">＋ New image</button>
+  </section>
+
+  <!-- ── centre: canvas ────────────────────────────────────────────────── -->
+  <section>
+    <div class="stage">
+      <div class="canvaswrap" id="cw">
+        <label class="drop-img" id="drop" style="width:100%;min-height:320px">
+          <input type="file" id="file" accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp" style="display:none">
+          <span id="dropmsg">⬆ Drop a picture here or click to upload<br>
+            <span class="vs-hint">jpg · png · webp — up to 25 MB</span></span>
+        </label>
+        <img class="shot" id="shot" style="display:none" alt="">
+        <canvas id="brushcv" style="position:absolute;display:none;pointer-events:none"></canvas>
+        <div id="rbox"></div>
+        <div id="fdot"></div>
+      </div>
+      <div class="stagebar">
+        <button class="chipbtn sm" id="pick">🎯 Point at an object</button>
+        <button class="chipbtn sm" id="clearpick" style="display:none">clear</button>
+        <button class="chipbtn sm" id="cmp">👁 Hold to see the original</button>
+        <span class="r vs-hint" id="dims"></span>
+      </div>
+      <div class="stagebar">
+        <a class="vs-btn" id="dl" download style="display:none">⬇ Download</a>
+        <button class="vs-btn" id="toi2v" style="display:none">🎞 Send to Image → Video</button>
+        <button class="vs-btn" id="todesk" style="display:none">📤 Send to Desktop</button>
+        <span class="r vs-hint" id="spend"></span>
+      </div>
+    </div>
+
+    <div class="vs-panel" id="prog" style="display:none;margin-top:14px">
+      <div class="vs-hint" id="proglbl">starting…</div>
+      <div id="log"></div>
+    </div>
+
+    <div class="vs-panel" id="outs" style="display:none;margin-top:14px">
+      <h3>Exported sizes <span class="vs-hint">(free — cropped locally)</span></h3>
+      <div class="outgrid" id="outgrid"></div>
+    </div>
+
+    <div class="vs-panel" style="margin-top:14px">
+      <h3>Your images <span class="r vs-hint" id="falspend"></span></h3>
+      <div class="gallery" id="gallery"><div class="vs-hint">nothing yet — upload a picture above</div></div>
+    </div>
+  </section>
+
+  <!-- ── right: controls ───────────────────────────────────────────────── -->
+  <section>
+    <div class="vs-panel">
+      <div class="modetabs" id="modes">
+        <button class="chipbtn on" data-m="replace">🔄 Replace</button>
+        <button class="chipbtn" data-m="erase">🧽 Erase</button>
+        <button class="chipbtn" data-m="add">➕ Add</button>
+        <button class="chipbtn" data-m="style">🎨 Retouch</button>
+        <button class="chipbtn" data-m="format">📐 Format</button>
+      </div>
+
+      <!-- AI panel (replace / erase / add / style) -->
+      <div id="aipanel">
+        <div class="vs-hint" id="hint">Say what to swap — e.g. “the coffee cup with a jar of liitt gummies”.</div>
+        <textarea class="vs-ta" id="text" rows="3" style="margin-top:6px"></textarea>
+
+        <label class="vs-hint" style="display:flex;gap:7px;align-items:flex-start;margin-top:9px;
+               background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:8px">
+          <input type="checkbox" id="aiprotect" checked style="margin-top:2px">
+          <span id="protecttxt"></span></label>
+
+        <!-- Phase 1: local LaMa erase — mask-native, free, provably local -->
+        <div id="localbox" style="display:none;margin-top:10px;border:1px solid var(--accent);
+             border-radius:10px;padding:10px;background:rgba(124,92,255,.07)">
+          <div style="font-size:13px;font-weight:600">🧽 Erase it locally — <span class="free">free</span></div>
+          <div class="vs-hint" style="margin-top:3px">Real inpainting (LaMa on your PC). It can
+            only write inside the mask, so the rest of the photo is byte-identical — guaranteed,
+            not promised. No AI re-render, no cost.</div>
+          <div class="row" id="maskmode" style="margin-top:8px">
+            <button class="chipbtn sm on" data-mm="box">▭ The box</button>
+            <button class="chipbtn sm" data-mm="object">🎯 Just the object</button>
+            <button class="chipbtn sm" data-mm="brush">✏️ Brush</button>
+            <button class="chipbtn sm" data-mm="file">🔎 Describe it</button>
+          </div>
+          <div class="row" id="samrow" style="display:none">
+            <input class="vs-ta" id="samtext" placeholder="the coffee cup" rows="1"
+                   style="flex:1;min-height:34px;padding:7px 9px">
+            <button class="chipbtn sm" id="samgo">🔎 Find it (~$0.005)</button>
+          </div>
+          <div class="row" id="brushrow" style="display:none">
+            <label class="lbl">Brush</label>
+            <input type="range" id="brushsz" min="6" max="90" value="26" style="flex:1">
+            <button class="chipbtn sm" id="brushclear">clear</button>
+          </div>
+          <div class="row"><label class="lbl">Edge grow</label>
+            <input type="range" id="grow" min="0" max="40" value="10" style="flex:1">
+            <span class="vs-hint" id="growv">10px</span></div>
+          <div class="row">
+            <button class="vs-btn" id="maskprev">👁 Preview the mask</button>
+            <button class="vs-btn primary" id="eraselocal">🧽 Erase (free)</button>
+          </div>
+          <div class="row" id="fillrow">
+            <select class="vs-sel" id="fillmodel" style="flex:1"></select>
+            <button class="vs-btn" id="fillgo">🎨 Replace inside the mask</button>
+          </div>
+          <div class="vs-hint" id="fillnote">…or put something new there instead:
+            type it in the box at the top, then Replace. Only the masked pixels change.</div>
+          <div class="vs-hint" id="localmsg" style="margin-top:6px"></div>
+        </div>
+
+        <div id="refwrap" style="margin-top:8px">
+          <div class="vs-hint">Reference photo (optional) — the model copies this object exactly</div>
+          <div class="row" id="refs"></div>
+          <input type="file" id="reffile" accept="image/png,image/jpeg,image/webp" style="display:none">
+          <button class="chipbtn sm" id="addref" style="margin-top:5px">＋ add reference photo</button>
+        </div>
+
+        <div class="row"><label class="lbl">Quality</label>
+          <select class="vs-sel" id="model" style="flex:1"></select></div>
+        <div class="row" id="resrow" style="display:none"><label class="lbl">Resolution</label>
+          <select class="vs-sel" id="res" style="flex:1"></select></div>
+        <div class="row"><label class="lbl">Shape</label>
+          <select class="vs-sel" id="aspect" style="flex:1"></select></div>
+        <div class="row"><label class="lbl">Variants</label>
+          <select class="vs-sel" id="num" style="flex:1">
+            <option value="1">1 image</option><option value="2">2 to choose from</option>
+            <option value="3">3 to choose from</option><option value="4">4 to choose from</option>
+          </select></div>
+        <div class="row"><label class="lbl">File</label>
+          <select class="vs-sel" id="fmt" style="flex:1">
+            <option value="png">PNG — lossless</option><option value="jpeg">JPG — small</option>
+            <option value="webp">WebP — smallest</option></select></div>
+
+        <details class="pv"><summary class="vs-hint" style="cursor:pointer">see the exact instruction sent to the model</summary>
+          <pre id="pv">—</pre></details>
+
+        <div class="est" id="est">estimated cost: —</div>
+        <div class="row">
+          <button class="vs-btn primary" id="go" disabled>✨ Apply edit</button>
+          <span class="vs-hint" id="gomsg"></span>
+        </div>
+      </div>
+
+      <!-- Format panel -->
+      <div id="fmtpanel" style="display:none">
+        <div class="vs-hint">Every size you need, cropped and converted on this PC.
+          <b class="free">Free, instant, no AI.</b></div>
+        <div class="row">
+          <button class="vs-btn primary" id="fbig3" disabled style="width:100%">
+            ⚡ Make all 3 at once — 16:9 · 9:16 · 1:1</button>
+        </div>
+        <div class="vs-hint" style="margin-top:10px">…or tick exactly what you want:</div>
+        <div class="row" id="quickfmt" style="margin-top:8px">
+          <button class="chipbtn sm" data-q="9:16">9:16</button>
+          <button class="chipbtn sm" data-q="1:1">1:1</button>
+          <button class="chipbtn sm" data-q="16:9">16:9</button>
+          <button class="chipbtn sm" data-q="big3">⚡ all three</button>
+          <button class="chipbtn sm" data-q="all">everything</button>
+          <button class="chipbtn sm" data-q="none">clear</button>
+        </div>
+        <div class="fmtgrid" id="presets"></div>
+        <div class="row"><label class="lbl">Shape</label>
+          <select class="vs-sel" id="fmode" style="flex:1">
+            <option value="smart">🧠 Smart crop — finds the face/subject, never zooms</option>
+            <option value="fit">Keep the WHOLE picture — padded edges</option>
+            <option value="crop">Fill the frame — plain centre crop</option>
+          </select></div>
+        <div class="vs-hint" id="smartnote" style="margin-top:4px">
+          Detects the subject (S3FD faces + saliency + edge energy), then slides the biggest
+          window of that shape so the subject survives — with head-room. Free &amp; local.</div>
+        <div class="row" id="padrow"><label class="lbl">Edges</label>
+          <select class="vs-sel" id="fpad" style="flex:1">
+            <option value="blur">Blurred copy of the photo (looks native on Reels)</option>
+            <option value="white">White</option>
+            <option value="black">Black</option>
+            <option value="transparent">Transparent (PNG / WebP only)</option>
+          </select></div>
+        <div class="row"><label class="lbl">File</label>
+          <select class="vs-sel" id="ffmt" style="flex:1">
+            <option value="jpg">JPG — best for ads</option><option value="png">PNG — lossless</option>
+            <option value="webp">WebP — smallest</option></select></div>
+        <div class="row"><label class="lbl">Quality</label>
+          <input type="range" id="fq" min="40" max="100" value="90" style="flex:1">
+          <span class="vs-hint" id="fqv">90</span></div>
+        <div class="row"><label class="lbl">Keep</label>
+          <span class="vs-hint" id="focuslbl">centre — click 🎯 on the picture to move the crop focus</span></div>
+        <div class="row">
+          <button class="vs-btn" id="fgo" disabled>📐 Export the ticked sizes (free)</button>
+        </div>
+        <hr style="border:0;border-top:1px solid var(--line);margin:14px 0">
+        <div class="vs-hint">Nothing must be cut off? Let the AI paint the missing edges instead
+          (costs money, keeps the whole picture).</div>
+        <div class="row"><label class="lbl">Re-frame to</label>
+          <select class="vs-sel" id="rfasp" style="flex:1"></select></div>
+        <label class="vs-hint" style="display:flex;gap:7px;align-items:flex-start;margin-top:7px">
+          <input type="checkbox" id="rfprotect" checked style="margin-top:2px">
+          <span><b>🔒 Do not touch my picture</b> — your original pixels are stamped back over
+            the result, so only the new edges are AI. Untick only if you want the model free to
+            re-draw the whole frame.</span></label>
+        <div class="est" id="rfest">estimated cost: —</div>
+        <div class="row">
+          <button class="vs-btn" id="rfgo" disabled>🪄 Re-frame to this one</button>
+          <button class="vs-btn" id="rfall" disabled>🪄 All 3 (16:9 · 9:16 · 1:1)</button>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<!-- viewer for an exported size: look at it, save it, bin it -->
+<div id="lb" style="display:none">
+  <div class="box">
+    <img id="lbimg" alt="">
+    <div class="bar">
+      <span class="nm" id="lbname"></span>
+      <a class="vs-btn primary" id="lbsave" download>⬇ Save</a>
+      <button class="vs-btn" id="lbdesk">📤 To Desktop</button>
+      <button class="vs-btn" id="lbdel">🗑 Delete</button>
+      <button class="vs-btn" id="lbclose">✕ Close</button>
+    </div>
+  </div>
+</div>
+
+<script src="/static/js/vs-core.js"></script>
+<script>
+(async () => {
+  const $ = s => document.querySelector(s);
+  const S = {
+    slug: null, versions: [], sel: null, mode: "replace", busy: false,
+    model: "nano-banana", res: "1K", aspect: "auto", num: 1, fmt: "png",
+    refs: [], region: null, focus: [0.5, 0.5], meta: null, picking: false,
+  };
+
+  const HINTS = {
+    replace: "Say what to swap — e.g. “the coffee cup with a jar of liitt gummies”.",
+    erase:   "Say what to remove — e.g. “the price sticker on the box”. The gap gets filled in.",
+    add:     "Say what to add and where — e.g. “a soft morning shadow across the table”.",
+    style:   "Say how it should look — e.g. “brighter, like a real phone photo, warmer skin tones”.",
+  };
+
+  // ── load registry ────────────────────────────────────────────────────
+  try {
+    S.meta = await VS.api("/api/img/models");
+  } catch (e) { VS.toast("could not load models: " + e.message); return; }
+
+  $("#model").innerHTML = S.meta.models.map(m =>
+    `<option value="${m.key}">${VS.esc(m.label)}</option>`).join("");
+  const aspOpts = S.meta.aspects.map(a =>
+    `<option value="${a}">${a === "auto" ? "keep the original shape" : a}</option>`).join("");
+  $("#aspect").innerHTML = aspOpts;
+  $("#rfasp").innerHTML = S.meta.aspects.filter(a => a !== "auto")
+    .map(a => `<option value="${a}"${a === "9:16" ? " selected" : ""}>${a}</option>`).join("");
+  $("#presets").innerHTML = S.meta.presets.map(p =>
+    `<label><input type="checkbox" value="${p.key}"${p.key === "reel" ? " checked" : ""}>
+      <span><b>${p.aspect}</b> · ${VS.esc(p.label)}<br>
+        <span class="vs-hint">${p.w}×${p.h}</span></span></label>`).join("");
+
+  // one-tap ratio picking — 9:16 / 1:1 / 16:9 are the three that matter most
+  const BIG3 = ["wide", "reel", "square"];      // 16:9 · 9:16 · 1:1 — one file per ratio
+  const RATIO3 = ["16:9", "9:16", "1:1"];       // same three, for the paid AI re-frame
+  $("#quickfmt").onclick = e => {
+    const b = e.target.closest("[data-q]"); if (!b) return;
+    const q = b.dataset.q;
+    document.querySelectorAll("#presets input").forEach(x => {
+      const p = S.meta.presets.find(pp => pp.key === x.value);
+      x.checked = q === "all" ? true
+                : q === "none" ? false
+                : q === "big3" ? BIG3.includes(p.key)
+                : p.aspect === q;
+    });
+    refresh();
+  };
+
+  function modelMeta(k) { return S.meta.models.find(m => m.key === k) || S.meta.models[0]; }
+
+  function syncRes() {
+    const rs = modelMeta(S.model).resolutions || [];
+    $("#resrow").style.display = rs.length ? "" : "none";
+    if (rs.length) {
+      $("#res").innerHTML = rs.map(r =>
+        `<option value="${r}"${r === "1K" ? " selected" : ""}>${r}</option>`).join("");
+      S.res = rs.includes(S.res) ? S.res : "1K";
+      $("#res").value = S.res;
+    } else S.res = "1K";
+  }
+  syncRes();
+
+  // ── estimates ────────────────────────────────────────────────────────
+  async function estimate() {
+    try {
+      const e = await VS.post("/api/img/estimate", {model: S.model, num: S.num, resolution: S.res});
+      $("#est").textContent = `estimated cost: ~$${e.this_run.toFixed(3)}  ·  ${e.summary}`;
+      const r = await VS.post("/api/img/estimate", {model: S.model, num: 1, resolution: S.res});
+      $("#rfest").textContent = `estimated cost: ~$${r.this_run.toFixed(3)}  ·  ${r.summary}`;
+    } catch (e) { /* non-fatal */ }
+  }
+
+  async function previewPrompt() {
+    if (S.mode === "format") return;
+    try {
+      const d = await VS.post("/api/img/preview-prompt",
+        {mode: S.mode, text: $("#text").value, region: S.region, refs: S.refs});
+      $("#pv").textContent = d.prompt;
+    } catch (e) { /* non-fatal */ }
+  }
+
+  // ── mode switching ───────────────────────────────────────────────────
+  $("#modes").onclick = e => {
+    const b = e.target.closest("[data-m]"); if (!b) return;
+    S.mode = b.dataset.m;
+    [...$("#modes").children].forEach(x => x.classList.toggle("on", x === b));
+    const ai = S.mode !== "format";
+    $("#aipanel").style.display = ai ? "" : "none";
+    $("#fmtpanel").style.display = ai ? "none" : "";
+    $("#fdot").style.display = (!ai && S.focus) ? "" : "none";
+    if (ai) {
+      $("#hint").textContent = HINTS[S.mode];
+      $("#refwrap").style.display = (S.mode === "replace" || S.mode === "add") ? "" : "none";
+      previewPrompt();
+    }
+    refresh();
+  };
+
+  $("#model").onchange = e => { S.model = e.target.value; syncRes(); estimate(); };
+  $("#res").onchange = e => { S.res = e.target.value; estimate(); };
+  $("#aspect").onchange = e => { S.aspect = e.target.value; };
+  $("#num").onchange = e => { S.num = +e.target.value; estimate(); };
+  $("#fmt").onchange = e => { S.fmt = e.target.value; };
+  $("#ffmt").onchange = () => refresh();
+  $("#fmode").onchange = () => {
+    const m = $("#fmode").value;
+    $("#padrow").style.display = m === "fit" ? "" : "none";
+    $("#smartnote").style.display = m === "smart" ? "" : "none";
+    $("#focuslbl").textContent =
+      m === "smart" ? "chosen automatically — the subject decides where the crop sits"
+      : m === "fit" ? "the whole picture is kept — the focus point only matters when cropping"
+      : "centre — click 🎯 on the picture to move the crop focus";
+  };
+  $("#fq").oninput = e => { $("#fqv").textContent = e.target.value; };
+  $("#text").oninput = () => { refresh(); clearTimeout(window._pvT);
+    window._pvT = setTimeout(previewPrompt, 400); };
+  $("#text").onkeydown = e => {
+    if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !$("#go").disabled) $("#go").click();
+  };
+
+  // ── upload ───────────────────────────────────────────────────────────
+  const drop = $("#drop"), file = $("#file");
+  drop.onclick = () => file.click();
+  file.onchange = e => { if (e.target.files[0]) upload(e.target.files[0]); };
+  ["dragover", "dragleave", "drop"].forEach(ev => drop.addEventListener(ev, e => {
+    e.preventDefault();
+    drop.classList.toggle("drag", ev === "dragover");
+    if (ev === "drop" && e.dataTransfer.files[0]) upload(e.dataTransfer.files[0]);
+  }));
+  $("#newimg").onclick = () => {
+    S.slug = null; S.versions = []; S.sel = null; S.region = null;
+    $("#shot").style.display = "none"; drop.style.display = "";
+    $("#rbox").style.display = "none"; $("#outs").style.display = "none";
+    renderRail(); refresh();
+  };
+
+  async function upload(f) {
+    $("#dropmsg").textContent = "uploading…";
+    const fd = new FormData(); fd.append("file", f); fd.append("kind", "base");
+    try {
+      const r = await fetch("/api/img/upload", {method: "POST", body: fd});
+      if (!r.ok) throw new Error((await r.text()).slice(0, 140));
+      const d = await r.json();
+      S.slug = d.slug; S.versions = d.versions;
+      S.sel = S.versions[S.versions.length - 1].file;
+      renderRail(); showSelected(); refresh(); loadGallery();
+    } catch (e) {
+      $("#dropmsg").innerHTML = "⬆ Drop a picture here or click to upload";
+      VS.toast("Upload failed: " + e.message);
+    }
+  }
+
+  // reference photos
+  $("#addref").onclick = () => $("#reffile").click();
+  $("#reffile").onchange = async e => {
+    const f = e.target.files[0]; if (!f) return;
+    const fd = new FormData(); fd.append("file", f); fd.append("kind", "ref");
+    try {
+      const r = await fetch("/api/img/upload", {method: "POST", body: fd});
+      if (!r.ok) throw new Error((await r.text()).slice(0, 140));
+      const d = await r.json();
+      S.refs.push(d); renderRefs(); previewPrompt();
+    } catch (err) { VS.toast("Upload failed: " + err.message); }
+    e.target.value = "";
+  };
+  function renderRefs() {
+    $("#refs").innerHTML = S.refs.map((r, i) =>
+      `<span class="refchip"><img src="${r.url}" alt=""><span>${VS.esc(r.name)}</span>
+        <button data-i="${i}">✕</button></span>`).join("");
+  }
+  $("#refs").onclick = e => {
+    if (e.target.dataset.i != null) { S.refs.splice(+e.target.dataset.i, 1); renderRefs(); previewPrompt(); }
+  };
+
+  // ── versions ─────────────────────────────────────────────────────────
+  function renderRail() {
+    const rail = $("#vrail");
+    if (!S.versions.length) { rail.innerHTML = '<div class="vs-hint">no image yet</div>'; return; }
+    rail.innerHTML = S.versions.map(v => `
+      <div class="vthumb${v.file === S.sel ? " on" : ""}" data-f="${v.file}">
+        <img src="${v.thumb}?t=${Math.round(v.mtime)}" alt="">
+        <span class="tag">${v.version}</span>
+        ${v.version === "v00" ? "" : `<button class="del" data-del="${v.file}" title="delete">✕</button>`}
+        <div class="cap">${VS.esc(v.mode === "original" ? "original" : v.mode)}</div>
+      </div>`).join("");
+  }
+  $("#vrail").onclick = async e => {
+    const del = e.target.dataset.del;
+    if (del) {
+      e.stopPropagation();
+      if (!confirm("Delete this version? (it moves to .trash, not gone forever)")) return;
+      try {
+        await VS.post("/api/img/delete", {slug: S.slug, file: del});
+        await reloadItem();
+      } catch (err) { VS.toast("Delete failed: " + err.message); }
+      return;
+    }
+    const card = e.target.closest("[data-f]"); if (!card) return;
+    S.sel = card.dataset.f; renderRail(); showSelected(); refresh();
+  };
+
+  function selVersion() { return S.versions.find(v => v.file === S.sel); }
+
+  function showSelected() {
+    const v = selVersion(); if (!v) return;
+    drop.style.display = "none";
+    const img = $("#shot");
+    img.style.display = ""; img.src = v.url + "?t=" + Math.round(v.mtime);
+    img.onload = () => {
+      $("#dims").textContent = `${img.naturalWidth}×${img.naturalHeight}`;
+      if (typeof fitBrush === "function") fitBrush();
+    };
+    $("#dl").style.display = ""; $("#dl").href = v.url; $("#dl").download = `${S.slug}-${v.version}`;
+    $("#toi2v").style.display = ""; $("#todesk").style.display = "";
+    const spent = S.versions.reduce((a, x) => a + (x.est_cost || 0), 0);
+    $("#spend").textContent = spent ? `this image cost ~$${spent.toFixed(3)} so far` : "";
+    $("#rbox").style.display = "none"; S.region = null; $("#clearpick").style.display = "none";
+    previewPrompt();
+  }
+
+  async function reloadItem() {
+    if (!S.slug) return;
+    const d = await VS.api(`/api/img/item/${S.slug}`);
+    S.versions = d.versions;
+    if (!S.versions.length) { $("#newimg").click(); return; }
+    if (!S.versions.some(v => v.file === S.sel)) S.sel = S.versions[S.versions.length - 1].file;
+    renderRail(); showSelected();
+    if (d.formats.length) {
+      $("#outs").style.display = "";
+      $("#outgrid").innerHTML = d.formats.map(f =>
+        `<div class="outcard" data-file="${VS.esc(f.file)}" data-url="${f.url}"
+              data-size="${f.size}" title="click to view">
+          <img src="${f.url}" alt="" loading="lazy">
+          <div class="m">${VS.esc(f.file.replace(/^.*?-/, ""))}<br>${VS.fmtSize(f.size)}</div>
+        </div>`).join("");
+    } else {
+      $("#outs").style.display = "none";
+    }
+    refresh();
+  }
+
+  // ── region picking / focus point ─────────────────────────────────────
+  const cw = $("#cw");
+  $("#pick").onclick = () => {
+    S.picking = !S.picking;
+    cw.classList.toggle("picking", S.picking);
+    $("#pick").classList.toggle("on", S.picking);
+    $("#pick").textContent = S.picking
+      ? (S.mode === "format" ? "🎯 click the part to keep" : "🎯 drag a box around it")
+      : "🎯 Point at an object";
+  };
+  $("#clearpick").onclick = () => {
+    S.region = null; $("#rbox").style.display = "none";
+    $("#clearpick").style.display = "none"; previewPrompt();
+  };
+
+  function imgRect() {
+    const img = $("#shot"), r = img.getBoundingClientRect(), w = cw.getBoundingClientRect();
+    return {left: r.left - w.left, top: r.top - w.top, w: r.width, h: r.height};
+  }
+  let dragging = null;
+  cw.addEventListener("mousedown", e => {
+    if (!S.picking || $("#shot").style.display === "none") return;
+    if (S.mode === "erase" && S.maskMode === "brush") return;   // the brush owns the canvas
+    const r = imgRect(), x = e.offsetX, y = e.offsetY;
+    if (S.mode === "format") {                       // single click = crop focus
+      S.focus = [Math.min(Math.max((x - r.left) / r.w, 0), 1),
+                 Math.min(Math.max((y - r.top) / r.h, 0), 1)];
+      const d = $("#fdot"); d.style.display = ""; d.style.left = x + "px"; d.style.top = y + "px";
+      $("#focuslbl").textContent =
+        `${Math.round(S.focus[0] * 100)}% across, ${Math.round(S.focus[1] * 100)}% down`;
+      return;
+    }
+    dragging = {x0: x, y0: y, r};
+    const b = $("#rbox");
+    b.style.display = ""; b.style.left = x + "px"; b.style.top = y + "px";
+    b.style.width = b.style.height = "0px";
+  });
+  cw.addEventListener("mousemove", e => {
+    if (!dragging) return;
+    const b = $("#rbox");
+    b.style.left = Math.min(dragging.x0, e.offsetX) + "px";
+    b.style.top = Math.min(dragging.y0, e.offsetY) + "px";
+    b.style.width = Math.abs(e.offsetX - dragging.x0) + "px";
+    b.style.height = Math.abs(e.offsetY - dragging.y0) + "px";
+  });
+  window.addEventListener("mouseup", e => {
+    if (!dragging) return;
+    const {x0, y0, r} = dragging; dragging = null;
+    const x1 = Math.min(x0, e.offsetX), y1 = Math.min(y0, e.offsetY);
+    const w = Math.abs(e.offsetX - x0), h = Math.abs(e.offsetY - y0);
+    if (w < 8 || h < 8) { $("#rbox").style.display = "none"; return; }
+    S.region = {x: (x1 - r.left) / r.w, y: (y1 - r.top) / r.h, w: w / r.w, h: h / r.h};
+    $("#clearpick").style.display = "";
+    previewPrompt();
+  });
+
+  // hold to compare against the original
+  const cmp = $("#cmp");
+  const showOrig = on => {
+    const v0 = S.versions[0], cur = selVersion();
+    if (!v0 || !cur) return;
+    $("#shot").src = (on ? v0.url : cur.url) + "?t=" + Math.round((on ? v0 : cur).mtime);
+  };
+  ["mousedown", "touchstart"].forEach(ev => cmp.addEventListener(ev, () => showOrig(true)));
+  ["mouseup", "mouseleave", "touchend"].forEach(ev => cmp.addEventListener(ev, () => showOrig(false)));
+
+  // ── enable/disable ───────────────────────────────────────────────────
+  // the box you draw is also what keeps the rest of the photo safe
+  function syncProtect() {
+    const boxed = !!S.region;
+    $("#aiprotect").disabled = !boxed;
+    $("#protecttxt").innerHTML = boxed
+      ? "<b>🔒 Change ONLY the area I pointed at</b> — everywhere else comes back as your "
+        + "original pixels, untouched."
+      : "🔒 <b>Tip:</b> press <b>🎯 Point at an object</b> and drag a box — then the edit can "
+        + "only touch that area and the rest of the photo stays exactly as it is. Without a "
+        + "box the model re-draws the whole picture.";
+  }
+
+  function refresh() {
+    syncProtect();
+    if (typeof syncLocal === "function") syncLocal();
+    const has = !!(S.slug && S.sel);
+    const txt = $("#text").value.trim().length >= 3;
+    $("#go").disabled = S.busy || !has || !txt;
+    $("#fgo").disabled = S.busy || !has ||
+      ![...document.querySelectorAll("#presets input:checked")].length;
+    $("#fbig3").disabled = S.busy || !has;
+    $("#rfgo").disabled = $("#rfall").disabled = S.busy || !has;
+  }
+  $("#presets").onchange = refresh;
+
+  // ── run AI edits (402 cost gate) ─────────────────────────────────────
+  async function priceOf(body) {                  // ask the server the price; spends nothing
+    const r = await fetch("/api/img/run", {method: "POST",
+      headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+    if (r.status === 402) return (await r.json()).estimate;
+    if (!r.ok) throw new Error((await r.text()).slice(0, 180));
+    return null;                                  // shouldn't happen — the gate always fires
+  }
+
+  function startUI(label) {
+    S.busy = true; refresh();
+    $("#prog").style.display = ""; $("#log").textContent = "";
+    $("#proglbl").textContent = label || "working…";
+  }
+
+  async function finish() {
+    S.busy = false;
+    await reloadItem();
+    if (S.versions.length) {
+      S.sel = S.versions[S.versions.length - 1].file;   // jump to the newest
+      renderRail(); showSelected();
+    }
+    refresh(); loadGallery();
+  }
+
+  async function launch(body, label) {            // already confirmed → run and wait
+    startUI(label);
+    const r = await VS.post("/api/img/run", Object.assign({confirm_cost: true}, body));
+    return await watch(r.job_id);
+  }
+
+  async function runOne(body) {
+    let est;
+    try { est = await priceOf(body); }
+    catch (e) { VS.toast("Error: " + e.message); return; }
+    if (est && !confirm(`⚠ This spends money on fal.ai:\n\n${est.summary}\n\n≈ $${est.this_run.toFixed(3)}\n\nApprove and edit? (Cancel = nothing charged)`)) {
+      VS.toast("Cancelled — nothing charged"); return;
+    }
+    VS.toast("✨ Editing — usually 10-30 seconds");
+    try { await launch(body, "editing…"); } catch (e) { VS.toast("Error: " + e.message); }
+    finish();
+  }
+
+  // several edits back to back, ONE price confirmation for the whole batch
+  async function runBatch(steps) {
+    let est;
+    try { est = await priceOf(steps[0].body); }
+    catch (e) { VS.toast("Error: " + e.message); return; }
+    const each = est ? est.this_run : 0, total = each * steps.length;
+    if (!confirm(`⚠ This spends money on fal.ai:\n\n${steps.length} images — ${steps.map(s => s.label).join("  ·  ")}\n${est.summary} each\n\n≈ $${total.toFixed(3)} in total\n\nApprove and make all ${steps.length}? (Cancel = nothing charged)`)) {
+      VS.toast("Cancelled — nothing charged"); return;
+    }
+    for (let i = 0; i < steps.length; i++) {
+      VS.toast(`✨ ${i + 1}/${steps.length} — ${steps[i].label}`);
+      let st;
+      try { st = await launch(steps[i].body, `${i + 1}/${steps.length} · ${steps[i].label}`); }
+      catch (e) { VS.toast("Error: " + e.message); break; }
+      if (st !== "done") { VS.toast(`Stopped at ${steps[i].label} — see the log`); break; }
+    }
+    finish();
+  }
+
+  $("#go").onclick = () => runOne({
+    slug: S.slug, base: S.sel, mode: S.mode, text: $("#text").value.trim(),
+    model: S.model, resolution: S.res, num: S.num, aspect: S.aspect, format: S.fmt,
+    region: S.region, refs: S.refs.map(r => r.name),
+    protect: !!(S.region && $("#aiprotect").checked),
+  });
+
+  const reframeBody = a => ({
+    slug: S.slug, base: S.sel, mode: "reframe", text: "",
+    model: S.model, resolution: S.res, num: 1, aspect: a,
+    format: S.fmt, focus: S.focus, protect: $("#rfprotect").checked,
+  });
+  $("#rfgo").onclick = () => runOne(reframeBody($("#rfasp").value));
+  $("#rfall").onclick = () => runBatch(RATIO3.map(a => ({body: reframeBody(a), label: a})));
+
+  async function watch(jobId) {                   // stream the log, return the final status
+    let off = 0, status = "running";
+    while (status === "running") {
+      await new Promise(r => setTimeout(r, 1500));
+      let j; try { j = await VS.api(`/api/job/${jobId}?offset=${off}`); } catch (e) { continue; }
+      for (const line of (j.lines || [])) {
+        const d = document.createElement("div");
+        d.textContent = line;
+        if (/error|failed|traceback/i.test(line)) d.style.color = "var(--bad)";
+        $("#log").appendChild(d);
+      }
+      $("#log").scrollTop = $("#log").scrollHeight;
+      off = j.next_offset != null ? j.next_offset : off + (j.lines || []).length;
+      status = j.status;
+    }
+    $("#proglbl").textContent = status === "done" ? "✅ done" : "❌ " + status;
+    if (status !== "done") VS.toast("Edit " + status + " — see the log");
+    return status;
+  }
+
+  // ── free local formats ───────────────────────────────────────────────
+  async function exportFormats(presets) {
+    if (!presets.length) return;
+    $("#fgo").disabled = $("#fbig3").disabled = true;
+    try {
+      const d = await VS.post("/api/img/format", {
+        slug: S.slug, file: S.sel, presets, format: $("#ffmt").value,
+        quality: +$("#fq").value, focus: S.focus,
+        fit: $("#fmode").value, pad: $("#fpad").value,
+      });
+      let msg = `📐 ${d.written.length} size${d.written.length > 1 ? "s" : ""} exported — free`;
+      if (d.fit === "smart") {
+        msg += d.faces ? `  ·  ${d.faces} face${d.faces > 1 ? "s" : ""} found` : "  ·  no face — used saliency";
+        if (d.clipped && d.clipped.length)
+          msg += `  ·  ⚠ ${d.clipped.join(", ")} can't hold the whole face — try AI re-frame`;
+      }
+      VS.toast(msg, d.clipped && d.clipped.length ? 7000 : 3500);
+      await reloadItem();
+    } catch (e) { VS.toast("Export failed: " + e.message); }
+    refresh();
+  }
+  $("#fgo").onclick = () =>
+    exportFormats([...document.querySelectorAll("#presets input:checked")].map(i => i.value));
+  $("#fbig3").onclick = () => exportFormats(BIG3);
+
+  // ── Phase 1: local LaMa erase (free, mask-native) ────────────────────
+  S.maskMode = "box"; S.strokes = []; S.aiMask = false;
+  const bcv = $("#brushcv"), bctx = bcv.getContext("2d");
+
+  function fitBrush() {
+    if ($("#shot").style.display === "none") return;
+    const r = imgRect();
+    bcv.style.left = r.left + "px"; bcv.style.top = r.top + "px";
+    bcv.style.width = r.w + "px"; bcv.style.height = r.h + "px";
+    bcv.width = Math.round(r.w); bcv.height = Math.round(r.h);
+    drawStrokes();
+  }
+  function drawStrokes() {
+    bctx.clearRect(0, 0, bcv.width, bcv.height);
+    bctx.fillStyle = "rgba(255,64,64,.45)";
+    const big = Math.max(bcv.width, bcv.height);
+    for (const s of S.strokes) {
+      bctx.beginPath();
+      bctx.arc(s.x * bcv.width, s.y * bcv.height, s.r * big, 0, 7);
+      bctx.fill();
+    }
+    bcv.style.display = S.strokes.length ? "" : "none";
+  }
+  window.addEventListener("resize", fitBrush);
+
+  $("#maskmode").onclick = e => {
+    const b = e.target.closest("[data-mm]"); if (!b) return;
+    S.maskMode = b.dataset.mm;
+    [...$("#maskmode").children].forEach(x => x.classList.toggle("on", x === b));
+    $("#brushrow").style.display = S.maskMode === "brush" ? "" : "none";
+    S.picking = S.maskMode === "brush";
+    cw.classList.toggle("picking", S.picking);
+    $("#localmsg").textContent = S.maskMode === "brush"
+      ? "paint over what should disappear"
+      : (S.maskMode === "object" ? "drag a box round it — GrabCut hugs the object inside"
+                                 : "drag a box — everything inside it gets rebuilt");
+    syncLocal();
+  };
+  $("#grow").oninput = e => { $("#growv").textContent = e.target.value + "px"; };
+  $("#brushclear").onclick = () => { S.strokes = []; drawStrokes(); syncLocal(); };
+
+  // paint strokes (brush mode) — hooks the same canvas the box picker uses
+  let painting = false;
+  function paintAt(e) {
+    const r = imgRect();
+    S.strokes.push({x: (e.offsetX - r.left) / r.w, y: (e.offsetY - r.top) / r.h,
+                    r: (+$("#brushsz").value / 2) / Math.max(r.w, r.h)});
+    drawStrokes();
+  }
+  cw.addEventListener("mousedown", e => {
+    if (S.maskMode !== "brush" || S.mode !== "erase" || $("#shot").style.display === "none") return;
+    painting = true; fitBrush(); paintAt(e);
+  });
+  cw.addEventListener("mousemove", e => { if (painting) paintAt(e); });
+  window.addEventListener("mouseup", () => { if (painting) { painting = false; syncLocal(); } });
+
+  function syncLocal() {
+    const on = S.mode === "erase" || S.mode === "replace";
+    $("#localbox").style.display = on ? "" : "none";
+    if (!on) return;
+    $("#samrow").style.display = S.maskMode === "file" ? "" : "none";
+    const ready = !!(S.slug && S.sel) && (
+      S.maskMode === "brush" ? S.strokes.length > 0 :
+      S.maskMode === "file" ? !!S.aiMask : !!S.region);
+    $("#maskprev").disabled = $("#eraselocal").disabled = S.busy || !ready;
+    $("#fillgo").disabled = S.busy || !ready ||
+      ($("#fillmodel").value !== "bria-eraser" && $("#text").value.trim().length < 2);
+    $("#samgo").disabled = S.busy || !(S.slug && S.sel) ||
+      $("#samtext").value.trim().length < 2;
+  }
+
+  function eraseBody() {
+    return {slug: S.slug, file: S.sel, mask_mode: S.maskMode,
+            region: (S.maskMode === "brush" || S.maskMode === "file") ? null : S.region,
+            strokes: S.maskMode === "brush" ? S.strokes : null,
+            grow: +$("#grow").value, text: $("#text").value.trim()};
+  }
+
+  // Phase 2 — describe the object, EVF-SAM returns a pixel-accurate mask
+  try {
+    const fm = await VS.api("/api/img/fill-models");
+    $("#fillmodel").innerHTML = fm.models.map(m =>
+      `<option value="${m.key}">${VS.esc(m.label)}</option>`).join("");
+  } catch (e) { /* non-fatal */ }
+  $("#samtext").oninput = syncLocal;
+  $("#fillmodel").onchange = syncLocal;
+
+  $("#samgo").onclick = async () => {
+    const text = $("#samtext").value.trim();
+    $("#samgo").disabled = true;
+    $("#localmsg").textContent = `looking for “${text}” …`;
+    try {
+      const d = await VS.post("/api/img/mask-ai",
+        {slug: S.slug, file: S.sel, text, grow: +$("#grow").value, confirm_cost: true});
+      S.aiMask = true;
+      $("#shot").src = d.preview;
+      $("#localmsg").innerHTML =
+        `🔎 found “${VS.esc(text)}” — red = the mask (${d.coverage}% of the picture), ` +
+        `cost $${d.cost.toFixed(3)}. Now <b>Erase (free)</b> or <b>Replace</b> it.`;
+    } catch (e) {
+      $("#localmsg").textContent = "";
+      VS.toast("Couldn't find it: " + e.message);
+    }
+    syncLocal();
+  };
+
+  // Phase 3 — replace only the masked pixels with a mask-native model
+  $("#fillgo").onclick = async () => {
+    const body = {slug: S.slug, file: S.sel, model: $("#fillmodel").value,
+                  text: $("#text").value.trim()};
+    let est = null;
+    try {
+      const r = await fetch("/api/img/fill", {method: "POST",
+        headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+      if (r.status === 402) est = (await r.json()).estimate;
+      else if (!r.ok) throw new Error((await r.text()).slice(0, 180));
+    } catch (e) { VS.toast("Error: " + e.message); return; }
+    if (est && !confirm(`⚠ This spends money on fal.ai:\n\n${est.summary}\n\n≈ $${est.this_run.toFixed(3)}\n\nOnly the masked pixels change. Approve? (Cancel = nothing charged)`)) {
+      VS.toast("Cancelled — nothing charged"); return;
+    }
+    S.busy = true; refresh(); syncLocal();
+    $("#localmsg").textContent = "filling the mask…";
+    try {
+      const d = await VS.post("/api/img/fill", Object.assign({confirm_cost: true}, body));
+      S.busy = false; S.aiMask = false; S.strokes = []; drawStrokes();
+      await reloadItem();
+      S.sel = d.file; renderRail(); showSelected();
+      $("#localmsg").innerHTML =
+        `✅ done — <b>${d.pixels_changed_outside_mask} pixels</b> outside the mask changed. ` +
+        `Cost $${d.cost.toFixed(3)}.`;
+      VS.toast(`✅ Replaced — ${d.pixels_changed_outside_mask} pixels outside the mask changed`);
+    } catch (e) {
+      S.busy = false; $("#localmsg").textContent = "";
+      VS.toast("Fill failed: " + e.message);
+    }
+    refresh(); syncLocal();
+  };
+
+  $("#maskprev").onclick = async () => {
+    $("#maskprev").disabled = true;
+    try {
+      const d = await VS.post("/api/img/mask-preview", eraseBody());
+      $("#shot").src = d.preview;
+      $("#localmsg").innerHTML =
+        `red = what gets rebuilt (${d.coverage}% of the picture). ` +
+        `<b>Not happy?</b> change the box/brush or the edge-grow and preview again — free.`;
+    } catch (e) { VS.toast("Preview failed: " + e.message); }
+    syncLocal();
+  };
+
+  $("#eraselocal").onclick = async () => {
+    S.busy = true; refresh(); syncLocal();
+    $("#localmsg").textContent = "erasing locally… (a few seconds, $0.00)";
+    try {
+      const d = await VS.post("/api/img/erase-local", eraseBody());
+      S.strokes = []; drawStrokes();
+      S.busy = false;
+      await reloadItem();
+      S.sel = d.file; renderRail(); showSelected();
+      $("#localmsg").innerHTML =
+        `✅ done — <b>${d.pixels_changed_outside_mask} pixels</b> outside the mask changed ` +
+        `(${d.pct_outside_changed}%). Everything else is byte-identical. Cost $0.00.`;
+      VS.toast(`✅ Erased free — ${d.pixels_changed_outside_mask} pixels outside the mask changed`);
+    } catch (e) {
+      S.busy = false;
+      $("#localmsg").textContent = "";
+      VS.toast("Erase failed: " + e.message);
+    }
+    refresh(); syncLocal();
+  };
+
+  // ── exported-size viewer (click a tile → look, save, or bin it) ──────
+  let lbFile = null;
+  function openLB(el) {
+    lbFile = {file: el.dataset.file, url: el.dataset.url, size: +el.dataset.size};
+    const img = $("#lbimg");
+    img.src = lbFile.url;
+    img.onload = () => {
+      $("#lbname").textContent =
+        `${lbFile.file}  ·  ${img.naturalWidth}×${img.naturalHeight}  ·  ${VS.fmtSize(lbFile.size)}`;
+    };
+    $("#lbsave").href = lbFile.url;
+    $("#lbsave").download = lbFile.file;
+    $("#lb").style.display = "flex";
+  }
+  function closeLB() { $("#lb").style.display = "none"; lbFile = null; }
+
+  $("#outgrid").onclick = e => {
+    const card = e.target.closest(".outcard");
+    if (card) openLB(card);
+  };
+  $("#lbclose").onclick = closeLB;
+  $("#lb").onclick = e => { if (e.target.id === "lb") closeLB(); };   // click the backdrop
+  document.addEventListener("keydown", e => {
+    if (e.key === "Escape" && $("#lb").style.display !== "none") closeLB();
+  });
+  $("#lbdesk").onclick = async () => {
+    if (!lbFile) return;
+    try {
+      const d = await VS.post("/api/img/send",
+        {slug: S.slug, file: lbFile.file, to: "desktop", from_formats: true});
+      VS.toast("📤 Saved to " + d.saved_to);
+    } catch (e) { VS.toast("Failed: " + e.message); }
+  };
+  $("#lbdel").onclick = async () => {
+    if (!lbFile) return;
+    if (!confirm(`Delete ${lbFile.file}?\n\nIt moves to .trash — not gone forever.`)) return;
+    try {
+      await VS.post("/api/img/delete",
+        {slug: S.slug, file: lbFile.file, from_formats: true});
+      VS.toast("🗑 Deleted");
+      closeLB();
+      await reloadItem();
+    } catch (e) { VS.toast("Delete failed: " + e.message); }
+  };
+
+  // ── send buttons ─────────────────────────────────────────────────────
+  $("#toi2v").onclick = async () => {
+    try {
+      await VS.post("/api/img/send", {slug: S.slug, file: S.sel, to: "i2v"});
+      VS.toast("🎞 Sent — open the Image → Video tab to animate it");
+    } catch (e) { VS.toast("Failed: " + e.message); }
+  };
+  $("#todesk").onclick = async () => {
+    try {
+      const d = await VS.post("/api/img/send", {slug: S.slug, file: S.sel, to: "desktop"});
+      VS.toast("📤 Saved to " + d.saved_to);
+    } catch (e) { VS.toast("Failed: " + e.message); }
+  };
+
+  // ── gallery ──────────────────────────────────────────────────────────
+  async function loadGallery() {
+    try {
+      const d = await VS.api("/api/img/list");
+      const g = $("#gallery");
+      if (!d.items.length) {
+        g.innerHTML = '<div class="vs-hint">nothing yet — upload a picture above</div>'; return;
+      }
+      g.innerHTML = d.items.map(it => `
+        <div class="gcard" data-slug="${it.slug}">
+          <img src="${it.latest.thumb}?t=${Math.round(it.latest.mtime)}" alt="">
+          <div class="meta"><b>${VS.esc(it.slug)}</b><br>
+            ${it.versions} version${it.versions > 1 ? "s" : ""}
+            ${it.spent ? ` · ~$${it.spent.toFixed(3)}` : ""}
+            ${it.job && it.job.status === "running" ? " · ⏳ running" : ""}</div>
+        </div>`).join("");
+    } catch (e) { /* non-fatal */ }
+  }
+  $("#gallery").onclick = async e => {
+    const c = e.target.closest("[data-slug]"); if (!c) return;
+    S.slug = c.dataset.slug; S.sel = null; S.region = null;
+    await reloadItem();
+    window.scrollTo({top: 0, behavior: "smooth"});
+  };
+
+  // fal spend chip
+  try {
+    const lib = await VS.api("/api/creator/library");
+    if (lib.fal_spend != null) $("#falspend").textContent = `fal.ai total: $${(+lib.fal_spend).toFixed(2)}`;
+  } catch (e) { /* non-fatal */ }
+
+  $("#fmode").onchange();
+  estimate(); loadGallery(); refresh();
+})();
+</script>
+</body>
+</html>
