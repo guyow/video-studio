@@ -1,0 +1,93 @@
+{
+  "1": {
+    "inputs": {
+      "prompt": [
+        "2",
+        0
+      ],
+      "num_images": 4,
+      "resolution": "1K",
+      "aspect_ratio": "auto",
+      "limit_generations": true,
+      "enable_web_search": false,
+      "thinking_level": "none",
+      "safety_tolerance": "4",
+      "audio_url": "",
+      "seed": "123456789",
+      "product_image": [
+        "3",
+        0
+      ],
+      "additional_object": [
+        "4",
+        0
+      ]
+    },
+    "class_type": "FalNanoBanana2Edit",
+    "_meta": {
+      "title": "Fal Nano Banana 2 Edit"
+    }
+  },
+  "2": {
+    "inputs": {
+      "product_description": "",
+      "model": "google/gemini-2.5-flash",
+      "temperature": 0.35,
+      "product_image": [
+        "3",
+        0
+      ],
+      "additional_object_image": [
+        "4",
+        0
+      ]
+    },
+    "class_type": "UGCVisionPlanner",
+    "_meta": {
+      "title": "UGC Vision Planner"
+    }
+  },
+  "3": {
+    "inputs": {
+      "image": "example.png"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Image"
+    }
+  },
+  "4": {
+    "inputs": {
+      "image": "example.png"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Image"
+    }
+  },
+  "9": {
+    "inputs": {
+      "source": [
+        "2",
+        0
+      ]
+    },
+    "class_type": "PreviewAny",
+    "_meta": {
+      "title": "Preview as Text"
+    }
+  },
+  "11": {
+    "inputs": {
+      "filename_prefix": "ComfyUI",
+      "images": [
+        "1",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "Save Image"
+    }
+  }
+}

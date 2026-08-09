@@ -198,8 +198,26 @@ class FalNanoBanana2Edit:
             if thinking_level and thinking_level != "none":
                 arguments["thinking_level"] = thinking_level
 
-            if audio_url.strip():
-                arguments["audio_url"] = audio_url.strip()
+            # Only forward audio_url when it looks like a real URL
+            # (fal rejects placeholders like "randomize" with
+            # "Invalid URL scheme ':'" — see
+            # fal_client.client.FalClientHTTPError). Empty / non-URL
+            # strings are dropped so the call succeeds for the image-only
+            # path that this node is actually used for.
+            audio_url_clean = (audio_url or "").strip()
+            if audio_url_clean and audio_url_clean.lower() != "randomize":
+                lowered = audio_url_clean.lower()
+                if (
+                    lowered.startswith("http://")
+                    or lowered.startswith("https://")
+                    or lowered.startswith("data:")
+                ):
+                    arguments["audio_url"] = audio_url_clean
+                else:
+                    print(
+                        "[FalNanoBanana2Edit] ignoring non-URL audio_url: "
+                        f"{audio_url_clean!r}"
+                    )
 
             if int(seed) > 0:
                 arguments["seed"] = int(seed)
