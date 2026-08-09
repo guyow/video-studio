@@ -1,0 +1,67 @@
+# ==================== ComfyUI .gitignore ====================
+# This file is placed in the repo ROOT (comfyui/), one level above
+# the ComfyUI core source. ComfyUI itself ships with its own
+# .gitignore inside the cloned source tree.
+
+# -------- Environment / Secrets --------
+.env
+.env.local
+*.key
+*.pem
+
+# -------- Python --------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+env/
+ENV/
+
+# -------- ComfyUI runtime / generated --------
+ComfyUI/                      # cloned core (installed by install.bat)
+venv_comfyui/                 # virtualenv used by install.bat
+.cache/
+.comfyui/
+config.json                   # user-overridable config (if present)
+extra_model_paths.yaml        # user-overridable paths (if present)
+*.ckpt
+*.safetensors
+*.pt
+*.pth
+*.bin
+*.onnx
+*.gguf
+
+# -------- Output / working files --------
+output/                       # generated images/videos/3d (may be huge)
+input/                        # user inputs uploaded via UI
+user/                         # user data, workflows, saved files
+logs/
+*.log
+nul
+
+# -------- Editor / OS --------
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+desktop.ini
+$RECYCLE.BIN/
+
+# -------- Git placeholders (keep folders in git) --------
+# Subfolders in models/, output/, input/, user/ each have a .gitkeep
+# so the directory structure is preserved across machines.
+!models/**/.gitkeep
+!output/.gitkeep
+!input/.gitkeep
+!user/.gitkeep

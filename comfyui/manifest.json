@@ -1,0 +1,45 @@
+{
+  "app": "comfyui",
+  "version": "1.0.0",
+  "created": "2026-08-09",
+  "purpose": "Standarized install + secure env + docs for a single ComfyUI instance. Files only — dependencies installed later by user direction.",
+  "stack": {
+    "python": "3.13",
+    "python_manager": "uv",
+    "comfyui": {
+      "repo": "https://github.com/Comfy-Org/ComfyUI.git",
+      "ref": "master",
+      "source": "cloned-by-install.bat"
+    },
+    "torch": "auto-resolved-by-comfyui-requirements",
+    "platform": "windows"
+  },
+  "entry_points": {
+    "install": "install.bat",
+    "start": "start.bat",
+    "stop": "stop.bat",
+    "python_launcher": "scripts/launch_comfyui.py"
+  },
+  "layout": {
+    "core": "ComfyUI/",
+    "venv": ".venv/",
+    "models_root": "models/",
+    "output_root": "output/",
+    "input_root": "input/",
+    "user_root": "user/"
+  },
+  "security": {
+    "default_bind": "127.0.0.1",
+    "default_port": 8188,
+    "env_file": ".env",
+    "env_loader": "python-dotenv (via scripts/launch_comfyui.py)",
+    "gitignored": [".env", "models/**/*", "output/**/*", "input/**/*", "user/**/*", ".venv/", "ComfyUI/"]
+  },
+  "dependencies_runtime": "requirements.txt",
+  "custom_nodes": "custom_nodes.txt",
+  "host_quirks_acknowledged": [
+    "PYTHONPATH contamination — install/launch scripts must unset or prefix PYTHONPATH=",
+    "uv venv used to provision Python 3.13 (system Python is 3.11)",
+    "ComfyUI main entry is main.py (not python -m comfyui)"
+  ]
+}

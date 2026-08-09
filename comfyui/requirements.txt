@@ -1,0 +1,35 @@
+# ============================================================
+# ComfyUI core runtime dependencies
+# (Installed by install.bat when you are ready — this file is
+# a record of what gets installed, NOT executed now.)
+# ============================================================
+
+# ---- Launch utilities (always installed, regardless of GPU) ----
+python-dotenv>=1.0.0      # .env loader used by scripts/launch_comfyui.py
+fal-client>=1.0.0,<2
+Pillow>=10.0
+numpy>=1.24
+# ---- Core ML stack ----
+# ComfyUI pins torch/torchvision versions in its own requirements.txt
+# at install time. We do NOT pin here to avoid CUDA mismatch.
+# torch
+# torchvision
+# torchaudio
+
+# ---- ComfyUI's own runtime ----
+# Pulled from ComfyUI/requirements.txt after clone:
+#   comfy-cli
+#   av
+#   comfyui-frontend-package
+#   comfyui-workflow-templates
+#   comfyui-embedded-docs
+#   numpy
+#   Pillow
+#   scipy
+#   tqdm
+#   psutil
+#   ... (see ComfyUI/requirements.txt for authoritative list)
+
+# ---- Custom nodes (see custom_nodes.txt) ----
+# Each custom node ships its own requirements.txt inside its repo.
+# install.bat runs `pip install -r <node>/requirements.txt` per node.

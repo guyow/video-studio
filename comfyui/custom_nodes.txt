@@ -1,0 +1,13 @@
+# ============================================================
+# ComfyUI custom nodes — one entry per line
+# Format:  <github_url>[@<tag_or_branch>]
+# No tag = track default branch
+# install.bat will clone each into ./ComfyUI/custom_nodes/
+# ============================================================
+
+# Example (commented out — uncomment when you decide which to add):
+# https://github.com/ltdrdata/ComfyUI-Manager
+# https://github.com/cubiq/ComfyUI_IPAdapter_plus
+# https://github.com/city96/ComfyUI-GGUF
+# https://github.com/kijai/ComfyUI-KJNodes
+# https://github.com/Fannovel16/comfyui_controlnet_aux
