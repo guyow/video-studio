@@ -43,6 +43,14 @@ MODELS = {
         "endpoint": "fal-ai/sora-2/text-to-video", "dur": "int", "durations": [4, 8, 12],
         "aspects": ["16:9", "9:16"], "cost_per_s": 0.30, "audio": True, "resolution": "720p",
     },
+    "kling-o1-ref": {
+        # reference-conditioned: pass 1-7 reference images (a Character Bank folder)
+        # and the SAME person/objects appear in every generated shot.
+        "label": "Kling O1 Reference — persistent character from reference images",
+        "endpoint": "fal-ai/kling-video/o1/reference-to-video", "dur": "str",
+        "durations": ["5", "10"], "aspects": ["16:9", "9:16", "1:1"], "cost_per_s": 0.112,
+        "reference": True,
+    },
     "kling-2.5-pro": {
         "label": "Kling 2.5 Turbo Pro — great motion",
         "endpoint": "fal-ai/kling-video/v2.5-turbo/pro/text-to-video", "dur": "str",
@@ -139,6 +147,9 @@ def main() -> int:
     ap.add_argument("--shots", default="", help="comma shot ids (default all)")
     ap.add_argument("--env-file", dest="env_file")
     ap.add_argument("--estimate-only", action="store_true")
+    ap.add_argument("--character-dir", dest="character_dir",
+                    help="Character Bank folder (output/characters/<id>) — its refs/ images "
+                         "are passed as reference images on models that support them")
     a = ap.parse_args()
 
     recipe_path = Path(a.recipe).resolve()
@@ -173,6 +184,22 @@ def main() -> int:
         if any(w in msg for w in ("403", "locked", "balance", "exhaust", "unauthor")):
             die(f"fal.ai account problem (check balance / FAL_KEY): {exc}")
 
+    # reference images (Character Bank) → uploaded once, reused for every shot
+    ref_urls: list[str] = []
+    if model.get("reference"):
+        cdir = Path(a.character_dir or "")
+        refs = sorted((cdir / "refs").glob("ref-*")) if cdir.is_dir() else []
+        refs = [r for r in refs if r.suffix.lower() in (".jpg", ".jpeg", ".png", ".webp")][:7]
+        if not refs:
+            die(f"model '{a.model}' needs reference images — pass --character-dir "
+                "pointing at a Character Bank folder (output/characters/<id>)")
+        log(f"Uploading {len(refs)} character reference image(s)…")
+        for r in refs:
+            ref_urls.append(fal_client.upload_file(str(r)))
+    elif a.character_dir:
+        log(f"NOTE: model '{a.model}' ignores reference images — pick kling-o1-ref "
+            "to keep the same character across shots.")
+
     work = recipe_path.parent
     clips_dir = work / "clips"
     clips_dir.mkdir(parents=True, exist_ok=True)
@@ -193,6 +220,8 @@ def main() -> int:
             args_["generate_audio"] = False        # narration is added at assembly
         if a.model.startswith("kling"):
             args_["negative_prompt"] = (s.get("negative") or NEG)[:900]
+        if ref_urls:
+            args_["image_urls"] = ref_urls   # O1 reference conditioning (fal schema)
         try:
             res = fal_client.subscribe(model["endpoint"], arguments=args_, with_logs=False)
         except Exception as exc:                  # noqa: BLE001
@@ -214,8 +243,21 @@ def main() -> int:
         log(f"    OK {out.name} ({probe_dur(out):.1f}s) ~${real * model['cost_per_s']:.2f}")
         made.append({"shot_id": sid, "file": str(out), "duration_s": probe_dur(out)})
 
-    (work / "generated.json").write_text(json.dumps({
-        "batch": work.name, "generated": made, "failed": failed,
+    # MERGE into any existing manifest — a partial re-render (--shots s3) must not
+    # orphan the other shots' clips, or assemble would drop them from the video.
+    gen_path = work / "generated.json"
+    prev: dict = {}
+    if gen_path.is_file():
+        try:
+            prev = json.loads(gen_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            prev = {}
+    by_id = {e.get("shot_id"): e for e in prev.get("generated", []) if e.get("shot_id")}
+    for e in made:
+        by_id[e["shot_id"]] = e
+    still_failed = [f for f in failed if f not in by_id]
+    gen_path.write_text(json.dumps({
+        "batch": work.name, "generated": list(by_id.values()), "failed": still_failed,
         "motion_engine": f"fal-t2v:{a.model}", "style_mode": "text-to-video",
         "when": time.strftime("%Y-%m-%d %H:%M:%S"),
     }, indent=1), encoding="utf-8")

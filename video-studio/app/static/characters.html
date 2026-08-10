@@ -1,0 +1,336 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Character Bank — Video Studio</title>
+<link rel="stylesheet" href="/static/vs-creator.css">
+<link rel="stylesheet" href="/static/vs.css">
+<script src="/static/vs-nav.js" defer></script>
+<style>
+  main.cb { max-width:1100px; margin:0 auto; padding:20px 26px;
+            display:grid; grid-template-columns:380px 1fr; gap:20px; align-items:start; }
+  @media (max-width:960px){ main.cb { grid-template-columns:1fr; } }
+  .vrow { display:flex; align-items:center; gap:10px; padding:10px 12px; border:1px solid var(--line);
+          border-radius:11px; background:var(--panel2); margin-bottom:8px; cursor:pointer; font-size:13px; }
+  .vrow:hover { border-color:var(--accent); } .vrow.sel { border-color:var(--accent); background:rgba(124,92,255,.14); }
+  .vrow .nm { flex:1; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .charcard { border:1px solid var(--line); border-radius:12px; background:var(--panel); padding:14px 16px; margin-bottom:10px; }
+  .charcard .top { display:flex; align-items:center; gap:10px; }
+  .charcard .top b { flex:1; font-size:14px; }
+  .charcard .src { color:var(--dim); font-size:11.5px; margin-top:6px; }
+  .refstrip { display:flex; gap:8px; margin-top:10px; flex-wrap:wrap; }
+  .refstrip img { height:92px; border-radius:9px; border:1px solid var(--line); }
+  .iconbtn { background:none; border:1px solid var(--line); color:var(--dim); border-radius:8px;
+             padding:4px 10px; font-size:12px; cursor:pointer; }
+  .iconbtn:hover { border-color:var(--accent); color:var(--text); }
+  .iconbtn.del:hover { border-color:var(--bad); color:var(--bad); }
+  .framepick { display:flex; gap:6px; flex-wrap:wrap; margin-top:10px; }
+  .framepick img { height:72px; border-radius:7px; border:2px solid var(--line); cursor:pointer; }
+  .framepick img.sel { border-color:var(--accent); }
+  .tabs2 { display:flex; gap:8px; margin-bottom:12px; }
+  .tabs2 .iconbtn.on { border-color:var(--accent); color:var(--text); }
+</style>
+</head>
+<body>
+<header class="vs-head">
+  <h1>👤 Character <b>Bank</b></h1>
+  <div class="sub">register a character once (1–7 reference photos) — the same person then appears
+    in every shot the UGC Factory generates. Only use people you have the rights to.</div>
+</header>
+
+<main class="cb">
+  <section>
+    <div class="vs-panel">
+      <h3>Add a character</h3>
+      <div class="tabs2">
+        <button class="iconbtn on" id="tab-upload">from image(s)</button>
+        <button class="iconbtn" id="tab-video">from a library video</button>
+        <button class="iconbtn" id="tab-gen">✨ AI generator</button>
+      </div>
+      <input class="vs-in" id="cname" style="width:100%"
+             placeholder="name (optional — AI names it if you leave this empty)">
+
+      <div id="pane-upload" style="margin-top:10px">
+        <div class="vs-hint">Pick 1–7 photos of the SAME person — a clear face shot first, then
+          outfit/angle shots. jpg / png / webp.</div>
+        <input type="file" id="cfiles" accept=".jpg,.jpeg,.png,.webp" multiple
+               style="margin-top:10px;width:100%">
+        <div class="vs-row">
+          <button class="vs-btn primary" id="create-upload" disabled>➕ Register character</button>
+          <span class="vs-hint" id="umsg"></span>
+        </div>
+      </div>
+
+      <div id="pane-gen" style="margin-top:10px;display:none">
+        <div class="vs-hint">Describe the person — or let the AI invent one — then render portrait
+          candidates (a few cents on fal). Pick the one that IS your character.</div>
+        <textarea class="vs-in" id="gdesc" style="width:100%;min-height:84px;margin-top:10px"
+                  placeholder="e.g. “woman in her mid 40s, curly dark hair, soft features, cozy cardigan, tired-but-warm mom energy”"></textarea>
+        <div class="vs-row" style="align-items:center">
+          <button class="iconbtn" id="ginvent">✨ invent for me (free)</button>
+          <label class="vs-hint">candidates
+            <select class="vs-in" id="gcount">
+              <option value="2">2</option><option value="4" selected>4</option><option value="6">6</option>
+            </select>
+          </label>
+          <button class="vs-btn primary" id="ggen">🎨 Generate portraits</button>
+        </div>
+        <span class="vs-hint" id="gmsg"></span>
+        <div class="framepick" id="gcands"></div>
+        <div class="vs-row">
+          <button class="vs-btn primary" id="gsave" style="display:none">➕ Register selected as character</button>
+        </div>
+      </div>
+
+      <div id="pane-video" style="margin-top:10px;display:none">
+        <div class="vs-hint">Pick a library video, then click the frame that shows the person
+          clearly — that frame becomes the reference. Deliberate step: only your own footage
+          or talent you have rights to.</div>
+        <div id="picklist" style="margin-top:10px;max-height:260px;overflow:auto">
+          <span class="vs-hint">loading your videos…</span>
+        </div>
+        <div class="framepick" id="framepick"></div>
+        <div class="vs-row">
+          <button class="vs-btn primary" id="create-video" disabled>➕ Register this person</button>
+          <span class="vs-hint" id="vmsg"></span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="vs-panel">
+      <h3>Saved characters <span class="r vs-hint">used by UGC Factory → “Character”</span></h3>
+      <div id="bank"><span class="vs-hint">no characters yet — add one from the left</span></div>
+    </div>
+  </section>
+</main>
+
+<script src="/static/js/vs-core.js"></script>
+<script>
+(async () => {
+  const $ = s => document.querySelector(s);
+  let picked = null, pickedT = null;
+
+  // ── pane switch
+  const PANES = ["upload", "video", "gen"];
+  PANES.forEach(p => { $("#tab-" + p).onclick = () => setPane(p); });
+  function setPane(which) {
+    PANES.forEach(p => {
+      $("#tab-" + p).classList.toggle("on", p === which);
+      $("#pane-" + p).style.display = p === which ? "" : "none";
+    });
+  }
+
+  // ── AI generator
+  let genBatch = null, genPicks = new Set();
+  $("#ginvent").onclick = async () => {
+    $("#ginvent").disabled = true;
+    $("#gmsg").textContent = "✨ inventing a persona…";
+    try {
+      const d = await VS.post("/api/characters/invent", {hint: $("#gdesc").value.trim()});
+      $("#gdesc").value = d.description;
+      $("#gmsg").textContent = "";
+    } catch (e) { $("#gmsg").textContent = ""; VS.toast("Error: " + e.message); }
+    $("#ginvent").disabled = false;
+  };
+
+  $("#ggen").onclick = async () => {
+    const body = {description: $("#gdesc").value.trim(), count: parseInt($("#gcount").value)};
+    if (body.description.split(/\s+/).length < 5) { VS.toast("describe the character first (or ✨ invent)"); return; }
+    try {
+      let r = await fetch("/api/characters/generate", {method: "POST",
+        headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+      if (r.status === 402) {
+        const d = await r.json();
+        if (!confirm("This spends a little money on fal.ai:\n\n" + d.estimate.summary +
+                     "\n\nGenerate?")) return;
+        r = await fetch("/api/characters/generate", {method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({...body, confirm_cost: true})});
+      }
+      if (!r.ok) throw new Error((await r.text()).slice(0, 200));
+      const d = await r.json();
+      genBatch = d.batch; genPicks.clear();
+      $("#gsave").style.display = "none";
+      $("#gcands").innerHTML = "";
+      $("#ggen").disabled = true;
+      $("#gmsg").textContent = "🎨 rendering portraits… (~30s)";
+      while (true) {
+        const j = await VS.api(`/api/job/${d.job_id}?offset=0`);
+        if (j.status !== "running") {
+          $("#ggen").disabled = false;
+          if (j.status !== "done") { $("#gmsg").textContent = "generation " + j.status; return; }
+          break;
+        }
+        await new Promise(res => setTimeout(res, 2000));
+      }
+      $("#gmsg").textContent = "click the portrait(s) that ARE your character:";
+      const c = await VS.api(`/api/characters/candidates/${genBatch}`);
+      (c.images || []).forEach(img => {
+        const el = document.createElement("img");
+        el.src = "/media/" + img;
+        el.style.height = "150px";
+        el.onclick = () => {
+          const name = img.split("/").pop();
+          if (genPicks.has(name)) { genPicks.delete(name); el.classList.remove("sel"); }
+          else { genPicks.add(name); el.classList.add("sel"); }
+          $("#gsave").style.display = genPicks.size ? "" : "none";
+        };
+        $("#gcands").appendChild(el);
+      });
+    } catch (e) { $("#gmsg").textContent = ""; $("#ggen").disabled = false; VS.toast("Error: " + e.message); }
+  };
+
+  $("#gsave").onclick = async () => {
+    if (!genBatch || !genPicks.size) return;
+    $("#gsave").disabled = true;
+    $("#gmsg").textContent = $("#cname").value.trim() ? "saving…" : "saving + AI naming…";
+    try {
+      const d = await VS.post("/api/characters/from-candidates",
+        {batch: genBatch, picks: [...genPicks], name: $("#cname").value.trim()});
+      $("#gmsg").textContent = `✓ saved as “${d.name}”`;
+      $("#cname").value = ""; $("#gcands").innerHTML = ""; $("#gsave").style.display = "none";
+      genBatch = null; genPicks.clear();
+      loadBank();
+      setTimeout(() => $("#gmsg").textContent = "", 3000);
+    } catch (e) { $("#gmsg").textContent = ""; VS.toast("Error: " + e.message); }
+    $("#gsave").disabled = false;
+  };
+
+  // ── from images
+  $("#cfiles").onchange = () => {
+    const n = $("#cfiles").files.length;
+    $("#create-upload").disabled = !n || n > 7;
+    $("#umsg").textContent = n > 7 ? "at most 7 images" : "";
+  };
+  $("#create-upload").onclick = async () => {
+    const files = $("#cfiles").files;
+    if (!files.length) return;
+    $("#create-upload").disabled = true;
+    $("#umsg").textContent = $("#cname").value.trim() ? "saving…" : "saving + AI naming…";
+    try {
+      const fd = new FormData();
+      [...files].forEach(f => fd.append("file", f));
+      fd.append("name", $("#cname").value.trim());
+      const r = await fetch("/api/characters/create", {method: "POST", body: fd});
+      if (!r.ok) throw new Error((await r.text()).slice(0, 200));
+      const d = await r.json();
+      $("#umsg").textContent = `✓ saved as “${d.name}”`;
+      $("#cname").value = ""; $("#cfiles").value = "";
+      loadBank();
+      setTimeout(() => $("#umsg").textContent = "", 3000);
+    } catch (e) { $("#umsg").textContent = ""; VS.toast("Error: " + e.message); }
+    $("#create-upload").disabled = false;
+  };
+
+  // ── from a library video
+  async function loadPicklist() {
+    try {
+      const d = await VS.api("/api/creator/library");
+      const box = $("#picklist");
+      const vids = d.videos || [];
+      if (!vids.length) { box.innerHTML = '<span class="vs-hint">no videos in the library yet</span>'; return; }
+      box.innerHTML = "";
+      vids.forEach(v => {
+        const el = document.createElement("div");
+        el.className = "vrow";
+        el.innerHTML = `<span class="nm">🎬 ${VS.esc(v.title || v.name)}</span>`;
+        el.onclick = async () => {
+          picked = v.name; pickedT = null;
+          document.querySelectorAll("#picklist .vrow").forEach(x => x.classList.remove("sel"));
+          el.classList.add("sel");
+          refreshVid();
+          $("#framepick").innerHTML = '<span class="vs-hint">grabbing frames…</span>';
+          try {
+            const f = await VS.api("/api/qc/frames?count=10&path=" + encodeURIComponent("uploads/" + v.name));
+            $("#framepick").innerHTML = "";
+            (f.frames || []).forEach(fr => {
+              const img = document.createElement("img");
+              img.src = "/media/" + fr.path;
+              img.title = fr.t + "s";
+              img.onclick = () => {
+                pickedT = fr.t;
+                document.querySelectorAll("#framepick img").forEach(x => x.classList.remove("sel"));
+                img.classList.add("sel");
+                refreshVid();
+              };
+              $("#framepick").appendChild(img);
+            });
+          } catch (e) { $("#framepick").innerHTML = '<span class="vs-hint">could not read frames</span>'; }
+        };
+        box.appendChild(el);
+      });
+    } catch (e) { VS.toast("could not load videos: " + e.message); }
+  }
+  function refreshVid() { $("#create-video").disabled = !(picked && pickedT !== null); }
+
+  $("#create-video").onclick = async () => {
+    if (!picked || pickedT === null) return;
+    $("#create-video").disabled = true;
+    $("#vmsg").textContent = $("#cname").value.trim() ? "saving…" : "saving + AI naming…";
+    try {
+      const d = await VS.post("/api/characters/from-video",
+                              {file: picked, t: pickedT, name: $("#cname").value.trim()});
+      $("#vmsg").textContent = `✓ saved as “${d.name}”`;
+      $("#cname").value = ""; pickedT = null;
+      document.querySelectorAll("#framepick img").forEach(x => x.classList.remove("sel"));
+      loadBank();
+      setTimeout(() => $("#vmsg").textContent = "", 3000);
+    } catch (e) { $("#vmsg").textContent = ""; VS.toast("Error: " + e.message); }
+    refreshVid();
+  };
+
+  // ── the bank
+  async function loadBank() {
+    try {
+      const d = await VS.api("/api/characters");
+      const box = $("#bank");
+      if (!d.characters.length) { box.innerHTML = '<span class="vs-hint">no characters yet — add one from the left</span>'; return; }
+      box.innerHTML = "";
+      d.characters.forEach(c => {
+        const el = document.createElement("div");
+        el.className = "charcard";
+        el.innerHTML = `
+          <div class="top">
+            <span>👤</span><b>${VS.esc(c.name)}</b>
+            <label class="iconbtn" style="cursor:pointer">+ ref<input type="file" hidden
+              accept=".jpg,.jpeg,.png,.webp" data-act="addref"></label>
+            <button class="iconbtn" data-act="rename">rename</button>
+            <button class="iconbtn del" data-act="delete">delete</button>
+          </div>
+          <div class="refstrip">${c.refs.map(r => `<img src="/media/${r}" loading="lazy">`).join("")}</div>
+          <div class="src">${c.refs.length}/7 refs · from ${VS.esc(c.source || "upload")}</div>`;
+        el.querySelector('[data-act="addref"]').onchange = async ev => {
+          const f = ev.target.files[0];
+          if (!f) return;
+          const fd = new FormData(); fd.append("file", f);
+          try {
+            const r = await fetch(`/api/characters/${c.id}/add-ref`, {method: "POST", body: fd});
+            if (!r.ok) throw new Error((await r.text()).slice(0, 200));
+            loadBank();
+          } catch (e) { VS.toast("Error: " + e.message); }
+        };
+        el.querySelector('[data-act="rename"]').onclick = async () => {
+          const name = prompt("Rename character:", c.name);
+          if (!name) return;
+          try { await VS.post("/api/characters/rename", {id: c.id, name}); loadBank(); }
+          catch (e) { VS.toast("Error: " + e.message); }
+        };
+        el.querySelector('[data-act="delete"]').onclick = async () => {
+          if (!confirm(`Delete character “${c.name}”? (recoverable from trash)`)) return;
+          try { await VS.post("/api/characters/delete", {id: c.id}); loadBank(); }
+          catch (e) { VS.toast("Error: " + e.message); }
+        };
+        box.appendChild(el);
+      });
+    } catch (e) { /* ignore */ }
+  }
+
+  loadPicklist();
+  loadBank();
+})();
+</script>
+</body>
+</html>

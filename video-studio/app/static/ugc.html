@@ -1,0 +1,764 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>UGC Factory — Video Studio</title>
+<link rel="stylesheet" href="/static/vs-creator.css">
+<link rel="stylesheet" href="/static/vs.css">
+<script src="/static/vs-nav.js" defer></script>
+<style>
+  main.ugc { max-width:1280px; margin:0 auto; padding:20px 26px;
+             display:grid; grid-template-columns:360px 1fr; gap:20px; align-items:start; }
+  @media (max-width:1000px){ main.ugc { grid-template-columns:1fr; } }
+  .vrow { display:flex; align-items:center; gap:10px; padding:10px 12px; border:1px solid var(--line);
+          border-radius:11px; background:var(--panel2); margin-bottom:8px; cursor:pointer; font-size:13px; }
+  .vrow:hover { border-color:var(--accent); } .vrow.sel { border-color:var(--accent); background:rgba(124,92,255,.14); }
+  .vrow .nm { flex:1; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .vrow img { height:44px; border-radius:7px; }
+  .tabs2 { display:flex; gap:8px; margin-bottom:12px; flex-wrap:wrap; }
+  .iconbtn { background:none; border:1px solid var(--line); color:var(--dim); border-radius:8px;
+             padding:5px 12px; font-size:12px; cursor:pointer; }
+  .iconbtn:hover { border-color:var(--accent); color:var(--text); }
+  .iconbtn.on { border-color:var(--accent); color:var(--text); background:rgba(124,92,255,.14); }
+  .doc { width:100%; min-height:420px; background:var(--panel2); color:var(--text);
+         border:1px solid var(--line); border-radius:11px; padding:14px; font:12.5px/1.55 ui-monospace,Consolas,monospace;
+         resize:vertical; }
+  .metaline { color:var(--dim); font-size:12px; margin:6px 0 12px; }
+  .framestrip { display:flex; gap:6px; overflow-x:auto; margin-bottom:12px; }
+  .framestrip img { height:84px; border-radius:8px; border:1px solid var(--line); }
+  pre.joblog { background:var(--panel2); border:1px solid var(--line); border-radius:11px;
+               padding:12px; font-size:11.5px; max-height:260px; overflow:auto; white-space:pre-wrap; }
+  .genrow { display:flex; gap:8px; align-items:center; margin-top:10px; flex-wrap:wrap; }
+  .genrow input[type=text] { flex:1; min-width:200px; }
+</style>
+</head>
+<body>
+<header class="vs-head">
+  <h1>🧪 UGC <b>Factory</b></h1>
+  <div class="sub">drop in a winning UGC ad → get a prospector-style teardown → write your own
+    narrative &amp; script from its bones. (Video generation from these drafts is the next phase.)</div>
+</header>
+
+<main class="ugc">
+  <section>
+    <div class="vs-panel">
+      <h3>1 · Analyze a reference ad</h3>
+      <div class="vs-hint">Pick a library video (upload new ones in the Creator tab). Free:
+        local whisper + frames + the claude CLI.</div>
+      <div id="picklist" style="margin-top:10px;max-height:300px;overflow:auto">
+        <span class="vs-hint">loading your videos…</span>
+      </div>
+      <div class="vs-row" style="align-items:center">
+        <label class="vs-hint">depth
+          <select class="vs-in" id="model">
+            <option value="opus" selected>opus — best teardown</option>
+            <option value="sonnet">sonnet — faster</option>
+          </select>
+        </label>
+        <button class="vs-btn primary" id="analyze" disabled>🔬 Deep-dive this ad</button>
+      </div>
+      <span class="vs-hint" id="amsg"></span>
+    </div>
+
+    <div class="vs-panel" style="margin-top:16px">
+      <h3>Analyses</h3>
+      <div id="donelist"><span class="vs-hint">nothing analyzed yet</span></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="vs-panel" id="viewer" style="display:none">
+      <h3 id="vtitle"></h3>
+      <div class="metaline" id="vmeta"></div>
+      <div class="framestrip" id="vframes"></div>
+      <div class="tabs2" id="doctabs">
+        <button class="iconbtn on" data-doc="deepdive">Deep-dive</button>
+        <button class="iconbtn" data-doc="narrative">Narrative (original)</button>
+        <button class="iconbtn" data-doc="transcript">Transcript</button>
+        <button class="iconbtn" data-doc="narrative_new">✍ New narrative</button>
+        <button class="iconbtn" data-doc="script_new">✍ New script</button>
+      </div>
+      <textarea class="doc" id="doc" spellcheck="false"></textarea>
+      <div class="genrow">
+        <button class="vs-btn" id="save" disabled>💾 Save edits</button>
+        <span style="flex-basis:100%"></span>
+        <input type="text" class="vs-in" id="instruction"
+               placeholder="optional instruction — e.g. “aim it at the weight-loss energy seeker”">
+        <label class="vs-hint" id="durwrap" style="display:none">target
+          <select class="vs-in" id="duration">
+            <option value="15">15s</option><option value="30" selected>30s</option>
+            <option value="60">60s</option><option value="90">90s</option>
+          </select>
+        </label>
+        <button class="vs-btn primary" id="gen-narrative">✨ Generate new narrative</button>
+        <button class="vs-btn primary" id="gen-script">✨ Generate new script</button>
+      </div>
+      <span class="vs-hint">generated drafts land in the “New narrative” / “New script” tabs —
+        edit them there and Save. They’re the seed for the recompose step below.</span>
+    </div>
+
+    <div class="vs-panel" id="recompose" style="display:none;margin-top:16px">
+      <h3>2 · Recompose → preview</h3>
+      <div class="genrow">
+        <label class="vs-hint">shots
+          <input type="number" class="vs-in" id="rc-shots" min="0" max="14" value="0"
+                 style="width:64px" title="0 = auto (timed to the script)">
+        </label>
+        <label class="vs-hint">aspect
+          <select class="vs-in" id="rc-aspect">
+            <option value="9:16" selected>9:16</option><option value="1:1">1:1</option>
+            <option value="16:9">16:9</option>
+          </select>
+        </label>
+        <label class="vs-hint">model <select class="vs-in" id="rc-model"></select></label>
+        <label class="vs-hint">voice <select class="vs-in" id="rc-voice"></select></label>
+        <label class="vs-hint">character <select class="vs-in" id="rc-char"></select></label>
+        <label class="vs-hint"><input type="checkbox" id="rc-tags"> story tags</label>
+        <label class="vs-hint"><input type="checkbox" id="rc-subs" checked> subtitled twin</label>
+        <label class="vs-hint" title="also deliver sound-off versions of each video">
+          <input type="checkbox" id="rc-mute" checked> muted twin</label>
+      </div>
+      <div class="genrow">
+        <button class="vs-btn" id="sb-make">📋 Write storyboard (free)</button>
+        <span class="vs-hint" id="rc-cost"></span>
+        <span style="flex:1"></span>
+        <button class="vs-btn primary" id="render-btn" disabled
+                title="renders every storyboard shot on the selected model — the paid step">🎨 1 · Render visuals</button>
+        <button class="vs-btn" id="remerge-btn" disabled
+                title="rebuild the silent video from the current clips (e.g. after redoing a shot) — free">🧵 re-merge (free)</button>
+        <button class="vs-btn primary" id="voice-btn" disabled
+                title="re-assembles the already-rendered shots with the selected voice + subtitles/muted twins — free">🔊 2 · Add voice (free)</button>
+      </div>
+      <div id="sbwrap" style="display:none;margin-top:10px">
+        <table style="width:100%;border-collapse:collapse;font-size:12px" id="sbtable"></table>
+        <div class="genrow">
+          <button class="vs-btn" id="sb-save" disabled>💾 Save storyboard edits</button>
+          <span class="vs-hint">edit titles / prompts / seconds before spending — the prompt is
+            what the video model actually renders</span>
+        </div>
+      </div>
+      <div id="previews" style="margin-top:12px"></div>
+
+      <div id="bulklock" class="vs-hint"
+           style="display:none;border-top:1px solid var(--line);margin-top:14px;padding-top:12px">
+        🔒 <b>3 · Bulk generate</b> — locked until you judge a preview above:
+        <b>✅ approve</b> the one worth cloning (❌ rejects teach the AI what to avoid).
+      </div>
+
+      <div id="bulkwrap" style="display:none;border-top:1px solid var(--line);margin-top:14px;padding-top:12px">
+        <h3>3 · Bulk generate <span class="r vs-hint">clones the preview into N variants — free unless you re-render</span></h3>
+        <div class="genrow">
+          <label class="vs-hint">how many
+            <input type="number" class="vs-in" id="bulk-count" min="1" max="20" value="5" style="width:64px">
+          </label>
+          <label class="vs-hint">voices
+            <select class="vs-in" id="bulk-voice">
+              <option value="same" selected>same as the preview</option>
+              <option value="cycle">cycle every Voice Bank voice</option>
+            </select>
+          </label>
+          <label class="vs-hint" title="re-renders every shot on fal for each variant — costs money">
+            <input type="checkbox" id="bulk-regen"> new visuals per variant ($)</label>
+          <button class="vs-btn primary" id="bulk-go">🔁 Generate variants</button>
+        </div>
+        <span class="vs-hint">each variant gets a fresh hook (steered by your past approvals/rejections),
+          its own narration, and the same tags/subtitles settings as the preview.</span>
+        <div class="genrow" style="border-top:1px dashed var(--line);margin-top:12px;padding-top:12px">
+          <button class="vs-btn" id="finish-btn">📦 Finish — export to Desktop &amp; clean up</button>
+          <span class="vs-hint" id="finishmsg"></span>
+        </div>
+      </div>
+    </div>
+
+    <div class="vs-panel" id="logpanel" style="display:none">
+      <h3 id="logtitle">Working…</h3>
+      <pre class="joblog" id="joblog"></pre>
+    </div>
+
+    <div class="vs-panel" id="empty">
+      <h3>How it works</h3>
+      <div class="vs-hint" style="line-height:1.7">
+        1 · Pick a reference UGC ad from your library and hit <b>Deep-dive</b>.<br>
+        2 · You get a full teardown: format, beat structure, avatar, mechanism, hedges —
+        plus the ad’s narrative and transcript, all editable.<br>
+        3 · Generate a <b>new narrative</b> (same emotional logic, your product), then a
+        <b>new script</b> length-fitted to your target duration.<br>
+        4 · Next phase: pick a character from the Character Bank, a voice from the Voice Bank,
+        your brand kit — and generate the new video.
+      </div>
+    </div>
+  </section>
+</main>
+
+<script src="/static/js/vs-core.js"></script>
+<script>
+(async () => {
+  const $ = s => document.querySelector(s);
+  let picked = null, current = null, curDoc = "deepdive", data = null, dirty = false;
+
+  // ── library picker
+  async function loadPicklist() {
+    try {
+      const d = await VS.api("/api/creator/library");
+      const box = $("#picklist");
+      const vids = d.videos || [];
+      if (!vids.length) { box.innerHTML = '<span class="vs-hint">no videos yet — upload one in the Creator tab</span>'; return; }
+      box.innerHTML = "";
+      vids.forEach(v => {
+        const el = document.createElement("div");
+        el.className = "vrow";
+        el.innerHTML = `<span class="nm">🎬 ${VS.esc(v.title || v.name)}</span>
+          <span class="vs-hint">${v.transcript ? "transcribed" : ""}</span>`;
+        el.onclick = () => {
+          picked = v.name;
+          document.querySelectorAll("#picklist .vrow").forEach(x => x.classList.remove("sel"));
+          el.classList.add("sel");
+          $("#analyze").disabled = false;
+        };
+        box.appendChild(el);
+      });
+    } catch (e) { VS.toast("could not load videos: " + e.message); }
+  }
+
+  // ── analyses list
+  async function loadDone(selectStem) {
+    try {
+      const d = await VS.api("/api/ugc/list");
+      const box = $("#donelist");
+      if (!d.analyses.length) { box.innerHTML = '<span class="vs-hint">nothing analyzed yet</span>'; return; }
+      box.innerHTML = "";
+      d.analyses.forEach(a => {
+        const el = document.createElement("div");
+        el.className = "vrow" + (a.stem === current ? " sel" : "");
+        el.innerHTML = `${a.frame ? `<img src="/media/${a.frame}">` : ""}
+          <span class="nm">${VS.esc(a.title)}</span>
+          <span class="vs-hint">${a.format || ""}</span>
+          <button class="iconbtn del" data-act="del" title="delete this analysis and all its work files (recoverable from trash)">🗑</button>`;
+        el.onclick = () => openAnalysis(a.stem);
+        el.querySelector('[data-act="del"]').onclick = async ev => {
+          ev.stopPropagation();
+          if (watching) { VS.toast("a UGC job is still running — wait for it to finish"); return; }
+          if (!confirm(`Delete the analysis “${a.title}” and all its storyboards/previews?\n` +
+                       "(recoverable from trash — the uploaded video stays in the library)")) return;
+          try {
+            await VS.post(`/api/ugc/${a.stem}/delete`, {});
+            if (current === a.stem) {
+              current = null; data = null;
+              $("#viewer").style.display = "none";
+              $("#recompose").style.display = "none";
+              $("#empty").style.display = "";
+            }
+            VS.toast("deleted — fresh start ✓");
+            loadDone();
+          } catch (e) { VS.toast("Error: " + e.message); }
+        };
+        box.appendChild(el);
+      });
+      if (selectStem) openAnalysis(selectStem);
+    } catch (e) { /* ignore */ }
+  }
+
+  // ── viewer
+  async function openAnalysis(stem) {
+    if (dirty && !confirm("Discard unsaved edits?")) return;
+    try {
+      data = await VS.api("/api/ugc/" + encodeURIComponent(stem));
+      current = stem; dirty = false;
+      $("#viewer").style.display = ""; $("#empty").style.display = "none";
+      const m = data.meta || {};
+      $("#vtitle").textContent = "🔬 " + (m.title || stem);
+      $("#vmeta").textContent = [
+        m.format_class, m.avatar,
+        m.duration_s ? m.duration_s + "s" : "", m.aspect,
+        m.shots_estimate ? "~" + m.shots_estimate + " shots" : "",
+        m.awareness_level ? "awareness " + m.awareness_level + "/5" : "",
+        m.sophistication_stage ? "sophistication " + m.sophistication_stage + "/5" : "",
+      ].filter(Boolean).join("  ·  ");
+      $("#vframes").innerHTML = (data.frames || []).slice(0, 12)
+        .map(f => `<img src="/media/${f}" loading="lazy">`).join("");
+      showDoc(curDoc);
+      $("#recompose").style.display = "";
+      loadRecompose();
+      loadDone();
+    } catch (e) { VS.toast("Error: " + e.message); }
+  }
+
+  function showDoc(doc) {
+    curDoc = doc;
+    document.querySelectorAll("#doctabs .iconbtn").forEach(b =>
+      b.classList.toggle("on", b.dataset.doc === doc));
+    const placeholders = {
+      narrative_new: "no new narrative yet — hit “Generate new narrative” below (or write one here and Save)",
+      script_new: "no new script yet — hit “Generate new script” below (or write one here and Save)",
+    };
+    $("#doc").value = (data && data[doc]) || "";
+    $("#doc").placeholder = placeholders[doc] || "";
+    $("#doc").readOnly = doc === "transcript";
+    $("#save").disabled = true; dirty = false;
+    $("#durwrap").style.display = "";
+  }
+  document.querySelectorAll("#doctabs .iconbtn").forEach(b => {
+    b.onclick = () => {
+      if (dirty && !confirm("Discard unsaved edits?")) return;
+      showDoc(b.dataset.doc);
+    };
+  });
+  $("#doc").oninput = () => {
+    if ($("#doc").readOnly) return;
+    dirty = true; $("#save").disabled = false;
+  };
+
+  $("#save").onclick = async () => {
+    if (!current || $("#doc").readOnly) return;
+    try {
+      await VS.post(`/api/ugc/${current}/save`, {doc: curDoc, text: $("#doc").value});
+      data[curDoc] = $("#doc").value;
+      dirty = false; $("#save").disabled = true;
+      VS.toast("saved ✓");
+    } catch (e) { VS.toast("Error: " + e.message); }
+  };
+
+  // ── job runner + log
+  let watching = null;   // job id currently being followed (survives via reattach below)
+  async function watchJob(jobId, title, onDone, onEnd) {
+    if (watching === jobId) return;
+    watching = jobId;
+    $("#logpanel").style.display = "";
+    $("#logtitle").textContent = title;
+    $("#logpanel").scrollIntoView({behavior: "smooth", block: "nearest"});
+    const log = $("#joblog");
+    log.textContent = "";
+    let offset = 0;
+    while (true) {
+      let j;
+      try { j = await VS.api(`/api/job/${jobId}?offset=${offset}`); }
+      catch (e) {
+        log.textContent += "\n(poll failed: " + e.message + ")";
+        watching = null;
+        if (onEnd) onEnd();
+        break;
+      }
+      if (j.lines && j.lines.length) {
+        log.textContent += j.lines.join("\n") + "\n";
+        log.scrollTop = log.scrollHeight;
+        offset = j.next_offset;
+      }
+      if (j.status !== "running") {
+        $("#logtitle").textContent = title + (j.status === "done" ? " — done ✓" : " — " + j.status);
+        if (j.status === "done" && onDone) onDone();
+        if (j.status === "done") setTimeout(() => $("#logpanel").style.display = "none", 4000);
+        watching = null;
+        if (onEnd) onEnd();
+        break;
+      }
+      await new Promise(r => setTimeout(r, 2000));
+    }
+  }
+
+  // reattach to a UGC job that's still running from before we left the page
+  async function reattach() {
+    try {
+      const all = await VS.api("/api/jobs");
+      const acts = ["ugc-analyze", "ugc-generate", "ugc-storyboard", "ugc-preview", "ugc-bulk", "ugc-reshot"];
+      const j = (all || []).find(x => x.status === "running" && acts.includes(x.action));
+      if (!j) return;
+      watchJob(j.id, "⏳ " + j.label, () => {
+        if (j.action === "ugc-analyze") loadDone(j.slug);
+        else if (current === j.slug) {
+          if (j.action === "ugc-generate") openAnalysis(j.slug);
+          else loadRecompose();
+        }
+      });
+    } catch (e) { /* ignore */ }
+  }
+
+  // ── actions
+  $("#analyze").onclick = async () => {
+    if (!picked) return;
+    if (watching) { VS.toast("a UGC job is already running — wait for it to finish"); return; }
+    $("#analyze").disabled = true;
+    $("#amsg").textContent = "queued…";
+    try {
+      const d = await VS.post("/api/ugc/analyze", {file: picked, model: $("#model").value});
+      $("#amsg").textContent = "";
+      watchJob(d.job_id, "🔬 Deep-diving " + picked, () => loadDone(d.stem));
+    } catch (e) { $("#amsg").textContent = ""; VS.toast("Error: " + e.message); }
+    $("#analyze").disabled = false;
+  };
+
+  function genBusy(on) {
+    [["#gen-narrative", "✨ Generate new narrative"], ["#gen-script", "✨ Generate new script"]]
+      .forEach(([sel, label]) => {
+        $(sel).disabled = on;
+        $(sel).textContent = on ? "⏳ writing… (see log below)" : label;
+      });
+  }
+
+  async function generate(what) {
+    if (!current) return;
+    if (watching) { VS.toast("a UGC job is already running — wait for it to finish"); return; }
+    if (dirty && !confirm("You have unsaved edits — generate anyway (they won’t be used)?")) return;
+    genBusy(true);
+    try {
+      const d = await VS.post(`/api/ugc/${current}/generate`, {
+        what, instruction: $("#instruction").value.trim(),
+        duration_s: parseFloat($("#duration").value),
+      });
+      watchJob(d.job_id, "✨ Writing new " + what,
+        () => openAnalysis(current)
+          .then(() => showDoc(what === "narrative" ? "narrative_new" : "script_new")),
+        () => genBusy(false));
+    } catch (e) { genBusy(false); VS.toast("Error: " + e.message); }
+  }
+  $("#gen-narrative").onclick = () => generate("narrative");
+  $("#gen-script").onclick = () => generate("script");
+
+  // ── recompose → preview ────────────────────────────────────────────────────
+  let models = {}, sbShots = [], sbDirty = false;
+
+  async function loadOptions() {
+    try {
+      const md = await VS.api("/api/t2v/models");
+      const sel = $("#rc-model");
+      sel.innerHTML = "";
+      (md.models || []).forEach(m => {
+        models[m.key] = m;
+        const o = document.createElement("option");
+        o.value = m.key;
+        o.textContent = `${m.label.split(" — ")[0]} · $${m.cost_per_s}/s${m.reference ? " · 👤" : ""}`;
+        sel.appendChild(o);
+      });
+      sel.value = models["kling-o1-ref"] ? "kling-o1-ref" : sel.value;
+    } catch (e) { /* ignore */ }
+    try {
+      const vd = await VS.api("/api/voices");
+      const sel = $("#rc-voice");
+      sel.innerHTML = '<option value="orig">clone original ad’s voice</option>' +
+                      '<option value="">silent (no narration)</option>';
+      (vd.voices || []).forEach(v => {
+        const o = document.createElement("option");
+        o.value = v.id; o.textContent = "🎙 " + v.name;
+        sel.appendChild(o);
+      });
+    } catch (e) { /* ignore */ }
+    try {
+      const cd = await VS.api("/api/characters");
+      const sel = $("#rc-char");
+      sel.innerHTML = '<option value="">none (model invents one per shot)</option>';
+      (cd.characters || []).forEach(c => {
+        const o = document.createElement("option");
+        o.value = c.id; o.textContent = "👤 " + c.name;
+        sel.appendChild(o);
+      });
+    } catch (e) { /* ignore */ }
+  }
+
+  let clipsReady = 0;
+  function refreshCost() {
+    const m = models[$("#rc-model").value];
+    if (!m || !sbShots.length) { $("#rc-cost").textContent = ""; }
+    else {
+      let secs = 0;
+      sbShots.forEach(s => secs += Math.max(parseFloat(s.duration_s) || 4, m.min_s));
+      $("#rc-cost").textContent =
+        `current storyboard: ${sbShots.length} shots / ${secs.toFixed(0)}s ≈ $${(secs * m.cost_per_s).toFixed(2)} (rough — confirmed before spending)`;
+    }
+    const needsChar = !!(m && m.reference) && !$("#rc-char").value;
+    $("#render-btn").disabled = !sbShots.length || needsChar;
+    $("#render-btn").title = needsChar
+      ? "this model keeps a persistent character — pick one from the Character Bank first"
+      : "renders every storyboard shot on the selected model — the paid step";
+    $("#voice-btn").disabled = !clipsReady;
+    $("#voice-btn").title = clipsReady
+      ? "re-assembles the already-rendered shots with the selected voice + subtitles/muted twins — free"
+      : "render the visuals first (step 1)";
+    $("#remerge-btn").disabled = !clipsReady;
+  }
+  $("#rc-model").onchange = refreshCost;
+  $("#rc-char").onchange = refreshCost;
+
+  function renderStoryboard() {
+    const t = $("#sbtable");
+    if (!sbShots.length) { $("#sbwrap").style.display = "none"; return; }
+    $("#sbwrap").style.display = "";
+    t.innerHTML = "<tr><th style='text-align:left;padding:4px'>shot</th>" +
+      "<th style='text-align:left;padding:4px'>prompt (what gets rendered)</th>" +
+      "<th style='padding:4px'>sec</th>" +
+      (clipsReady ? "<th style='padding:4px'>clip</th>" : "") + "</tr>";
+    sbShots.forEach(s => {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td style="padding:4px;vertical-align:top;width:150px">
+          <input class="vs-in" style="width:100%" data-k="title" value="${VS.esc(s.title || s.id)}">
+          <div class="vs-hint">${VS.esc(s.emotional_beat || "")}</div></td>
+        <td style="padding:4px;vertical-align:top">
+          <textarea class="vs-in" style="width:100%;min-height:52px;font-size:11.5px" data-k="prompt">${VS.esc(s.prompt || "")}</textarea></td>
+        <td style="padding:4px;vertical-align:top;width:56px">
+          <input class="vs-in" type="number" min="2" max="12" step="0.5" style="width:100%"
+                 data-k="duration_s" value="${s.duration_s || 4}"></td>
+        ${clipsReady ? `<td style="padding:4px;vertical-align:top;width:120px">
+          ${s.clip ? `<video controls preload="metadata" style="width:110px;border-radius:8px"
+                             src="/media/${s.clip}"></video>` : `<span class="vs-hint">not rendered</span>`}
+          <button class="iconbtn" data-redo="${s.id}" style="margin-top:4px;width:110px"
+                  title="re-render just this shot (paid, one shot's price) — edit the prompt first if the scene itself is wrong">🎨 redo shot</button></td>` : ""}`;
+      tr.querySelectorAll("[data-k]").forEach(el => {
+        el.oninput = () => {
+          s[el.dataset.k] = el.dataset.k === "duration_s" ? parseFloat(el.value) : el.value;
+          sbDirty = true; $("#sb-save").disabled = false; refreshCost();
+        };
+      });
+      const redo = tr.querySelector("[data-redo]");
+      if (redo) redo.onclick = () => reshot(s.id);
+      t.appendChild(tr);
+    });
+    refreshCost();
+  }
+
+  async function loadRecompose() {
+    if (!current) return;
+    try {
+      const d = await VS.api(`/api/ugc/${current}/recompose`);
+      const s = d.settings || {};
+      if (s.shots != null) $("#rc-shots").value = s.shots;
+      if (s.aspect) $("#rc-aspect").value = s.aspect;
+      if (s.model && models[s.model]) $("#rc-model").value = s.model;
+      if (s.voice_id != null && s.voice_id !== "") $("#rc-voice").value = s.voice_id;
+      if (s.character_id) $("#rc-char").value = s.character_id;
+      if (s.tags != null) $("#rc-tags").checked = !!s.tags;
+      if (s.subtitles != null) $("#rc-subs").checked = !!s.subtitles;
+      sbShots = d.shots || []; sbDirty = false; $("#sb-save").disabled = true;
+      clipsReady = d.clips_ready || 0;
+      renderStoryboard();
+      refreshCost();
+      const pv = $("#previews");
+      pv.innerHTML = "";
+      const previews = (d.previews || []).slice().reverse();
+      previews.forEach(p => {
+        const el = document.createElement("div");
+        el.style.cssText = "border:1px solid var(--line);border-radius:11px;padding:10px;margin-bottom:10px";
+        const badge = p.verdict === "approved" ? " · ✅ approved"
+                    : p.verdict === "rejected" ? " · ❌ rejected" : "";
+        const actions = p.verdict === "approved"
+          ? `<button class="iconbtn" data-v="bulk" style="margin-left:10px">🔁 bulk generate →</button>`
+          : p.verdict === "rejected" ? ""
+          : `<span class="vs-hint" style="margin-left:10px">watch it, then judge:</span>
+             <button class="iconbtn" data-v="approved">✅ approve — unlocks bulk</button>
+             <button class="iconbtn del" data-v="rejected">❌ reject</button>`;
+        el.innerHTML =
+          `<div class="vs-hint" style="margin-bottom:6px"><b>${VS.esc(p.label || "preview")}</b>
+             · ${VS.esc(p.slug)}${p.tagged ? " · tagged" : ""}<b>${badge}</b>${actions}</div>
+           <div style="display:flex;gap:12px;flex-wrap:wrap">
+             ${[[p.file, "🔊 sound · no subs"], [p.captioned, "🔊 sound · subs"],
+                [p.mute, "🔇 muted · no subs"], [p.caption_mute, "🔇 muted · subs"]]
+               .filter(v => v[0])
+               .map(v => `<div><div class="vs-hint">${v[1]}</div>
+                 <video controls preload="metadata" style="max-height:300px;border-radius:10px"
+                        src="/media/${v[0]}"></video></div>`).join("")}
+           </div>`;
+        const bulkBtn = el.querySelector('[data-v="bulk"]');
+        if (bulkBtn) bulkBtn.onclick = () => {
+          $("#bulkwrap").scrollIntoView({behavior: "smooth", block: "nearest"});
+        };
+        el.querySelectorAll('[data-v="approved"],[data-v="rejected"]').forEach(btn => {
+          btn.onclick = async () => {
+            const verdict = btn.dataset.v;
+            let reason = "";
+            if (verdict === "rejected") {
+              reason = prompt("Why is it bad? (one line — the AI learns from this)") || "";
+              if (!reason.trim()) return;
+            } else {
+              reason = prompt("What makes it good? (optional — helps the AI)") || "";
+            }
+            try {
+              await VS.post(`/api/ugc/${current}/verdict`, {slug: p.slug, verdict, reason});
+              VS.toast("noted — future scripts/variants learn from this");
+              loadRecompose();
+            } catch (e) { VS.toast("Error: " + e.message); }
+          };
+        });
+        pv.appendChild(el);
+      });
+      const anyApproved = previews.some(p => p.verdict === "approved");
+      $("#bulkwrap").style.display = anyApproved ? "" : "none";
+      $("#bulklock").style.display = previews.length && !anyApproved ? "" : "none";
+    } catch (e) { /* ignore */ }
+  }
+
+  $("#bulk-go").onclick = async () => {
+    if (!current) return;
+    if (watching) { VS.toast("a UGC job is already running — wait for it to finish"); return; }
+    const body = {
+      count: parseInt($("#bulk-count").value) || 5,
+      regen_shots: $("#bulk-regen").checked,
+      tags: $("#rc-tags").checked, subtitles: $("#rc-subs").checked,
+      mute: $("#rc-mute").checked,
+    };
+    if ($("#bulk-voice").value === "cycle") {
+      const opts = [...$("#rc-voice").options].map(o => o.value)
+        .filter(v => v && v !== "orig");
+      if (opts.length) body.voice_ids = opts;
+    }
+    try {
+      let r = await fetch(`/api/ugc/${current}/bulk`, {
+        method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify(body)});
+      if (r.status === 402) {
+        const d = await r.json();
+        if (!confirm("Re-rendering visuals spends real money on fal.ai:\n\n" +
+                     d.estimate.summary + "\n\nGenerate " + body.count + " variants?")) return;
+        r = await fetch(`/api/ugc/${current}/bulk`, {
+          method: "POST", headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({...body, confirm_cost: true})});
+      }
+      if (!r.ok) throw new Error((await r.text()).slice(0, 300));
+      const d = await r.json();
+      $("#bulk-go").disabled = true;
+      $("#bulk-go").textContent = "⏳ generating… (see log below)";
+      watchJob(d.job_id, `🔁 Generating ${d.count} variant(s)`, loadRecompose, () => {
+        $("#bulk-go").disabled = false;
+        $("#bulk-go").textContent = "🔁 Generate variants";
+      });
+    } catch (e) { VS.toast("Error: " + e.message); }
+  };
+
+  $("#finish-btn").onclick = async () => {
+    if (!current) return;
+    if (watching) { VS.toast("a UGC job is still running — wait for it to finish"); return; }
+    if (!confirm("Export the finished videos (all versions — subtitled and muted too) to the " +
+                 "Desktop exports folder, then move the heavy work files to trash?")) return;
+    try {
+      const d = await VS.post(`/api/ugc/${current}/finish`, {});
+      $("#finishmsg").textContent = `✓ ${d.exported.length} file(s) → ${d.folder}`;
+      VS.toast(`exported ${d.exported.length} file(s) ✓`);
+      loadRecompose();
+    } catch (e) { VS.toast("Error: " + e.message); }
+  };
+
+  $("#sb-make").onclick = async () => {
+    if (!current) return;
+    if (watching) { VS.toast("a UGC job is already running — wait for it to finish"); return; }
+    try {
+      $("#sb-make").disabled = true;
+      $("#sb-make").textContent = "⏳ writing… (see log below)";
+      const d = await VS.post(`/api/ugc/${current}/storyboard`, {
+        shots: parseInt($("#rc-shots").value) || 0,
+        aspect: $("#rc-aspect").value,
+        character_id: $("#rc-char").value,
+      });
+      watchJob(d.job_id, "📋 Writing storyboard", loadRecompose, () => {
+        $("#sb-make").disabled = false;
+        $("#sb-make").textContent = "📋 Write storyboard (free)";
+      });
+    } catch (e) {
+      $("#sb-make").disabled = false;
+      $("#sb-make").textContent = "📋 Write storyboard (free)";
+      VS.toast("Error: " + e.message);
+    }
+  };
+
+  $("#sb-save").onclick = async () => {
+    if (!current || !sbDirty) return;
+    try {
+      await VS.post(`/api/ugc/${current}/recipe`,
+                    {shots: sbShots.map(s => ({id: s.id, title: s.title,
+                                               prompt: s.prompt, duration_s: s.duration_s}))});
+      sbDirty = false; $("#sb-save").disabled = true;
+      VS.toast("storyboard saved ✓");
+    } catch (e) { VS.toast("Error: " + e.message); }
+  };
+
+  async function runPreview(body, btnSel, busyLabel, idleLabel, doneTitle) {
+    try {
+      let r = await fetch(`/api/ugc/${current}/preview`, {
+        method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify(body)});
+      if (r.status === 402) {
+        const d = await r.json();
+        if (!confirm("This spends real money on fal.ai:\n\n" + d.estimate.summary +
+                     "\n\nRender?")) return;
+        r = await fetch(`/api/ugc/${current}/preview`, {
+          method: "POST", headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({...body, confirm_cost: true})});
+      }
+      if (!r.ok) throw new Error((await r.text()).slice(0, 300));
+      const d = await r.json();
+      $(btnSel).disabled = true;
+      $(btnSel).textContent = busyLabel;
+      watchJob(d.job_id, doneTitle + " (" + d.slug + ")", loadRecompose, () => {
+        $(btnSel).textContent = idleLabel;
+        refreshCost();
+      });
+    } catch (e) { VS.toast("Error: " + e.message); }
+  }
+
+  // fix one shot: re-render just it, then re-merge (free) rebuilds the video
+  async function reshot(sid) {
+    if (!current) return;
+    if (watching) { VS.toast("a UGC job is already running — wait for it to finish"); return; }
+    if (sbDirty) { VS.toast("save your storyboard edits first — the new prompt is what gets rendered"); return; }
+    const body = {shot_id: sid, model: $("#rc-model").value, character_id: $("#rc-char").value};
+    try {
+      let r = await fetch(`/api/ugc/${current}/reshot`, {method: "POST",
+        headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+      if (r.status === 402) {
+        const d = await r.json();
+        if (!confirm(`Re-render shot ${sid} only:\n\n` + d.estimate.summary +
+                     "\n\nProceed?")) return;
+        r = await fetch(`/api/ugc/${current}/reshot`, {method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({...body, confirm_cost: true})});
+      }
+      if (!r.ok) throw new Error((await r.text()).slice(0, 300));
+      const d = await r.json();
+      watchJob(d.job_id, `🎨 Re-rendering shot ${sid}`, () => {
+        loadRecompose();
+        VS.toast(`shot ${sid} redone — press 🧵 re-merge (or 🔊 Add voice) to rebuild the video`);
+      });
+    } catch (e) { VS.toast("Error: " + e.message); }
+  }
+
+  // step 1 — paid: render the storyboard's shots (silent — sound comes after)
+  $("#render-btn").onclick = () => {
+    if (!current) return;
+    if (watching) { VS.toast("a UGC job is already running — wait for it to finish"); return; }
+    if (sbDirty) { VS.toast("save your storyboard edits first"); return; }
+    runPreview({
+      model: $("#rc-model").value, voice_id: "", character_id: $("#rc-char").value,
+      tags: $("#rc-tags").checked, subtitles: false, mute: false, reuse_clips: false,
+    }, "#render-btn", "⏳ rendering… (see log below)", "🎨 1 · Render visuals",
+       "🎨 Rendering visuals");
+  };
+
+  // free: rebuild the silent cut from the current clips (after a redo)
+  $("#remerge-btn").onclick = () => {
+    if (!current) return;
+    if (watching) { VS.toast("a UGC job is already running — wait for it to finish"); return; }
+    runPreview({
+      model: $("#rc-model").value, voice_id: "", character_id: $("#rc-char").value,
+      tags: $("#rc-tags").checked, subtitles: false, mute: false, reuse_clips: true,
+    }, "#remerge-btn", "⏳ merging…", "🧵 re-merge (free)", "🧵 Re-merging");
+  };
+
+  // step 2 — free: same clips, now with narration + subtitled/muted twins
+  $("#voice-btn").onclick = () => {
+    if (!current) return;
+    if (watching) { VS.toast("a UGC job is already running — wait for it to finish"); return; }
+    if (!$("#rc-voice").value) { VS.toast("pick a voice first (the “silent” option has nothing to add)"); return; }
+    runPreview({
+      model: $("#rc-model").value, voice_id: $("#rc-voice").value,
+      character_id: $("#rc-char").value,
+      tags: $("#rc-tags").checked, subtitles: $("#rc-subs").checked,
+      mute: $("#rc-mute").checked, reuse_clips: true,
+    }, "#voice-btn", "⏳ narrating… (see log below)", "🔊 2 · Add voice (free)",
+       "🔊 Adding voice");
+  };
+
+  loadPicklist();
+  loadDone();
+  loadOptions();
+  reattach();
+})();
+</script>
+</body>
+</html>

@@ -197,7 +197,7 @@ The keyframes of the reference video are on disk - READ THEM with the Read tool 
 {ref_words}
 Step 1 - study the reference: how it opens, how many shots, how fast it cuts, the settings and wardrobe, what the person is physically doing in each beat, where the product appears, how it closes.
 
-Step 2 - rebuild that SAME structure for the NEW SCRIPT below. Same shot count and rhythm, same kind of settings and energy, same beat order - but the content follows the new script. This is modelling a winner, NOT copying it: never reproduce the reference's on-screen text, logos, or exact wording.
+Step 2 - rebuild that SAME structure for the NEW SCRIPT below. {shots_rule}, same kind of settings and energy, same beat order - but the content follows the new script. This is modelling a winner, NOT copying it: never reproduce the reference's on-screen text, logos, or exact wording.
 
 For each shot write ONLY the `prompt` as a SCENE ACTION LINE: what she is physically doing, where, and the mess around her. 8-20 words.
 - Do NOT describe her appearance, the camera, the lens, the lighting, or the film look - those are added automatically. Writing them ruins the shot.
@@ -306,6 +306,11 @@ def extract_keyframes(video: Path, out_dir: Path, n: int = 6) -> list[Path]:
 
 
 def cmd_storyboard(a: argparse.Namespace) -> int:
+    # a Character Bank character replaces the stock UGC persona in every prompt
+    # (identity itself comes from the reference images on reference-conditioned models)
+    if getattr(a, "character_desc", ""):
+        global UGC_CHARACTER
+        UGC_CHARACTER = a.character_desc.strip()
     script = Path(a.script).read_text(encoding="utf-8", errors="replace").strip() if Path(a.script).is_file() else a.script
     if not script or len(script.split()) < 5:
         die("script is empty or too short")
@@ -355,8 +360,12 @@ def cmd_storyboard(a: argparse.Namespace) -> int:
             if rt:
                 ref_words = ("\nThe reference says (its transcript - study its hook and pacing, "
                              f"do NOT reuse its words):\n{rt[:1500]}\n")
+            clone_shots_rule = (f"Use about {want} shots - compress or merge the reference's "
+                                "beats to land near that count, keeping its rhythm"
+                                if a.shots else "Same shot count and rhythm")
             prompt = CLONE_PROMPT.format(
-                frames="\n".join(f"  {f}" for f in frames), ref_words=ref_words, script=script)
+                frames="\n".join(f"  {f}" for f in frames), ref_words=ref_words,
+                shots_rule=clone_shots_rule, script=script)
             tools = ["--allowedTools", "Read"] + tools
             log("rebuilding its structure for your script (Claude vision)...")
         else:
@@ -477,18 +486,34 @@ def cmd_assemble(a: argparse.Namespace) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
     w, h = probe_wh(clips[0])
 
-    # 1) narration (optional): clone the reference video's voice, speak the script
-    vo = None
-    vo_sec = 0.0
+    # 1) normalize + concat the shots in order
+    norm = (f"scale={w}:{h}:force_original_aspect_ratio=decrease,"
+            f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,fps=30,setsar=1")
+    inputs: list[str] = []
+    filt: list[str] = []
+    for i, c in enumerate(clips):
+        inputs += ["-i", str(c)]
+        filt.append(f"[{i}:v]{norm}[v{i}]")
+    concat = "".join(f"[v{i}]" for i in range(len(clips))) + f"concat=n={len(clips)}:v=1:a=0[v]"
+    silent = out_dir / "_broll-silent.mp4"
+    ff([*inputs, "-filter_complex", ";".join(filt) + ";" + concat, "-map", "[v]",
+        "-c:v", "libx264", "-crf", "18", "-pix_fmt", "yuv420p", "-r", "30", str(silent)],
+       "concat shots")
+    vid_sec = probe_sec(silent)
+
+    # 2) narration (optional): clone a voice and speak the script. Runs AFTER the
+    # concat because the XTTS tool's CLI always needs a --video to work against —
+    # a Voice Bank voice narrates over the freshly concatenated silent cut.
     # Narration is a BONUS, never a blocker: the shot clips are already paid for,
     # so any voice problem downgrades to a silent cut instead of losing the video.
+    vo = None
+    vo_sec = 0.0
     voice_src = a.voice or a.ref_video
     if script and voice_src and a.ds_py and a.ds_app:
         if a.voice or has_audio(Path(a.ref_video)):
             cmd = [a.ds_py, a.ds_app, "--cli", "--script", script, "--no-fit",
-                   "--device", "auto", "--language", "en"]
-            if a.ref_video:
-                cmd += ["--video", a.ref_video]
+                   "--device", "auto", "--language", "en",
+                   "--video", a.ref_video if (a.ref_video and not a.voice) else str(silent)]
             if a.voice:
                 cmd += ["--reference", a.voice]
             log("narrating the script with the cloned voice (XTTS)...")
@@ -511,21 +536,6 @@ def cmd_assemble(a: argparse.Namespace) -> int:
         else:
             log(f"  reference '{Path(a.ref_video).name}' has no audio track — nothing to clone a voice from.")
             log("  assembling silent; pick a Voice Bank voice to narrate it.")
-
-    # 2) normalize + concat the shots in order
-    norm = (f"scale={w}:{h}:force_original_aspect_ratio=decrease,"
-            f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,fps=30,setsar=1")
-    inputs: list[str] = []
-    filt: list[str] = []
-    for i, c in enumerate(clips):
-        inputs += ["-i", str(c)]
-        filt.append(f"[{i}:v]{norm}[v{i}]")
-    concat = "".join(f"[v{i}]" for i in range(len(clips))) + f"concat=n={len(clips)}:v=1:a=0[v]"
-    silent = out_dir / "_broll-silent.mp4"
-    ff([*inputs, "-filter_complex", ";".join(filt) + ";" + concat, "-map", "[v]",
-        "-c:v", "libx264", "-crf", "18", "-pix_fmt", "yuv420p", "-r", "30", str(silent)],
-       "concat shots")
-    vid_sec = probe_sec(silent)
 
     # 3) if the footage is shorter than the narration, hold the last frame to fit
     if vo_sec and vid_sec + 0.05 < vo_sec:
@@ -585,6 +595,8 @@ def main() -> int:
     sb.add_argument("--frames", type=int, default=6, help="keyframes to sample from the reference")
     sb.add_argument("--claude", help="path to the claude CLI")
     sb.add_argument("--model", default="sonnet", choices=("sonnet", "opus", "haiku"))
+    sb.add_argument("--character-desc", dest="character_desc", default="",
+                    help="Character Bank persona: replaces the stock UGC character in every shot prompt")
 
     tg = sub.add_parser("tags")
     tg.add_argument("--recipe", required=True, help="recipe.json to write on-screen tags into")

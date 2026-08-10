@@ -48,7 +48,10 @@ APP_DIR = Path(__file__).resolve().parent          # video-studio/app
 VS_ROOT = APP_DIR.parent                            # video-studio/
 CONFIG = json.loads((VS_ROOT / "config.json").read_text(encoding="utf-8"))
 
-ROOT = Path(CONFIG["autovsl_root"])                 # data root: the autoVSL repo (unchanged)
+# .resolve() normalizes the drive-letter case: a lowercase "d:" in config.json
+# otherwise fails every startswith() safety check against resolved paths (all
+# /media URLs 403), because resolved targets come back with an uppercase "D:".
+ROOT = Path(CONFIG["autovsl_root"]).resolve()       # data root: the autoVSL repo (unchanged)
 ENGINES = Path(CONFIG["engines_dir"])               # autoVSL/dashboard — engine helper scripts
 # subtitle-studio's erase engine supersedes the dashboard copy: better caption-band
 # detection (EasyOCR/CRAFT), NaN-corruption retry, and a resume cache written next to
@@ -3787,6 +3790,8 @@ T2V_FAL_MODELS = {
     "veo3":             {"label": "Veo 3 — best quality, native audio",      "min_s": 4, "cost_per_s": 0.40},
     "veo3-fast":        {"label": "Veo 3 Fast — Veo quality, cheaper",       "min_s": 4, "cost_per_s": 0.15},
     "sora-2":           {"label": "Sora 2 — OpenAI, strong realism",         "min_s": 4, "cost_per_s": 0.30},
+    "kling-o1-ref":     {"label": "Kling O1 Reference — persistent character (needs Character Bank refs)",
+                         "min_s": 5, "cost_per_s": 0.112, "reference": True},
     "kling-2.5-pro":    {"label": "Kling 2.5 Turbo Pro — great motion",      "min_s": 5, "cost_per_s": 0.07},
     "kling-2.1-master": {"label": "Kling 2.1 Master — cinematic",            "min_s": 5, "cost_per_s": 0.09},
     "seedance-pro":     {"label": "Seedance 1.0 Pro — 1080p, flexible",      "min_s": 3, "cost_per_s": 0.12},
@@ -5051,6 +5056,1102 @@ def api_broll_bank_update():
             hit[k] = [str(t).strip() for t in b[k] if str(t).strip()]
     _broll_write_rows(rows)
     return jsonify({"ok": True, "row": hit})
+
+
+# ------------------------------------------------ UGC Factory
+# Reference UGC ad in → prospector-style deep-dive teardown → new narrative +
+# script drafts to recompose it from. Engine: app/engines/ugc_factory.py.
+# Free end to end (local whisper + ffmpeg + claude CLI) — generation of the
+# actual new video (Phase 3) plugs in behind the same work dir later.
+
+UGC_ENGINE = APP_DIR / "engines" / "ugc_factory.py"
+UGC_OUT = ROOT / "output" / "ugc"
+
+UGC_NARRATIVE_PROMPT = """You are a direct-response copywriter. Below is a deep-dive teardown \
+of a competitor's UGC video ad, plus its narrative summary. Write a NEW narrative summary \
+(one flowing paragraph, 120-200 words) for OUR OWN ad that keeps the emotional logic and beat \
+structure that made the original work, but is original: never copy competitor brand names, \
+product names, or specific claims verbatim.
+Compliance: wellness/supplement product — no disease/medical claims, no cure/treat/heal \
+language, no guaranteed outcomes; personal-experience framing is fine.
+{instruction_block}{inspiration}
+CURRENT NARRATIVE:
+{narrative}
+
+DEEP-DIVE TEARDOWN (context):
+{deepdive}
+
+Respond with ONLY the new narrative paragraph — no preamble, no headings, no markdown."""
+
+UGC_SCRIPT_PROMPT = """You are a direct-response copywriter for short-form video ads. Turn the \
+narrative below into SPOKEN first-person UGC dialogue (contractions, short sentences; no \
+headings, emojis, hashtags, stage directions, or quotation marks).
+LENGTH IS A HARD CONSTRAINT: the video is {duration}s, so write {lo}-{hi} words — count them \
+and land inside the range.
+Compliance: wellness/supplement product — no disease/medical claims, no cure/treat/heal \
+language, no guaranteed outcomes; personal-experience framing is fine.
+{instruction_block}{inspiration}
+NARRATIVE TO DRAMATIZE:
+{narrative}
+
+ORIGINAL AD'S TRANSCRIPT (structure reference — do NOT copy lines from it):
+{transcript}
+
+Respond with ONLY the spoken script text — no preamble, no explanation, no markdown."""
+
+
+def _ugc_work(stem: str) -> Path:
+    d = (UGC_OUT / Path(stem).name).resolve()
+    if not str(d).startswith(str(UGC_OUT.resolve())) or d == UGC_OUT.resolve():
+        abort(400, "bad name")
+    return d
+
+
+def _ugc_read(work: Path, name: str) -> str:
+    p = work / name
+    return p.read_text(encoding="utf-8") if p.is_file() else ""
+
+
+@app.get("/ugc")
+def ugc_page():
+    return send_from_directory(STATIC, "ugc.html")
+
+
+@app.get("/api/ugc/list")
+def api_ugc_list():
+    out = []
+    if UGC_OUT.is_dir():
+        for d in sorted(UGC_OUT.iterdir(), key=lambda x: x.stat().st_mtime, reverse=True):
+            if not d.is_dir():
+                continue
+            meta = read_json(d / "analysis.json") or {}
+            if not meta and not (d / "deepdive.md").is_file():
+                continue
+            out.append({"stem": d.name, "title": meta.get("title") or d.name,
+                        "video": meta.get("video"), "analyzed": meta.get("analyzed"),
+                        "format": meta.get("format_class"), "avatar": meta.get("avatar"),
+                        "duration_s": meta.get("duration_s"),
+                        "frame": (f"output/ugc/{d.name}/" + meta["frames"][0])
+                                 if meta.get("frames") else None})
+    return jsonify({"analyses": out})
+
+
+@app.post("/api/ugc/analyze")
+def api_ugc_analyze():
+    b = request.get_json(force=True)
+    fname = Path(b.get("file", "")).name
+    src = UPLOADS / fname
+    if not fname or not src.is_file():
+        abort(400, "file not found in uploads/ — upload it in the Creator first")
+    if not CLAUDE_EXE:
+        abort(500, "claude CLI not found")
+    model = b.get("model") if b.get("model") in ("sonnet", "opus", "haiku") else "opus"
+    cmd = [_cv_py(), str(UGC_ENGINE), "analyze", "--video", str(src), "--model", model]
+    if TRANSCRIBE_VENV_PY.is_file():
+        cmd += ["--whisper-python", str(TRANSCRIBE_VENV_PY),
+                "--whisper-script", str(TRANSCRIBE_PY), "--uploads", str(UPLOADS)]
+    job_id = jobs_create("ugc-analyze", src.stem, f"UGC deep-dive — {fname}",
+                         gpu=not (TRANSCRIPTS / f"{src.stem}.json").is_file())
+    threading.Thread(target=run_job, args=(job_id, cmd), daemon=True).start()
+    return jsonify({"job_id": job_id, "stem": src.stem})
+
+
+@app.get("/api/ugc/<stem>")
+def api_ugc_get(stem):
+    work = _ugc_work(stem)
+    if not work.is_dir():
+        abort(404, "no analysis for that video yet")
+    meta = read_json(work / "analysis.json") or {}
+    return jsonify({
+        "stem": work.name, "meta": meta,
+        "deepdive": _ugc_read(work, "deepdive.md"),
+        "narrative": _ugc_read(work, "narrative.md"),
+        "transcript": _ugc_read(work, "transcript.txt"),
+        "narrative_new": _ugc_read(work, "narrative-new.md"),
+        "script_new": _ugc_read(work, "script-new.txt"),
+        "frames": [f"output/ugc/{work.name}/{f}" for f in (meta.get("frames") or [])],
+    })
+
+
+@app.post("/api/ugc/<stem>/save")
+def api_ugc_save(stem):
+    work = _ugc_work(stem)
+    if not work.is_dir():
+        abort(404, "no analysis for that video yet")
+    b = request.get_json(force=True)
+    files = {"deepdive": "deepdive.md", "narrative": "narrative.md",
+             "narrative_new": "narrative-new.md", "script_new": "script-new.txt"}
+    doc = files.get(b.get("doc") or "")
+    text = (b.get("text") or "").strip()
+    if not doc or not text:
+        abort(400, "need doc (deepdive|narrative|narrative_new|script_new) and text")
+    (work / doc).write_text(text + "\n", encoding="utf-8")
+    return jsonify({"saved": f"output/ugc/{work.name}/{doc}", "chars": len(text)})
+
+
+def ugc_generate_worker(job_id: str, work: Path, what: str, instruction: str,
+                        duration: float, refs: list) -> None:
+    job = jobs[job_id]
+
+    def log(line: str) -> None:
+        with jobs_lock:
+            job["lines"].append(line)
+
+    try:
+        narrative = (_ugc_read(work, "narrative-new.md").strip()
+                     or _ugc_read(work, "narrative.md").strip())
+        if not narrative:
+            raise RuntimeError("no narrative to work from — run the analysis first")
+        instr = (f"\nINSTRUCTION FROM THE USER: {instruction.strip()}\n"
+                 if instruction.strip() else "")
+        instr += _ugc_learnings_block()   # past approve/reject verdicts steer every draft
+        if what == "narrative":
+            prompt = UGC_NARRATIVE_PROMPT.format(
+                instruction_block=instr, inspiration=inspiration_block(refs),
+                narrative=narrative, deepdive=_ugc_read(work, "deepdive.md")[:8000])
+            out_file, label = work / "narrative-new.md", "narrative"
+        else:
+            words = max(20, duration * 2.3)   # spoken-word pace the dub engines fit to
+            prompt = UGC_SCRIPT_PROMPT.format(
+                duration=int(duration), lo=int(words * 0.9), hi=int(words * 1.1),
+                instruction_block=instr, inspiration=inspiration_block(refs),
+                narrative=narrative, transcript=_ugc_read(work, "transcript.txt")[:6000])
+            out_file, label = work / "script-new.txt", "script"
+        log(f"Writing a new {label} with Claude (opus)…")
+        env = job_env()
+        env.pop("CLAUDECODE", None)
+        r = subprocess.run([CLAUDE_EXE, "-p", "--model", "opus"], input=prompt,
+                           capture_output=True, text=True, encoding="utf-8",
+                           errors="replace", timeout=600, cwd=str(ROOT), env=env)
+        text = (r.stdout or "").strip()
+        if r.returncode != 0 or not text:
+            raise RuntimeError(f"claude CLI failed (rc={r.returncode}): {(r.stderr or '')[:300]}")
+        out_file.write_text(text + "\n", encoding="utf-8")
+        log("")
+        log(text)
+        log("")
+        log(f"→ saved to output/ugc/{work.name}/{out_file.name} (editable in the tab)")
+        job["returncode"] = 0
+        job["status"] = "done"
+    except Exception as exc:
+        log(f"GENERATION FAILED: {exc}")
+        job["returncode"] = 1
+        job["status"] = "failed"
+    finally:
+        job["ended"] = time.time()
+
+
+@app.post("/api/ugc/<stem>/generate")
+def api_ugc_generate(stem):
+    work = _ugc_work(stem)
+    if not work.is_dir():
+        abort(404, "no analysis for that video yet — analyze first")
+    if not CLAUDE_EXE:
+        abort(500, "claude CLI not found")
+    b = request.get_json(force=True)
+    what = b.get("what") if b.get("what") in ("narrative", "script") else "narrative"
+    try:
+        duration = max(5.0, min(180.0, float(b.get("duration_s") or 30)))
+    except (TypeError, ValueError):
+        duration = 30.0
+    refs = b.get("inspiration") if isinstance(b.get("inspiration"), list) else []
+    job_id = jobs_create("ugc-generate", work.name, f"New {what} — {work.name}")
+    threading.Thread(target=ugc_generate_worker,
+                     args=(job_id, work, what, str(b.get("instruction") or ""),
+                           duration, refs), daemon=True).start()
+    return jsonify({"job_id": job_id})
+
+
+# ── UGC Phase 3: recompose → storyboard → one preview video ────────────────
+# storyboard is FREE (Claude shot list, modelled on the original ad's keyframes).
+# preview is the first paid surface: fal T2V per shot (cost-gated), then free
+# local assembly (XTTS narration from the Voice Bank), optional story tags and
+# a captioned twin. Reuses the brollvid chain end to end.
+
+
+def _ugc_recompose(work: Path) -> dict:
+    return read_json(work / "recompose.json") or {}
+
+
+def _ugc_recompose_save(work: Path, rc: dict) -> None:
+    (work / "recompose.json").write_text(json.dumps(rc, indent=2, ensure_ascii=False),
+                                         encoding="utf-8")
+
+
+def _ugc_batch(rc: dict) -> Path | None:
+    b = rc.get("batch")
+    if not b:
+        return None
+    d = (BROLL_OUT / Path(b).name).resolve()
+    return d if d.is_dir() else None
+
+
+def _character_desc(cid: str) -> str:
+    info = _char_meta(cid)
+    name = info.get("name") or cid
+    notes = (info.get("notes") or "").strip()
+    return (f"{name}{' — ' + notes if notes else ''}. The SAME person in every shot, "
+            "matching the provided reference images exactly: same face, same hair, "
+            "same outfit.")
+
+
+@app.get("/api/ugc/<stem>/recompose")
+def api_ugc_recompose_get(stem):
+    work = _ugc_work(stem)
+    if not work.is_dir():
+        abort(404, "no analysis for that video yet")
+    rc = _ugc_recompose(work)
+    out = {"settings": {k: rc.get(k) for k in
+                        ("batch", "shots", "aspect", "character_id", "voice_id",
+                         "model", "tags", "subtitles")},
+           "shots": [], "clips_ready": 0, "previews": []}
+    bdir = _ugc_batch(rc)
+    if bdir:
+        recipe = read_json(bdir / "recipe.json") or {}
+        out["shots"] = []
+        for s in recipe.get("shots") or []:
+            clip = bdir / "clips" / f"{s.get('id')}.mp4"
+            out["shots"].append({
+                "id": s.get("id"), "title": s.get("title"),
+                "prompt": s.get("prompt"), "duration_s": s.get("duration_s"),
+                "emotional_beat": s.get("emotional_beat"),
+                "clip": rel_from_root(clip) if clip.is_file() else None})
+        out["clips_ready"] = len(list((bdir / "clips").glob("*.mp4"))) if (bdir / "clips").is_dir() else 0
+    for p in rc.get("previews") or []:
+        f = ROOT / p.get("file", "")
+        if not f.is_file():
+            continue
+        slug = p.get("slug", "")
+        cap = ROOT / "output" / "recaption" / slug / "captioned.mp4"
+        mute = ROOT / "output" / "i2v" / slug / f"{slug}-mute.mp4"
+        cmute = ROOT / "output" / "i2v" / slug / f"{slug}-caption-mute.mp4"
+        out["previews"].append({
+            **p,
+            "captioned": f"output/recaption/{slug}/captioned.mp4" if cap.is_file() else None,
+            "mute": f"output/i2v/{slug}/{slug}-mute.mp4" if mute.is_file() else None,
+            "caption_mute": f"output/i2v/{slug}/{slug}-caption-mute.mp4" if cmute.is_file() else None,
+        })
+    return jsonify(out)
+
+
+@app.post("/api/ugc/<stem>/storyboard")
+def api_ugc_storyboard(stem):
+    """FREE: turn script-new.txt into an editable shot list, modelled on the
+    original ad when it is still in the library."""
+    work = _ugc_work(stem)
+    if not work.is_dir():
+        abort(404, "no analysis for that video yet — analyze first")
+    if not CLAUDE_EXE:
+        abort(500, "claude CLI not found")
+    script = _ugc_read(work, "script-new.txt").strip()
+    if len(script.split()) < 5:
+        abort(400, "write or generate a new script first (the “New script” tab)")
+    b = request.get_json(force=True)
+    aspect = b.get("aspect", "9:16")
+    if aspect not in ("9:16", "1:1", "16:9"):
+        abort(400, "bad aspect")
+    try:
+        raw_shots = int(b.get("shots") or 0)
+    except (TypeError, ValueError):
+        raw_shots = 0
+    shots = 0 if raw_shots <= 0 else max(2, min(14, raw_shots))   # 0 = auto (timed to the words)
+    cid = Path(str(b.get("character_id") or "")).name
+    if cid and not _char_meta(cid):
+        abort(400, "character not found in the bank")
+
+    meta = read_json(work / "analysis.json") or {}
+    ref = UPLOADS / str(meta.get("video") or "")
+    batch = f"ugc-{work.name}-{time.strftime('%m%d-%H%M%S')}"
+    bdir = BROLL_OUT / batch
+    bdir.mkdir(parents=True, exist_ok=True)
+    (bdir / "script.txt").write_text(script + "\n", encoding="utf-8")
+
+    cmd = [_cv_py(), str(BROLLVID_ENGINE), "storyboard",
+           "--script", str(bdir / "script.txt"), "--work", str(bdir),
+           "--aspect", aspect, "--shots", str(shots), "--ugc",
+           "--claude", str(CLAUDE_EXE), "--model", "sonnet"]
+    if ref.name and ref.is_file():
+        cmd += ["--ref", str(ref)]
+        tr = _ugc_read(work, "transcript.txt").strip()
+        if tr:
+            cmd += ["--ref-script", tr[:4000]]
+    if cid:
+        cmd += ["--character-desc", _character_desc(cid)]
+
+    rc = _ugc_recompose(work)
+    rc.update({"batch": batch, "aspect": aspect, "shots": shots,
+               "character_id": cid or rc.get("character_id") or ""})
+    _ugc_recompose_save(work, rc)
+    job_id = jobs_create("ugc-storyboard", work.name, f"UGC storyboard — {work.name}")
+    threading.Thread(target=run_job, args=(job_id, cmd), daemon=True).start()
+    return jsonify({"job_id": job_id, "batch": batch})
+
+
+@app.post("/api/ugc/<stem>/recipe")
+def api_ugc_recipe_save(stem):
+    """Save edits to the storyboard (title / prompt / duration per shot)."""
+    work = _ugc_work(stem)
+    bdir = _ugc_batch(_ugc_recompose(work))
+    if not bdir or not (bdir / "recipe.json").is_file():
+        abort(404, "no storyboard yet")
+    edits = request.get_json(force=True).get("shots")
+    if not isinstance(edits, list):
+        abort(400, "need shots: [{id, title?, prompt?, duration_s?}]")
+    recipe = read_json(bdir / "recipe.json") or {}
+    by_id = {s.get("id"): s for s in (recipe.get("shots") or [])}
+    for e in edits:
+        s = by_id.get(e.get("id"))
+        if not s:
+            continue
+        if isinstance(e.get("title"), str) and e["title"].strip():
+            s["title"] = e["title"].strip()[:80]
+        if isinstance(e.get("prompt"), str) and e["prompt"].strip():
+            s["prompt"] = e["prompt"].strip()
+        try:
+            if e.get("duration_s") is not None:
+                s["duration_s"] = max(2.0, min(12.0, float(e["duration_s"])))
+        except (TypeError, ValueError):
+            pass
+    (bdir / "recipe.json").write_text(json.dumps(recipe, indent=2, ensure_ascii=False),
+                                      encoding="utf-8")
+    return jsonify({"saved": len(edits)})
+
+
+@app.post("/api/ugc/<stem>/reshot")
+def api_ugc_reshot(stem):
+    """Fix ONE shot: re-render just that clip on fal (cost-gated at one shot's
+    price), then re-merge with the free re-merge / Add-voice step."""
+    work = _ugc_work(stem)
+    rc = _ugc_recompose(work)
+    bdir = _ugc_batch(rc)
+    if not bdir or not (bdir / "recipe.json").is_file():
+        abort(404, "no storyboard yet")
+    b = request.get_json(force=True)
+    sid = str(b.get("shot_id") or "").strip()
+    recipe = read_json(bdir / "recipe.json") or {}
+    if sid not in {s.get("id") for s in recipe.get("shots") or []}:
+        abort(400, "unknown shot id")
+    model = b.get("model") or rc.get("model") or "kling-o1-ref"
+    if model not in T2V_FAL_MODELS:
+        abort(400, "unknown model")
+    cid = Path(str(b.get("character_id") or rc.get("character_id") or "")).name
+    if T2V_FAL_MODELS[model].get("reference") and not (cid and _char_refs(cid)):
+        abort(400, "this model needs a Character Bank character")
+
+    cmd = [_cv_py(), str(T2V_FAL_ENGINE), "--recipe", str(bdir / "recipe.json"),
+           "--model", model, "--aspect", rc.get("aspect") or "9:16",
+           "--shots", sid, "--env-file", str(FAL_ENV_FILE)]
+    if cid and T2V_FAL_MODELS[model].get("reference"):
+        cmd += ["--character-dir", str(CHARACTERS_DIR / cid)]
+    r = subprocess.run(cmd + ["--estimate-only"], capture_output=True, text=True,
+                       timeout=120, env=job_env())
+    est = None
+    for line in (r.stdout or "").splitlines():
+        if line.startswith("ESTIMATE:"):
+            est = json.loads(line.split(":", 1)[1])
+    if not est:
+        abort(500, "could not estimate the re-render")
+    if not b.get("confirm_cost"):
+        return jsonify({"needs_confirm": True, "estimate": est}), 402
+    job_id = jobs_create("ugc-reshot", work.name, f"Redo shot {sid} — {work.name} [{model}]")
+    threading.Thread(target=run_chain_job,
+                     args=(job_id, [(f"re-render shot {sid} on fal", cmd)], est, work.name),
+                     daemon=True).start()
+    return jsonify({"job_id": job_id, "shot_id": sid, "estimate": est})
+
+
+def _ugc_estimate(bdir: Path, model: str) -> dict:
+    """Price the recipe on fal without spending: t2v_fal --estimate-only."""
+    r = subprocess.run([_cv_py(), str(T2V_FAL_ENGINE), "--recipe", str(bdir / "recipe.json"),
+                        "--model", model, "--estimate-only"],
+                       capture_output=True, text=True, timeout=120, env=job_env())
+    for line in (r.stdout or "").splitlines():
+        if line.startswith("ESTIMATE:"):
+            try:
+                return json.loads(line.split(":", 1)[1])
+            except json.JSONDecodeError:
+                break
+    abort(500, f"could not estimate: {(r.stdout or r.stderr or '')[:200]}")
+
+
+@app.post("/api/ugc/<stem>/preview")
+def api_ugc_preview(stem):
+    """PAID: render every storyboard shot on fal, assemble + narrate locally,
+    then optionally burn story tags and a captioned twin."""
+    work = _ugc_work(stem)
+    rc = _ugc_recompose(work)
+    bdir = _ugc_batch(rc)
+    if not bdir or not (bdir / "recipe.json").is_file():
+        abort(404, "no storyboard yet — write one first (free)")
+    b = request.get_json(force=True)
+    model = b.get("model") or "kling-2.5-pro"
+    if model not in T2V_FAL_MODELS:
+        abort(400, "unknown text-to-video model")
+    aspect = rc.get("aspect") or "9:16"
+    cid = Path(str(b.get("character_id") or rc.get("character_id") or "")).name
+    if T2V_FAL_MODELS[model].get("reference"):
+        if not cid or not _char_refs(cid):
+            abort(400, "this model keeps a persistent character — pick one from the "
+                       "Character Bank (with at least one reference image) first")
+    vid = Path(str(b.get("voice_id") or "")).name          # "", "orig", or a Voice Bank id
+    voice_ref = None
+    meta = read_json(work / "analysis.json") or {}
+    orig = UPLOADS / str(meta.get("video") or "")
+    if vid and vid != "orig":
+        voice_ref = VOICES_DIR / vid / "ref.wav"
+        if not voice_ref.is_file():
+            abort(400, "chosen voice not found in the Voice Bank")
+    elif vid == "orig":
+        # fail BEFORE money is spent, not in the captions step afterwards
+        if not (orig.name and orig.is_file()):
+            abort(400, "the original ad is no longer in the library — pick a Voice Bank voice")
+        if not has_audio_stream(orig):
+            abort(400, "the original ad has no audio to clone a voice from — pick a "
+                       "Voice Bank voice (or “silent”)")
+    will_narrate = bool(voice_ref) or vid == "orig"
+
+    # reuse_clips: shots are already rendered (paid) — re-assemble with a new
+    # voice/tags/subs for free instead of re-rendering on fal
+    reuse = bool(b.get("reuse_clips")) and (bdir / "generated.json").is_file()
+    est = None if reuse else _ugc_estimate(bdir, model)
+    if est and will_narrate:
+        # narration never gets cut — footage shorter than the spoken script means
+        # the last frame freezes to cover the gap. Say so BEFORE money is spent.
+        script_txt = (bdir / "script.txt").read_text(encoding="utf-8", errors="replace") \
+            if (bdir / "script.txt").is_file() else ""
+        vo_est = len(script_txt.split()) / 2.5          # spoken words per second
+        if vo_est > est["seconds"] * 1.2:
+            est["summary"] += (f"  ⚠ the script speaks for ~{vo_est:.0f}s but the footage is "
+                               f"only {est['seconds']:.0f}s — the last frame will freeze for "
+                               f"~{vo_est - est['seconds']:.0f}s. Add shots or shorten the script.")
+    if est and not b.get("confirm_cost"):
+        return jsonify({"needs_confirm": True, "estimate": est}), 402
+    slug = f"ugc-{work.name}-{time.strftime('%m%d-%H%M%S')}"
+    out_dir = I2V_OUT / slug
+    out_dir.mkdir(parents=True, exist_ok=True)
+    want_tags = bool(b.get("tags"))
+    # a silent video has nothing for whisper to caption — skip instead of crash
+    want_subs = bool(b.get("subtitles", True)) and will_narrate
+    # sound-off twins only mean something when there IS sound to strip
+    want_mute = bool(b.get("mute", True)) and will_narrate
+    cv_py = _cv_py()
+
+    gen = [cv_py, str(T2V_FAL_ENGINE), "--recipe", str(bdir / "recipe.json"),
+           "--model", model, "--aspect", aspect, "--env-file", str(FAL_ENV_FILE)]
+    if cid and T2V_FAL_MODELS[model].get("reference"):
+        gen += ["--character-dir", str(CHARACTERS_DIR / cid)]
+    asm = [cv_py, str(BROLLVID_ENGINE), "assemble", "--batch", str(bdir),
+           "--out-dir", str(out_dir), "--ds-py", str(DUB_VENV_PY),
+           "--ds-app", str(Path(CONFIG["dubbing_studio"]) / "app.py")]
+    if voice_ref:
+        asm += ["--voice", str(voice_ref)]
+    elif vid == "orig" and orig.name and orig.is_file():
+        asm += ["--ref-video", str(orig)]
+
+    steps: list[tuple[str, list[str]]] = []
+    if not reuse:
+        steps.append(("generate — render every shot on fal"
+                      + (" (persistent character)" if cid else ""), gen))
+    steps.append(("assemble — stitch the shots and narrate", asm))
+    if want_tags:
+        steps += [
+            ("story tags — on-screen text so it reads muted",
+             [cv_py, str(BROLLVID_ENGINE), "tags", "--recipe", str(bdir / "recipe.json"),
+              "--script", _ugc_read(work, "script-new.txt")[:4000],
+              "--claude", str(CLAUDE_EXE), "--model", "sonnet"]),
+            ("burn tags onto the video",
+             [cv_py, str(TAG_ENGINE), "--video", str(out_dir / "clip.mp4"),
+              "--recipe", str(bdir / "recipe.json"),
+              "--out", str(out_dir / "clip-tagged.mp4")]),
+        ]
+    steps.append(("finalize — stable preview name",
+                  [cv_py, str(UGC_ENGINE), "finalize", "--out-dir", str(out_dir),
+                   "--stem", work.name] + (["--prefer-tagged"] if want_tags else [])))
+    if want_subs:
+        steps.append(("captions — build the subtitled twin",
+                      [str(TRANSCRIBE_VENV_PY), str(ENGINES / "caption.py"),
+                       "--video", str(out_dir / f"{slug}.mp4")]))
+    if want_mute:
+        # after captions, so the subtitled twin gets a sound-off version too
+        steps.append(("mute — sound-off twins",
+                      [cv_py, str(UGC_ENGINE), "mute", "--out-dir", str(out_dir)]))
+
+    rc.update({"model": model, "voice_id": vid, "character_id": cid,
+               "tags": want_tags, "subtitles": want_subs, "mute": want_mute})
+    _ugc_recompose_save(work, rc)
+    job_id = jobs_create("ugc-preview", work.name,
+                         f"UGC preview — {work.name} [{model}]")
+    threading.Thread(target=run_chain_job, args=(job_id, steps, est, slug),
+                     daemon=True).start()
+    return jsonify({"job_id": job_id, "slug": slug, "estimate": est})
+
+
+@app.post("/api/ugc/<stem>/delete")
+def api_ugc_delete(stem):
+    """One-click restart: trash the analysis and every workdir it spawned
+    (batches, previews, captions). Recoverable from .trash; the upload stays."""
+    work = _ugc_work(stem)
+    if not work.is_dir():
+        abort(404, "no analysis with that name")
+    trashed = [soft_delete(work, f"ugc-analysis-{work.name}")]
+    for pattern, label in ((BROLL_OUT, "ugc-batch"), (I2V_OUT, "ugc-out"),
+                           (ROOT / "output" / "recaption", "ugc-cap")):
+        for d in sorted(pattern.glob(f"ugc-{work.name}-*")):
+            if d.is_dir():
+                trashed.append(soft_delete(d, f"{label}-{d.name}"))
+    return jsonify({"deleted": work.name, "trashed": len(trashed)})
+
+
+# ── UGC Phase 4: verdicts → learnings, bulk variants, export + cleanup ──────
+# Approve/reject each preview (with a reason) → banks/ugc-learnings.jsonl, which
+# feeds back into every narrative/script/variant prompt. An approved preview can
+# fan out into N variants that REUSE its paid clips and vary the cheap layers
+# (fresh-hook script, voice, tags, captions); re-rendering visuals per variant
+# is an explicit paid opt-in. Finish = export deliverables to the Desktop
+# exports folder + soft-delete the heavy workdirs.
+
+UGC_LEARNINGS = Path(CONFIG.get("banks_dir") or (ROOT / "banks")) / "ugc-learnings.jsonl"
+ugc_learn_lock = threading.Lock()
+
+
+def _ugc_learnings_rows() -> list[dict]:
+    rows = []
+    if UGC_LEARNINGS.is_file():
+        for line in UGC_LEARNINGS.read_text(encoding="utf-8", errors="replace").splitlines():
+            line = line.strip()
+            if line:
+                try:
+                    rows.append(json.loads(line))
+                except json.JSONDecodeError:
+                    pass
+    return rows
+
+
+def _ugc_learnings_block(limit: int = 12) -> str:
+    rows = _ugc_learnings_rows()[-limit:]
+    if not rows:
+        return ""
+    out = []
+    for r in rows:
+        bits = [b for b in (f'hook "{(r.get("params", {}).get("hook") or "")[:80]}"'
+                            if r.get("params", {}).get("hook") else "",
+                            (r.get("reason") or "").strip()[:160]) if b]
+        out.append(f"- {str(r.get('verdict', '')).upper()}: "
+                   + (" — ".join(bits) if bits else "(no notes)"))
+    return ("\nWHAT THE USER HAS APPROVED/REJECTED BEFORE (write toward the approved "
+            "patterns, away from the rejected ones):\n" + "\n".join(out) + "\n")
+
+
+@app.post("/api/ugc/<stem>/verdict")
+def api_ugc_verdict(stem):
+    work = _ugc_work(stem)
+    rc = _ugc_recompose(work)
+    b = request.get_json(force=True)
+    slug = Path(str(b.get("slug") or "")).name
+    verdict = b.get("verdict")
+    if verdict not in ("approved", "rejected"):
+        abort(400, "verdict must be approved or rejected")
+    hit = next((p for p in rc.get("previews") or [] if p.get("slug") == slug), None)
+    if not hit:
+        abort(404, "no such preview on this analysis")
+    reason = (b.get("reason") or "").strip()[:500]
+    hook = ""
+    bdir = _ugc_batch(rc)
+    script = _ugc_read(work, "script-new.txt").strip()
+    if script:
+        hook = script.splitlines()[0][:160]
+    with ugc_learn_lock:
+        rows = _ugc_learnings_rows()
+        entry = {"id": f"ul-{len(rows) + 1:04d}", "date": time.strftime("%Y-%m-%d"),
+                 "stem": work.name, "slug": slug, "verdict": verdict, "reason": reason,
+                 "params": {"model": rc.get("model"), "voice_id": rc.get("voice_id"),
+                            "character_id": rc.get("character_id"),
+                            "aspect": rc.get("aspect"), "shots": rc.get("shots"),
+                            "tags": rc.get("tags"), "batch": bdir.name if bdir else None,
+                            "hook": hook}}
+        UGC_LEARNINGS.parent.mkdir(parents=True, exist_ok=True)
+        with open(UGC_LEARNINGS, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    hit["verdict"] = verdict
+    if reason:
+        hit["reason"] = reason
+    _ugc_recompose_save(work, rc)
+    return jsonify({"saved": entry["id"], "verdict": verdict})
+
+
+@app.post("/api/ugc/<stem>/bulk")
+def api_ugc_bulk(stem):
+    """Fan an APPROVED preview out into N variants. Free by default (clips are
+    reused; script/voice/tags/captions vary) — re-rendering visuals is paid."""
+    work = _ugc_work(stem)
+    rc = _ugc_recompose(work)
+    bdir = _ugc_batch(rc)
+    if not bdir or not (bdir / "recipe.json").is_file():
+        abort(404, "no storyboard/batch for this analysis")
+    if not (bdir / "generated.json").is_file():
+        abort(400, "no rendered visuals yet — render a preview first")
+    if not any(p.get("verdict") == "approved" for p in rc.get("previews") or []):
+        abort(400, "approve a preview first — bulk clones a video you've judged good")
+    b = request.get_json(force=True)
+    try:
+        count = max(1, min(20, int(b.get("count") or 0)))
+    except (TypeError, ValueError):
+        abort(400, "how many variants? (1-20)")
+    regen = bool(b.get("regen_shots"))
+    model = rc.get("model") or "kling-2.5-pro"
+    if regen and model not in T2V_FAL_MODELS:
+        abort(400, "unknown model for re-rendering")
+    want_tags = bool(b.get("tags", rc.get("tags")))
+    want_subs = bool(b.get("subtitles", rc.get("subtitles", True)))
+    want_mute = bool(b.get("mute", rc.get("mute", True)))
+
+    # voices: fixed, or cycle the picked list per variant
+    meta = read_json(work / "analysis.json") or {}
+    orig = UPLOADS / str(meta.get("video") or "")
+    vids = b.get("voice_ids") if isinstance(b.get("voice_ids"), list) else []
+    vids = [Path(str(v)).name for v in vids if v] or [rc.get("voice_id") or ""]
+    for v in vids:
+        if v and v != "orig" and not (VOICES_DIR / v / "ref.wav").is_file():
+            abort(400, f"voice '{v}' not found in the Voice Bank")
+    if "orig" in vids and not (orig.name and orig.is_file() and has_audio_stream(orig)):
+        abort(400, "the original ad has no audio to clone — pick Voice Bank voices instead")
+
+    est = None
+    if regen:
+        one = _ugc_estimate(bdir, model)
+        est = {**one, "this_run": round(one["this_run"] * count, 2),
+               "summary": f"{count} variants x ({one['summary']})"}
+        if not b.get("confirm_cost"):
+            return jsonify({"needs_confirm": True, "estimate": est}), 402
+
+    cid = rc.get("character_id") or ""
+    cv_py = _cv_py()
+    stamp = time.strftime("%m%d-%H%M%S")
+    steps: list[tuple[str, list[str]]] = []
+
+    for i in range(1, count + 1):
+        vb = BROLL_OUT / f"{bdir.name}-v{i}-{stamp}"
+        vb.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(bdir / "recipe.json", vb / "recipe.json")
+        if not regen:
+            # same paid clips: generated.json records absolute clip paths, so the
+            # variant batch replays them without copying a single video file
+            shutil.copy2(bdir / "generated.json", vb / "generated.json")
+        slug = f"ugc-{work.name}-v{i}-{stamp}"
+        out_dir = I2V_OUT / slug
+        out_dir.mkdir(parents=True, exist_ok=True)
+        voice = vids[(i - 1) % len(vids)]
+
+        steps.append((f"variant {i}/{count} — fresh-hook script",
+                      [cv_py, str(UGC_ENGINE), "variant-script",
+                       "--base", str(bdir / "script.txt"), "--out-dir", str(vb),
+                       "--index", str(i), "--total", str(count),
+                       "--learnings", str(UGC_LEARNINGS)]))
+        if regen:
+            gen = [cv_py, str(T2V_FAL_ENGINE), "--recipe", str(vb / "recipe.json"),
+                   "--model", model, "--aspect", rc.get("aspect") or "9:16",
+                   "--env-file", str(FAL_ENV_FILE)]
+            if cid and T2V_FAL_MODELS[model].get("reference"):
+                gen += ["--character-dir", str(CHARACTERS_DIR / cid)]
+            steps.append((f"variant {i}/{count} — re-render shots on fal", gen))
+        asm = [cv_py, str(BROLLVID_ENGINE), "assemble", "--batch", str(vb),
+               "--out-dir", str(out_dir), "--ds-py", str(DUB_VENV_PY),
+               "--ds-app", str(Path(CONFIG["dubbing_studio"]) / "app.py")]
+        if voice and voice != "orig":
+            asm += ["--voice", str(VOICES_DIR / voice / "ref.wav")]
+        elif voice == "orig" and orig.name and orig.is_file():
+            asm += ["--ref-video", str(orig)]
+        steps.append((f"variant {i}/{count} — assemble + narrate", asm))
+        if want_tags:
+            steps += [
+                (f"variant {i}/{count} — story tags",
+                 [cv_py, str(BROLLVID_ENGINE), "tags", "--recipe", str(vb / "recipe.json"),
+                  "--claude", str(CLAUDE_EXE), "--model", "sonnet"]),
+                (f"variant {i}/{count} — burn tags",
+                 [cv_py, str(TAG_ENGINE), "--video", str(out_dir / "clip.mp4"),
+                  "--recipe", str(vb / "recipe.json"),
+                  "--out", str(out_dir / "clip-tagged.mp4")]),
+            ]
+        steps.append((f"variant {i}/{count} — finalize",
+                      [cv_py, str(UGC_ENGINE), "finalize", "--out-dir", str(out_dir),
+                       "--stem", work.name, "--label", f"variant {i}/{count}"]
+                      + (["--prefer-tagged"] if want_tags else [])))
+        if want_subs and voice:      # a silent variant has nothing to caption
+            steps.append((f"variant {i}/{count} — subtitled twin",
+                          [str(TRANSCRIBE_VENV_PY), str(ENGINES / "caption.py"),
+                           "--video", str(out_dir / f"{slug}.mp4")]))
+        if want_mute and voice:      # sound-off twins (after captions)
+            steps.append((f"variant {i}/{count} — sound-off twins",
+                          [cv_py, str(UGC_ENGINE), "mute", "--out-dir", str(out_dir)]))
+
+    job_id = jobs_create("ugc-bulk", work.name,
+                         f"UGC bulk — {count} variant(s) of {work.name}"
+                         + (" [re-rendered $]" if regen else " [clips reused, free]"))
+    threading.Thread(target=run_chain_job, args=(job_id, steps, est, work.name),
+                     daemon=True).start()
+    return jsonify({"job_id": job_id, "count": count, "estimate": est})
+
+
+@app.post("/api/ugc/<stem>/finish")
+def api_ugc_finish(stem):
+    """Export deliverables to the Desktop exports folder, then soft-delete the
+    heavy workdirs (recoverable from trash). The analysis itself stays."""
+    work = _ugc_work(stem)
+    rc = _ugc_recompose(work)
+    previews = rc.get("previews") or []
+    if not previews:
+        abort(400, "nothing to export yet")
+    only_approved = bool(request.get_json(force=True).get("only_approved", True))
+    picks = [p for p in previews if p.get("verdict") == "approved"] if only_approved else previews
+    if not picks:
+        picks = previews          # nothing approved → export everything rather than nothing
+    EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
+    saved = []
+
+    def send(src: Path, flat: str) -> None:
+        if not src.is_file():
+            return
+        dest, n = EXPORTS_DIR / flat, 2
+        while dest.exists():
+            dest = EXPORTS_DIR / f"{Path(flat).stem}-{n}{Path(flat).suffix}"
+            n += 1
+        shutil.copy2(src, dest)
+        saved.append(str(dest))
+
+    for p in picks:
+        slug = p.get("slug", "")
+        send(ROOT / p.get("file", ""), f"{slug}.mp4")
+        send(ROOT / "output" / "recaption" / slug / "captioned.mp4", f"{slug}-subtitled.mp4")
+        send(ROOT / "output" / "i2v" / slug / f"{slug}-mute.mp4", f"{slug}-muted.mp4")
+        send(ROOT / "output" / "i2v" / slug / f"{slug}-caption-mute.mp4",
+             f"{slug}-subtitled-muted.mp4")
+    if not saved:
+        abort(404, "no deliverable files found — did the previews finish?")
+
+    # heavy workdirs → trash (paid clips live in the batch dirs; they're exported now)
+    trashed = []
+    for d in sorted(BROLL_OUT.glob(f"ugc-{work.name}-*")):
+        if d.is_dir():
+            trashed.append(soft_delete(d, f"ugc-batch-{d.name}"))
+    for p in previews:
+        slug = p.get("slug", "")
+        for d in (I2V_OUT / slug, ROOT / "output" / "recaption" / slug):
+            if d.is_dir():
+                trashed.append(soft_delete(d, f"ugc-out-{slug}"))
+    rc["finished"] = {"when": time.strftime("%Y-%m-%d %H:%M:%S"),
+                      "exported": saved, "trashed": len(trashed)}
+    _ugc_recompose_save(work, rc)
+    return jsonify({"exported": saved, "trashed": len(trashed),
+                    "folder": str(EXPORTS_DIR)})
+
+
+# ------------------------------------------------ Character Bank
+# Persistent characters for reference-conditioned video (Kling O1 / 3.0 elements):
+# 1-7 reference images per character, reused across every generated shot so the
+# same person appears in all of them. Mirrors the Voice Bank layout exactly.
+# Registration is always deliberate (button, never automatic) — the bank is for
+# your own footage, your own talent, or synthetic characters.
+
+CHARACTERS_DIR = ROOT / "output" / "characters"
+CHAR_IMG_EXTS = {".jpg", ".jpeg", ".png", ".webp"}
+CHAR_MAX_REFS = 7
+
+CHAR_NAME_PROMPT = """Read the image {ref} with the Read tool. It is a reference photo of a \
+character for AI video generation. Respond with ONLY a short friendly display name for this \
+character (2-4 words, e.g. "Kitchen Mom — 40s" or "Gym Guy — 20s"): who they read as, no \
+real-person name guesses, no punctuation other than a dash, no quotes, no preamble."""
+
+
+def _char_meta(cid: str) -> dict:
+    return read_json(CHARACTERS_DIR / cid / "character.json") or {}
+
+
+def _char_refs(cid: str) -> list[str]:
+    refs = CHARACTERS_DIR / cid / "refs"
+    if not refs.is_dir():
+        return []
+    return [f"output/characters/{cid}/refs/{p.name}"
+            for p in sorted(refs.iterdir()) if p.suffix.lower() in CHAR_IMG_EXTS]
+
+
+def _char_new_id(name: str) -> str:
+    cid = secure_filename(name).strip(".-_").lower() or "character"
+    base, n = cid, 2
+    while (CHARACTERS_DIR / cid).exists():
+        cid = f"{base}-{n}"
+        n += 1
+    return cid
+
+
+def _char_save_ref(d: Path, f) -> str:
+    ext = Path(f.filename).suffix.lower()
+    if ext not in CHAR_IMG_EXTS:
+        abort(400, f"reference must be one of: {', '.join(sorted(CHAR_IMG_EXTS))}")
+    refs = d / "refs"
+    refs.mkdir(parents=True, exist_ok=True)
+    n = len(list(refs.glob("ref-*"))) + 1
+    if n > CHAR_MAX_REFS:
+        abort(400, f"a character holds at most {CHAR_MAX_REFS} reference images")
+    out = refs / f"ref-{n:02d}{ext}"
+    f.save(out)
+    return out.name
+
+
+def _char_autoname(d: Path, fallback: str) -> str:
+    """Best-effort friendly name from the first reference image (haiku vision)."""
+    if not CLAUDE_EXE:
+        return fallback
+    refs = _char_refs(d.name)
+    if not refs:
+        return fallback
+    try:
+        env = job_env()
+        env.pop("CLAUDECODE", None)
+        r = subprocess.run(
+            [CLAUDE_EXE, "-p", "--model", "haiku", "--allowedTools", "Read",
+             "--disallowedTools", "Write,Edit,Bash,NotebookEdit,WebFetch,WebSearch,Task"],
+            input=CHAR_NAME_PROMPT.format(ref="refs/" + Path(refs[0]).name),
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=120, cwd=str(d), env=env)
+        name = (r.stdout or "").strip().splitlines()[0].strip().strip('"').strip()
+        return name[:40] if r.returncode == 0 and 2 < len(name) <= 60 else fallback
+    except Exception:
+        return fallback
+
+
+@app.get("/characters")
+def characters_page():
+    return send_from_directory(STATIC, "characters.html")
+
+
+@app.get("/api/characters")
+def api_characters():
+    out = []
+    if CHARACTERS_DIR.is_dir():
+        for d in sorted(CHARACTERS_DIR.iterdir(), key=lambda x: x.stat().st_mtime,
+                        reverse=True):
+            if not d.is_dir():
+                continue
+            info = _char_meta(d.name)
+            refs = _char_refs(d.name)
+            if not info or not refs:
+                continue
+            out.append({"id": d.name, "name": info.get("name") or d.name,
+                        "source": info.get("source"), "created": info.get("created"),
+                        "notes": info.get("notes") or "", "refs": refs})
+    return jsonify({"characters": out})
+
+
+@app.post("/api/characters/create")
+def api_characters_create():
+    """Register a character from uploaded reference image(s). Name optional —
+    left blank, haiku suggests one from the first reference."""
+    files = [f for f in request.files.getlist("file") if f and f.filename]
+    if not files:
+        abort(400, "no reference image")
+    if len(files) > CHAR_MAX_REFS:
+        abort(400, f"at most {CHAR_MAX_REFS} reference images")
+    name = (request.form.get("name") or "").strip()[:40]
+    cid = _char_new_id(name or Path(files[0].filename).stem)
+    d = CHARACTERS_DIR / cid
+    d.mkdir(parents=True, exist_ok=True)
+    try:
+        for f in files:
+            _char_save_ref(d, f)
+    except Exception:
+        shutil.rmtree(d, ignore_errors=True)
+        raise
+    named_by = "user"
+    if not name:
+        name = _char_autoname(d, cid)
+        named_by = "auto" if name != cid else "fallback"
+    (d / "character.json").write_text(json.dumps(
+        {"name": name, "source": "upload", "created": time.time(),
+         "named_by": named_by}, indent=2), encoding="utf-8")
+    return jsonify({"id": cid, "name": name, "refs": _char_refs(cid)})
+
+
+@app.post("/api/characters/from-video")
+def api_characters_from_video():
+    """Register a character from one frame of a library video (deliberate button —
+    only use videos whose people you have the rights to)."""
+    b = request.get_json(force=True)
+    fname = Path(b.get("file") or "").name
+    src = UPLOADS / fname
+    if not fname or not src.is_file():
+        abort(400, "pick a library video first")
+    try:
+        t = max(0.0, float(b.get("t") or 0))
+    except (TypeError, ValueError):
+        t = 0.0
+    name = (b.get("name") or "").strip()[:40]
+    cid = _char_new_id(name or src.stem)
+    d = CHARACTERS_DIR / cid
+    refs = d / "refs"
+    refs.mkdir(parents=True, exist_ok=True)
+    out = refs / "ref-01.jpg"
+    r = subprocess.run([ff_tool("ffmpeg"), "-y", "-loglevel", "error",
+                        "-ss", f"{t:.3f}", "-i", str(src),
+                        "-frames:v", "1", "-q:v", "2", str(out)],
+                       capture_output=True, timeout=120, env=job_env())
+    if r.returncode != 0 or not out.is_file() or out.stat().st_size == 0:
+        shutil.rmtree(d, ignore_errors=True)
+        abort(400, "could not grab a frame at that timestamp")
+    named_by = "user"
+    if not name:
+        name = _char_autoname(d, cid)
+        named_by = "auto" if name != cid else "fallback"
+    (d / "character.json").write_text(json.dumps(
+        {"name": name, "source": fname, "source_t": round(t, 2),
+         "created": time.time(), "named_by": named_by}, indent=2), encoding="utf-8")
+    return jsonify({"id": cid, "name": name, "refs": _char_refs(cid)})
+
+
+@app.post("/api/characters/<cid>/add-ref")
+def api_characters_add_ref(cid):
+    cid = Path(cid).name
+    d = CHARACTERS_DIR / cid
+    if not d.is_dir() or not _char_meta(cid):
+        abort(404, "character not found")
+    f = request.files.get("file")
+    if not f or not f.filename:
+        abort(400, "no reference image")
+    _char_save_ref(d, f)
+    return jsonify({"id": cid, "refs": _char_refs(cid)})
+
+
+@app.post("/api/characters/rename")
+def api_characters_rename():
+    b = request.get_json(force=True)
+    cid = Path(b.get("id") or "").name
+    name = (b.get("name") or "").strip()[:40]
+    cf = CHARACTERS_DIR / cid / "character.json"
+    if not name or not cf.is_file():
+        abort(404, "character not found")
+    info = read_json(cf)
+    info["name"] = name
+    info["named_by"] = "user"
+    cf.write_text(json.dumps(info, indent=2), encoding="utf-8")
+    return jsonify({"id": cid, "name": name})
+
+
+@app.post("/api/characters/delete")
+def api_characters_delete():
+    cid = Path(request.get_json(force=True).get("id") or "").name
+    d = CHARACTERS_DIR / cid
+    if not d.is_dir():
+        abort(404, "character not found")
+    label = soft_delete(d, f"character-{cid}")
+    return jsonify({"deleted": cid, "trash": label})
+
+
+# ── Character Generator: describe a persona → FLUX portrait candidates → pick ─
+# Fully-AI characters: Claude can invent the persona, fal renders candidates
+# (cents, cost-gated), the picked portrait becomes the reference Kling O1 locks
+# onto. Candidates live under _candidates/ until one is promoted to a character.
+
+CHAR_GEN_ENGINE = APP_DIR / "engines" / "char_gen.py"
+CHAR_CANDIDATES = CHARACTERS_DIR / "_candidates"
+
+CHAR_INVENT_PROMPT = """Invent ONE fictional UGC-ad spokesperson persona for a wellness/supplement \
+brand. {hint_block}Respond with ONLY a single-paragraph physical description usable as an \
+image-generation prompt (40-70 words): age range, gender presentation, hair, build, skin, \
+clothing style, vibe. Everyday relatable person, not a model. No name, no backstory, no \
+camera/lighting words, no preamble."""
+
+
+@app.post("/api/characters/invent")
+def api_characters_invent():
+    """Free: Claude writes the persona description the generator will render."""
+    if not CLAUDE_EXE:
+        abort(500, "claude CLI not found")
+    hint = (request.get_json(force=True).get("hint") or "").strip()[:300]
+    prompt = CHAR_INVENT_PROMPT.format(
+        hint_block=f"The user wants: {hint}. " if hint else "")
+    env = job_env()
+    env.pop("CLAUDECODE", None)
+    r = subprocess.run([CLAUDE_EXE, "-p", "--model", "haiku"], input=prompt,
+                       capture_output=True, text=True, encoding="utf-8", errors="replace",
+                       timeout=120, cwd=str(ROOT), env=env)
+    desc = (r.stdout or "").strip()
+    if r.returncode != 0 or len(desc.split()) < 10:
+        abort(500, "could not invent a persona — try describing one yourself")
+    return jsonify({"description": desc})
+
+
+@app.post("/api/characters/generate")
+def api_characters_generate():
+    """Paid (cents): render portrait candidates for the description."""
+    b = request.get_json(force=True)
+    desc = (b.get("description") or "").strip()
+    if len(desc.split()) < 5:
+        abort(400, "describe the character first (or use ✨ invent)")
+    try:
+        count = max(1, min(8, int(b.get("count") or 4)))
+    except (TypeError, ValueError):
+        count = 4
+    batch = f"gen-{time.strftime('%m%d-%H%M%S')}"
+    out_dir = CHAR_CANDIDATES / batch
+    cmd = [_cv_py(), str(CHAR_GEN_ENGINE), "--prompt", desc[:800], "--count", str(count),
+           "--out-dir", str(out_dir), "--env-file", str(FAL_ENV_FILE)]
+    r = subprocess.run(cmd + ["--estimate-only"], capture_output=True, text=True,
+                       timeout=60, env=job_env())
+    est = None
+    for line in (r.stdout or "").splitlines():
+        if line.startswith("ESTIMATE:"):
+            est = json.loads(line.split(":", 1)[1])
+    if not est:
+        abort(500, "could not estimate the generation")
+    if not b.get("confirm_cost"):
+        return jsonify({"needs_confirm": True, "estimate": est}), 402
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "description.txt").write_text(desc + "\n", encoding="utf-8")
+    job_id = jobs_create("char-gen", batch, f"Character candidates — {count} portraits")
+    threading.Thread(target=run_job, args=(job_id, cmd), daemon=True).start()
+    return jsonify({"job_id": job_id, "batch": batch, "estimate": est})
+
+
+@app.get("/api/characters/candidates/<batch>")
+def api_characters_candidates(batch):
+    d = CHAR_CANDIDATES / Path(batch).name
+    if not d.is_dir():
+        abort(404, "no such candidate batch")
+    return jsonify({"batch": d.name,
+                    "description": (d / "description.txt").read_text(encoding="utf-8").strip()
+                    if (d / "description.txt").is_file() else "",
+                    "images": [f"output/characters/_candidates/{d.name}/{p.name}"
+                               for p in sorted(d.glob("cand-*.jpg"))]})
+
+
+@app.post("/api/characters/from-candidates")
+def api_characters_from_candidates():
+    """Promote picked candidate portrait(s) to a real character."""
+    b = request.get_json(force=True)
+    batch = Path(str(b.get("batch") or "")).name
+    d = CHAR_CANDIDATES / batch
+    picks = [Path(str(p)).name for p in (b.get("picks") or []) if p]
+    picks = [p for p in picks if (d / p).is_file()][:CHAR_MAX_REFS]
+    if not picks:
+        abort(400, "pick at least one candidate portrait")
+    name = (b.get("name") or "").strip()[:40]
+    cid = _char_new_id(name or "generated")
+    cd = CHARACTERS_DIR / cid
+    refs = cd / "refs"
+    refs.mkdir(parents=True, exist_ok=True)
+    for i, p in enumerate(picks, 1):
+        shutil.copy2(d / p, refs / f"ref-{i:02d}.jpg")
+    desc = (d / "description.txt").read_text(encoding="utf-8").strip() \
+        if (d / "description.txt").is_file() else ""
+    named_by = "user"
+    if not name:
+        name = _char_autoname(cd, cid)
+        named_by = "auto" if name != cid else "fallback"
+    (cd / "character.json").write_text(json.dumps(
+        {"name": name, "source": "generated", "created": time.time(),
+         "named_by": named_by, "notes": desc[:400]}, indent=2, ensure_ascii=False),
+        encoding="utf-8")
+    shutil.rmtree(d, ignore_errors=True)      # candidates served their purpose
+    return jsonify({"id": cid, "name": name, "refs": _char_refs(cid)})
 
 
 if __name__ == "__main__":
