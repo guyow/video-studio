@@ -9,6 +9,7 @@ python-dotenv>=1.0.0      # .env loader used by scripts/launch_comfyui.py
 fal-client>=1.0.0,<2
 Pillow>=10.0
 numpy>=1.24
+pymupdf>=1.24
 # ---- Core ML stack ----
 # ComfyUI pins torch/torchvision versions in its own requirements.txt
 # at install time. We do NOT pin here to avoid CUDA mismatch.
