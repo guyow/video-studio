@@ -3,7 +3,12 @@
 (function () {
   const VS = window.VS;
   const SC = {latentsync: "~$0.20/40s", musetalk: "~$0.20/40s", veed: "~$0.40/min",
-              standard: "~$3/min", pro: "premium"};
+              hummingbird: "~$2.10/min", standard: "~$3/min", pro: "~$6/min",
+              sync3: "~$8/min"};
+  const TTSNAMES = {hd: "MiniMax 02-HD", turbo: "MiniMax 02-turbo",
+                    hd25: "MiniMax 2.5-HD", turbo25: "MiniMax 2.5-turbo",
+                    f5: "F5-TTS", chatterbox: "Chatterbox HD"};
+  const NOCLONE = ["f5", "chatterbox"];   // zero-shot voices — no $1.50 clone fee
 
   function plan(el) {
     const engine = el.querySelector(".dub-eng.on").dataset.eng;
@@ -18,7 +23,7 @@
     }
     const tts = el.querySelector("#dub-tts").value, tier = el.querySelector("#dub-tier").value;
     return {paid: true, engine,
-      summary: `Cloud: MiniMax/${tts} voice (${tts === "f5" ? "no clone fee" : "+$1.50 one-time clone"}) + ${tier} lip-sync (${SC[tier]}).`};
+      summary: `Cloud: ${TTSNAMES[tts] || tts} voice (${NOCLONE.includes(tts) ? "no clone fee" : "+$1.50 one-time clone"}) + ${tier} lip-sync (${SC[tier]}).`};
   }
 
   VS.registerStep({
@@ -71,7 +76,9 @@
                 <select class="vs-sel" id="dub-llip">
                   <option value="wav2lip-hd" selected>💸 CHEAPEST — Wav2Lip HD, local GPU (FREE)</option>
                   <option value="latentsync">⭐ BEST VALUE — LatentSync, near-best quality ~$0.20/40s 💰</option>
-                  <option value="pro">🏆 BEST — sync v2 PRO, studio-grade (priciest ~$6/min) 💰</option>
+                  <option value="hummingbird">🐦 Hummingbird (Tavus) — photorealistic ~$2.10/min 💰</option>
+                  <option value="pro">🏆 sync v2 PRO, studio-grade ~$6/min 💰</option>
+                  <option value="sync3">👑 sync-3 — newest, most powerful ~$8/min 💰</option>
                   <option value="musetalk">MuseTalk — fal.ai, fast + balanced ~$0.20/40s 💰</option>
                   <option value="wav2lip">Wav2Lip — local GPU, faster but soft mouth (FREE)</option>
                   <option value="none">None — keep the original mouth (FREE)</option>
@@ -88,14 +95,19 @@
             <div id="dub-fal" class="vs-row" style="display:none">
               <label class="vs-hint">voice
                 <select class="vs-sel" id="dub-tts">
-                  <option value="hd" selected>MiniMax speech-02-hd — best voice ($0.10/1k + $1.50 clone) 💰</option>
+                  <option value="hd25" selected>⭐ MiniMax speech-2.5-HD — newest, best ($0.06/1k + $1.50 clone) 💰</option>
+                  <option value="chatterbox">💸 Chatterbox HD — $0.04/1k, clones FREE from source 💰</option>
+                  <option value="turbo25">MiniMax speech-2.5-turbo — $0.04/1k (+$1.50 clone) 💰</option>
+                  <option value="hd">MiniMax speech-02-hd — proven ($0.10/1k + $1.50 clone) 💰</option>
                   <option value="turbo">MiniMax speech-02-turbo (+$1.50 one-time clone) 💰</option>
                   <option value="f5">F5-TTS — $0.05/1k chars, clones free from source 💰</option>
                 </select></label>
               <label class="vs-hint">lip-sync tier
                 <select class="vs-sel" id="dub-tier">
                   <option value="standard" selected>sync-lipsync v2 — ~$3/min 💰</option>
-                  <option value="pro">🏆 BEST — sync v2 PRO, studio-grade (priciest ~$6/min) 💰</option>
+                  <option value="sync3">👑 sync-3 — newest, most powerful ~$8/min 💰</option>
+                  <option value="pro">🏆 sync v2 PRO, studio-grade ~$6/min 💰</option>
+                  <option value="hummingbird">🐦 Hummingbird (Tavus) — photorealistic ~$2.10/min 💰</option>
                   <option value="latentsync">⭐ BEST VALUE — LatentSync, near-best quality ~$0.20/40s 💰</option>
                   <option value="musetalk">MuseTalk — fast + balanced ~$0.20/40s 💰</option>
                   <option value="veed">VEED lipsync — ~$0.40/min 💰</option>

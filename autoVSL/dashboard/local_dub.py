@@ -27,7 +27,7 @@ DS_PY = DUBBING_STUDIO / "venv" / "Scripts" / "python.exe"
 DS_APP = DUBBING_STUDIO / "app.py"
 SWAP = ROOT / "scripts" / "script-swap.py"
 READY_DIR = Path("~/Desktop/liitt testimonial Ready").expanduser()
-FAL_TIERS = {"latentsync", "musetalk", "veed", "standard", "pro"}
+FAL_TIERS = {"latentsync", "musetalk", "veed", "standard", "pro", "hummingbird", "sync3"}
 
 # local lip-sync — dubbing-studio's engine (Wav2Lip + optional GFPGAN restore).
 # It tolerates frames where the face is small/turned/occluded (reuses the last
@@ -122,7 +122,7 @@ def main() -> int:
     ap.add_argument("--name", required=True)
     ap.add_argument("--lipsync",
                     choices=["none", "wav2lip", "wav2lip-hd", "latentsync", "musetalk",
-                             "veed", "standard", "pro"],
+                             "veed", "standard", "pro", "hummingbird", "sync3"],
                     default="none")
     ap.add_argument("--language", default="en")
     ap.add_argument("--keep-volume", type=float, default=0.0,
