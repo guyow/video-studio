@@ -1,0 +1,242 @@
+{
+  "8": {
+    "inputs": {
+      "folder_name": [
+        "13",
+        0
+      ],
+      "filename_prefix": "page",
+      "mode": "increment",
+      "images": [
+        "11",
+        0
+      ]
+    },
+    "class_type": "SaveImageTextDataSetToFolder",
+    "_meta": {
+      "title": "Save Image-Text (to Folder)"
+    }
+  },
+  "9": {
+    "inputs": {
+      "pdf_path": "C:\\Kerjaan\\comfyui-research\\comfyui\\input\\fe76f5c2adcc27597e331fcd3ae889bf.pdf",
+      "dpi": 101,
+      "image_format": "png",
+      "start_page": 0,
+      "max_pages": 0,
+      "jpeg_quality": 95,
+      "force_grayscale": false
+    },
+    "class_type": "PdfToBatchImages",
+    "_meta": {
+      "title": "PDF to Batch Images"
+    }
+  },
+  "11": {
+    "inputs": {
+      "images": [
+        "9",
+        0
+      ]
+    },
+    "class_type": "PreviewImage",
+    "_meta": {
+      "title": "Preview Image"
+    }
+  },
+  "12": {
+    "inputs": {
+      "source": [
+        "9",
+        1
+      ]
+    },
+    "class_type": "PreviewAny",
+    "_meta": {
+      "title": "Preview as Text"
+    }
+  },
+  "13": {
+    "inputs": {
+      "source": [
+        "9",
+        2
+      ]
+    },
+    "class_type": "PreviewAny",
+    "_meta": {
+      "title": "Preview as Text"
+    }
+  },
+  "20": {
+    "inputs": {
+      "folder_path": [
+        "23",
+        0
+      ],
+      "image_extensions": "png,jpg,jpeg,webp,bmp,gif",
+      "sort_by": "name",
+      "start_index": 0,
+      "max_images": 0
+    },
+    "class_type": "BatchImageLoaderNode",
+    "_meta": {
+      "title": "Batch Images (Folder Loader)"
+    }
+  },
+  "23": {
+    "inputs": {
+      "source": [
+        "9",
+        3
+      ]
+    },
+    "class_type": "PreviewAny",
+    "_meta": {
+      "title": "Preview as Text"
+    }
+  },
+  "24": {
+    "inputs": {
+      "images": [
+        "20",
+        0
+      ]
+    },
+    "class_type": "PreviewImage",
+    "_meta": {
+      "title": "Bach PDF Image Preview"
+    }
+  },
+  "25": {
+    "inputs": {
+      "product_description": "BRAND name: Nütrops. Product: Fairy Flame Gummies. IMPORTANT instruction: Make the color code match the product image color code. Do not change the object that have nothing to do with the product",
+      "model": "google/gemini-2.5-flash",
+      "temperature": 0.35,
+      "product_image": [
+        "26",
+        0
+      ],
+      "reference_image": [
+        "24",
+        0
+      ],
+      "additional_object_image": [
+        "42",
+        0
+      ]
+    },
+    "class_type": "UGCBatchVisionPlanner",
+    "_meta": {
+      "title": "UGC Batch Vision Planner"
+    }
+  },
+  "26": {
+    "inputs": {
+      "image": "ScreenShot_2026-06-16_170541_199.webp"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Main Product Image"
+    }
+  },
+  "35": {
+    "inputs": {
+      "resolution": "1K",
+      "aspect_ratio": "auto",
+      "limit_generations": true,
+      "enable_web_search": false,
+      "thinking_level": "none",
+      "safety_tolerance": "4",
+      "audio_url": "",
+      "seed": 1681589074,
+      "prompt_mode": "strict",
+      "fallback_prompt": "",
+      "product_image": [
+        "26",
+        0
+      ],
+      "reference_image": [
+        "24",
+        0
+      ],
+      "prompts": [
+        "25",
+        0
+      ],
+      "additional_object_image": [
+        "42",
+        0
+      ]
+    },
+    "class_type": "FalNanoBanana2EditBatch",
+    "_meta": {
+      "title": "Fal Nano Banana 2 Edit (Batch)"
+    }
+  },
+  "37": {
+    "inputs": {
+      "images": [
+        "35",
+        0
+      ]
+    },
+    "class_type": "PreviewImage",
+    "_meta": {
+      "title": "Preview Image"
+    }
+  },
+  "38": {
+    "inputs": {
+      "source": [
+        "25",
+        0
+      ]
+    },
+    "class_type": "PreviewAny",
+    "_meta": {
+      "title": "Preview as Text"
+    }
+  },
+  "40": {
+    "inputs": {
+      "string_a": [
+        "9",
+        2
+      ],
+      "string_b": "AIconverted",
+      "delimiter": "_"
+    },
+    "class_type": "StringConcatenate",
+    "_meta": {
+      "title": "Concatenate Text"
+    }
+  },
+  "41": {
+    "inputs": {
+      "folder_name": [
+        "40",
+        0
+      ],
+      "filename_prefix": "page",
+      "mode": "increment",
+      "images": [
+        "37",
+        0
+      ]
+    },
+    "class_type": "SaveImageTextDataSetToFolder",
+    "_meta": {
+      "title": "Save Image-Text (to Folder)"
+    }
+  },
+  "42": {
+    "inputs": {
+      "image": "ScreenShot_2026-06-16_170541_199.webp"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Additional Objects"
+    }
+  }
+}
