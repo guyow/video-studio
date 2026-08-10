@@ -88,18 +88,6 @@ small supporting prop to add to the scene in a natural spot, styled to
 match the reference's photographic / graphic language. Do not let it
 disrupt the layout.
 
-Also sometimes user can supply a reference design image that is not a poster, 
-but a product photo or a lifestyle shot. In that case, the reference is still 
-the source of truth for composition, color palette, mood, lighting, and photographic style. 
-The product in image 1 replaces the reference's subject, and the brand/product name(s) in the 
-reference's text slots are replaced with the product name (and any other identifying terms) 
-from product_description. All other text content, typography, and decorative graphics are 
-preserved from the reference.
-
-But all this can be overridden by the user if the specifically instruct the planner. For example, 
-if the user wants to change the typography style from purple themed text to the color match the product, 
-they can specify that in the product_description or other instructions.
-
 Mental model: the user found a poster whose design and copy they like,
 but the brand on it is not theirs. They want their product in the hero
 spot AND their product/brand name in the text slots, with everything
@@ -113,7 +101,7 @@ MODE B — NEW GENERATION (no reference design image)
 The user's intent: design a complete, original UGC-style product poster
 from scratch using product_description as the creative brief.
 
-product_description can be very brief. Read it carefully. It may include
+product_description IS the brief here. Read it carefully. It may include
 or imply: product name, category, target audience, key benefit, tone of
 voice, copy ideas, colors, or a free-form creative direction. Use it.
 
@@ -180,8 +168,7 @@ Example (assuming product_description gives the product name "AURA"):
   - Headline (top-center, bold uppercase, white on dark): "POWER YOUR DAY"
   - Tagline (under headline, light italic, white): "Fuel that lasts"
   - Footer mark (bottom-right, small caps, 60% opacity): "© 2024 AURA"
-The wording and the visual style/typography is a direct copy from the reference 
-or sometimes user literally provides the text or visual style cues. If the reference has
+The wording and the visual style/typography is a direct copy from the reference. If the reference has
 no copy in a given role, omit that line.>
 
 [SCENE] (MODE B only)
@@ -207,24 +194,21 @@ Provide only:
   - Additional optional copy elements (sub-line, flavor, variant, pack-size) 
     ONLY if the product_description/user prompt implies them. OMIT if not.
 
-Keep it tight, the product_description can contain a literal description of the product. 
-List only the key text elements or the user-provided instructions/copy if provided; do
-not transcribe the product description body copy verbatim. 
+Keep it tight. Do not list every text element of the product description; do
+not transcribe the product description body copy verbatim. The product description
+other text elements are replicated by the downstream model directly
+from the image.
 
 Example (product name "AURA"):
-  - tagline: "Feeling Drained?"
-  - description: "The all-natural energy drink that keeps you going without the crash."
+  - tagline: "Power Your Day"
   - wordmark: "AURA"
-  - product effect: "Boosts energy", "Hydrates skin", "Productivity", etc. And somethimes this not a plain text, but a combination of text, visual cues, logo/symbols, 
-    or other visual elements. [TYPOGRAPHY] will handle the typographic treatment. Describe this in a few words, but only if the product_description implies it. OMIT if not.
-  - (any other optional copy elements that are implied by the product_description or user prompt, such as flavor, variant, pack-size, etc.)
 >
 
 [TYPOGRAPHY] (MODE B only)
 <The typographic treatment for the text in the final poster. Specify
 in concrete, visual terms so the downstream model renders text with
 the intended style. Invent a typographic system that fits the
-product's description, [SCENE], [STYLE], [SHOT], and [COPYWRITING].
+product's theme, [SCENE], [STYLE], and [SHOT]. 
 Pick a font family vibe that matches the product
 category and tone (bold sans for tech, elegant serif for beauty,
 rounded display for snacks, hand-lettered for artisan, condensed
@@ -248,7 +232,33 @@ def tensor_to_pil(tensor):
     return Image.fromarray(arr, "RGB")
 
 
-class UGCVisionPlanner:
+def _slice_image(tensor, i):
+    """[B, H, W, C] -> [1, H, W, C] for the i-th image."""
+    return tensor[i:i+1]
+
+
+def _expand_optional(tensor, batch_size):
+    """Expand an optional IMAGE input to a list of length batch_size.
+
+    Returns None if tensor is None.
+    - If tensor batch_size == batch_size: per-image
+    - If tensor batch_size == 1: broadcast to all
+    - Otherwise: raise ValueError
+    """
+    if tensor is None:
+        return None
+    n = int(tensor.shape[0])
+    if n == batch_size:
+        return [tensor[i:i+1] for i in range(batch_size)]
+    if n == 1:
+        return [tensor[0:1] for _ in range(batch_size)]
+    raise ValueError(
+        f"Optional image batch size {n} does not match product image batch size {batch_size}. "
+        f"Provide a single image (broadcast) or a batch matching the product_image batch."
+    )
+
+
+class UGCBatchVisionPlanner:
     @classmethod
     def INPUT_TYPES(cls):
         return {
@@ -277,11 +287,12 @@ class UGCVisionPlanner:
         }
 
     RETURN_TYPES = ("STRING",)
-    RETURN_NAMES = ("prompt",)
-    FUNCTION = "plan"
+    RETURN_NAMES = ("prompts",)
+    OUTPUT_IS_LIST = (True,)
+    FUNCTION = "plan_batch"
     CATEGORY = "UGC Poster/AI"
 
-    def plan(
+    def plan_batch(
         self,
         product_image,
         product_description,
@@ -292,9 +303,8 @@ class UGCVisionPlanner:
     ):
         if fal_client is None:
             raise RuntimeError(
-                "fal-client is not installed. Run: " "python -m pip install fal-client"
+                "fal-client is not installed. Run: python -m pip install fal-client"
             )
-
         if not os.getenv("FAL_KEY"):
             raise RuntimeError(
                 "FAL_KEY is not set. Set your fal.ai API key in the "
@@ -303,40 +313,50 @@ class UGCVisionPlanner:
 
         client = fal_client.SyncClient()
 
-        # Order: [product, reference?, additional_object?]
-        product_pil = tensor_to_pil(product_image)
-        image_urls = [client.upload_image(product_pil, format="jpeg")]
+        batch_size = int(product_image.shape[0])
+        refs = _expand_optional(reference_image, batch_size)
+        objs = _expand_optional(additional_object_image, batch_size)
 
-        if reference_image is not None:
-            ref_pil = tensor_to_pil(reference_image)
-            image_urls.append(client.upload_image(ref_pil, format="jpeg"))
+        outputs = []
+        for i in range(batch_size):
+            # Order: [product, reference?, additional_object?]
+            product_pil = tensor_to_pil(_slice_image(product_image, i))
+            image_urls = [client.upload_image(product_pil, format="jpeg")]
 
-        if additional_object_image is not None:
-            obj_pil = tensor_to_pil(additional_object_image)
-            image_urls.append(client.upload_image(obj_pil, format="jpeg"))
+            ref = refs[i] if refs is not None else None
+            obj = objs[i] if objs is not None else None
 
-        user_prompt = self._make_user_prompt(
-            product_description=product_description,
-            has_reference=reference_image is not None,
-            has_additional_object=additional_object_image is not None,
-        )
+            if ref is not None:
+                ref_pil = tensor_to_pil(ref)
+                image_urls.append(client.upload_image(ref_pil, format="jpeg"))
 
-        arguments = {
-            "image_urls": image_urls,
-            "prompt": user_prompt,
-            "system_prompt": SYSTEM_PROMPT,
-            "model": model,
-            "temperature": float(temperature),
-            "max_tokens": 2000,
-        }
+            if obj is not None:
+                obj_pil = tensor_to_pil(obj)
+                image_urls.append(client.upload_image(obj_pil, format="jpeg"))
 
-        result = client.run(APP, arguments)
-        output_text = result.get("output", "")
+            user_prompt = self._make_user_prompt(
+                product_description=product_description,
+                has_reference=ref is not None,
+                has_additional_object=obj is not None,
+            )
 
-        return (output_text,)
+            arguments = {
+                "image_urls": image_urls,
+                "prompt": user_prompt,
+                "system_prompt": SYSTEM_PROMPT,
+                "model": model,
+                "temperature": float(temperature),
+                "max_tokens": 2000,
+            }
+
+            result = client.run(APP, arguments)
+            outputs.append(result.get("output", ""))
+
+        return (outputs,)
 
     @staticmethod
     def _make_user_prompt(product_description, has_reference, has_additional_object):
+        """Identical to UGCVisionPlanner._make_user_prompt — copy of the original."""
         lines = []
 
         if has_reference:
@@ -405,9 +425,9 @@ class UGCVisionPlanner:
 
 
 NODE_CLASS_MAPPINGS = {
-    "UGCVisionPlanner": UGCVisionPlanner,
+    "UGCBatchVisionPlanner": UGCBatchVisionPlanner,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "UGCVisionPlanner": "UGC Vision Planner",
+    "UGCBatchVisionPlanner": "UGC Batch Vision Planner",
 }
