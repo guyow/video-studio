@@ -66,6 +66,8 @@ DUBSYNC_REPAIR_PY = APP_DIR / "engines" / "dubsync_repair.py"
 VISUAL_REPAIR_PY = APP_DIR / "engines" / "visual_repair.py"
 OBJECT_REPAIR_PY = APP_DIR / "engines" / "object_repair.py"
 FRAME_SWAP_PY = APP_DIR / "engines" / "frame_swap.py"
+BACKGROUND_SWAP_PY = APP_DIR / "engines" / "background_swap.py"
+BACKGROUNDS_DIR = ROOT / "banks" / "backgrounds"      # reusable scene library (green screen → real room)
 # the ONE Desktop folder for finished deliverables (replaces the scattered
 # "litt VSL's" / "liitt testimonial Ready" / "Subtitle Studio" folders going forward)
 EXPORTS_DIR = Path(CONFIG["exports_dir"])
@@ -205,11 +207,15 @@ READY_DIR = Path.home() / "Desktop" / "liitt testimonial Ready"
 # Estimated rates (verified against fal.ai 2026-07). Exact billing lives on fal's dashboard;
 # these give a close running estimate so the user can track spend per run.
 FAL_SPEND_FILE = ROOT / "output" / "fal_spend.json"
-TTS_RATE_PER_1K = {"f5": 0.05, "turbo": 0.06, "hd": 0.10, "local": 0.0}   # USD / 1000 chars
-MINIMAX_CLONE_FEE = 1.50                                                   # one-time per voice (turbo/hd)
+# rates verified against fal.ai model pages on 2026-08-10
+TTS_RATE_PER_1K = {"f5": 0.05, "turbo": 0.06, "hd": 0.10,
+                   "hd25": 0.06, "turbo25": 0.04, "chatterbox": 0.04,
+                   "local": 0.0}                                            # USD / 1000 chars
+MINIMAX_CLONE_FEE = 1.50                                                   # one-time per voice (minimax models)
 LIPSYNC_RATE_PER_SEC = {"latentsync": 0.005, "musetalk": 0.005, "veed": 0.0067,
-                        "standard": 0.05, "pro": 0.10, "none": 0.0, "wav2lip": 0.0,
-                        "wav2lip-hd": 0.0}                                  # USD / second (wav2lip* = local, free; musetalk est.)
+                        "hummingbird": 0.035, "standard": 0.05, "pro": 0.10,
+                        "sync3": 0.1333, "none": 0.0, "wav2lip": 0.0,
+                        "wav2lip-hd": 0.0}                                  # USD / second (wav2lip* = local, free; musetalk est.; hummingbird bills min 15s)
 spend_lock = threading.Lock()
 
 
@@ -227,8 +233,9 @@ def estimate_dub_cost(engine: str, tts: str, tier: str, video: Path, stem: str,
     voice_cost = clone_cost = 0.0
     if engine == "fal":
         voice_cost = round(chars / 1000.0 * TTS_RATE_PER_1K.get(tts, 0.0), 4)
-        if tts in ("turbo", "hd") and already_cloned.get(stem) != tts:
-            clone_cost = MINIMAX_CLONE_FEE            # one-time voice clone for this stem+model
+        if tts in ("turbo", "hd", "turbo25", "hd25") and already_cloned.get(stem) not in (
+                "turbo", "hd", "turbo25", "hd25"):
+            clone_cost = MINIMAX_CLONE_FEE   # one-time MiniMax clone — shared across their models
     lip = tier  # both engines use the tier name for the lip-sync step; local voice is free
     lipsync_cost = round(dur * LIPSYNC_RATE_PER_SEC.get(lip, 0.0), 4)
 
@@ -522,8 +529,9 @@ def api_run():
             # any fal tier costs money
             lipsync = body.get("lipsync") if body.get("lipsync") in (
                 "none", "wav2lip", "wav2lip-hd", "latentsync", "musetalk",
-                "veed", "standard", "pro") else "none"
-            paid = lipsync in ("latentsync", "musetalk", "veed", "standard", "pro")
+                "veed", "standard", "pro", "hummingbird", "sync3") else "none"
+            paid = lipsync in ("latentsync", "musetalk", "veed", "standard", "pro",
+                               "hummingbird", "sync3")
             if paid and not body.get("confirm_cost"):
                 abort(400, f"lip-sync '{lipsync}' runs on fal.ai and costs money — needs cost approval (confirm_cost)")
             cmd = [str(venv_py), str(ENGINES / "local_dub.py"), str(src),
@@ -566,8 +574,11 @@ def api_run():
             # cloud pipeline: always costs money
             if not body.get("confirm_cost"):
                 abort(400, "FAL.AI dub spends money (voice-clone + TTS + lip-sync) — needs cost approval (confirm_cost)")
-            tier = body.get("tier") if body.get("tier") in ("pro", "standard", "veed", "latentsync", "musetalk") else "pro"
-            tts = body.get("tts") if body.get("tts") in ("hd", "turbo", "f5") else "hd"
+            tier = body.get("tier") if body.get("tier") in (
+                "pro", "standard", "veed", "latentsync", "musetalk",
+                "hummingbird", "sync3") else "pro"
+            tts = body.get("tts") if body.get("tts") in (
+                "hd", "turbo", "hd25", "turbo25", "f5", "chatterbox") else "hd"
             cmd = [str(venv_py), str(ENGINES / "dub.py"), str(src),
                    "--name", stem, "--tier", tier, "--tts", tts]
             if body.get("captions", True):
@@ -2941,6 +2952,248 @@ def api_dubsync_upload():
     (work / "source.txt").write_text(str(match), encoding="utf-8")
     return jsonify({"stem": stem, "source": match.name, "auto": True,
                     "score": round(score, 3)})
+
+
+# ------------------------------------------------ Background (green screen → real scene)
+
+BG_IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".webp")
+BG_VIDEO_EXTS = (".mp4", ".mov", ".mkv", ".webm", ".m4v")
+
+
+def _background_path(name: str) -> Path:
+    p = (BACKGROUNDS_DIR / Path(name).name).resolve()
+    if not str(p).startswith(str(BACKGROUNDS_DIR.resolve())) or not p.is_file():
+        abort(404, f"no such background: {name}")
+    return p
+
+
+@app.get("/api/background/list")
+def api_background_list():
+    items = []
+    if BACKGROUNDS_DIR.is_dir():
+        for p in sorted(BACKGROUNDS_DIR.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
+            if p.suffix.lower() not in BG_IMAGE_EXTS + BG_VIDEO_EXTS:
+                continue
+            items.append({"name": p.name, "size": p.stat().st_size,
+                          "mtime": p.stat().st_mtime,
+                          "video": p.suffix.lower() in BG_VIDEO_EXTS,
+                          "url": f"/media/banks/backgrounds/{p.name}"})
+    return jsonify({"backgrounds": items})
+
+
+@app.post("/api/background/upload")
+def api_background_upload():
+    f = request.files.get("file")
+    if not f or not f.filename:
+        abort(400, "drop a background image or video")
+    if Path(f.filename).suffix.lower() not in BG_IMAGE_EXTS + BG_VIDEO_EXTS:
+        abort(400, f"unsupported type: {f.filename}")
+    BACKGROUNDS_DIR.mkdir(parents=True, exist_ok=True)
+    name = secure_filename(Path(f.filename).name) or f"bg-{time.strftime('%Y%m%d-%H%M%S')}{Path(f.filename).suffix}"
+    path, n = BACKGROUNDS_DIR / name, 2
+    while path.exists():
+        path = BACKGROUNDS_DIR / f"{Path(name).stem}-{n}{Path(name).suffix}"
+        n += 1
+    f.save(path)
+    return jsonify({"name": path.name, "url": f"/media/banks/backgrounds/{path.name}"})
+
+
+def _background_source(stem: str) -> Path:
+    """The uploaded source video for a library stem."""
+    for p in UPLOADS.iterdir():
+        if p.is_file() and p.stem == stem and p.suffix.lower() in CREATOR_VIDEO_EXTS:
+            return p
+    abort(404, f"no upload for {stem}")
+
+
+def _background_target(stem: str, body: dict) -> tuple[str, Path]:
+    """Where the swap applies: the dubbed final (take mode) once a dub exists,
+    otherwise the source footage itself (pre-dub, in-place + backup)."""
+    if body.get("target") == "source" or not (SWAP_WORK / stem / "final.mp4").is_file():
+        return "source", _background_source(stem)
+    return "dub", SWAP_WORK / stem
+
+
+def _background_opts(body: dict) -> list[str]:
+    bg = _background_path(body.get("background") or "")
+    cmd = ["--background", str(bg),
+           "--key-color", str(body.get("key_color") or "auto"),
+           "--similarity", str(float(body.get("similarity") or 0.15)),
+           "--blend", str(float(body.get("blend") or 0.05)),
+           "--bg-blur", str(float(body.get("bg_blur", 6)))]
+    if body.get("no_despill"):
+        cmd.append("--no-despill")
+    return cmd
+
+
+@app.post("/api/background/preview")
+def api_background_preview():
+    """Synchronous single-frame composite so the key can be tuned before the
+    full render — returns a /media URL to the fresh preview PNG. Works both
+    before the dub (previews the source footage) and after (the dubbed final)."""
+    body = request.get_json(force=True)
+    stem = Path(body.get("stem") or "").name
+    if not stem:
+        abort(400, "no stem")
+    mode, target = _background_target(stem, body)
+    src = target / "final.mp4" if mode == "dub" else target
+    work = SWAP_WORK / stem
+    work.mkdir(parents=True, exist_ok=True)
+    cmd = [str(Path(CONFIG["venvs"]["cv"])), str(BACKGROUND_SWAP_PY),
+           "--input", str(src)] + _background_opts(body) + \
+          ["--preview", str(work / "bg-preview.png"),
+           "--at", str(float(body.get("at") or 1.0))]
+    r = subprocess.run(cmd, cwd=str(ROOT), env=job_env(), capture_output=True,
+                       text=True, encoding="utf-8", errors="replace", timeout=180)
+    if r.returncode != 0:
+        abort(500, (r.stdout or "")[-400:] or "preview failed")
+    key = ""
+    for line in (r.stdout or "").splitlines():
+        if "key color:" in line:
+            key = line.split("key color:")[-1].strip()
+    return jsonify({"img": f"/media/output/script-swap/{stem}/bg-preview.png?v={int(time.time())}",
+                    "key": key, "mode": mode})
+
+
+@app.post("/api/background/replace")
+def api_background_replace():
+    """Key the green screen out and composite the chosen scene behind the actor.
+    Before a dub exists this applies to the SOURCE footage in place (original
+    backed up to uploads/.originals, restorable) so dub + lip-sync then run on
+    the keyed video. After a dub it produces a new versioned take instead
+    (final.mp4 untouched, promote from the Fix step)."""
+    body = request.get_json(force=True)
+    stem = Path(body.get("stem") or "").name
+    if not stem:
+        abort(400, "no stem")
+    mode, target = _background_target(stem, body)
+    py = str(Path(CONFIG["venvs"]["cv"]))
+    if mode == "dub":
+        cmd = [py, str(BACKGROUND_SWAP_PY), "--work", str(target)] + _background_opts(body)
+        label = f"Background swap (dubbed take) — {stem}"
+    else:
+        cmd = [py, str(BACKGROUND_SWAP_PY), "--input", str(target),
+               "--replace", "--backup-dir", str(UPLOADS / ".originals")] + _background_opts(body)
+        label = f"Background swap (source footage) — {stem}"
+    job_id = jobs_create("background-swap", stem, label, gpu=False)
+    threading.Thread(target=run_job, args=(job_id, cmd), daemon=True).start()
+    return jsonify({"job_id": job_id, "mode": mode})
+
+
+# shared technical constraints — every background plate obeys these regardless of
+# whether the scene comes from the user's own words or from the script
+_BG_SCENE_BASE = (
+    "Generate a photorealistic background plate for a video ad, 16:9 landscape: "
+    "an EMPTY location, eye-level camera at tripod height, natural realistic "
+    "light, lived-in details, shallow depth of field with everything slightly "
+    "soft, natural colours. STRICT: no people, no animals, no readable text, no "
+    "logos, no products, no watermark. The image will be composited BEHIND a "
+    "person filmed on a green screen, so keep the centre of the frame visually "
+    "calm and uncluttered."
+)
+
+_BG_SCENE_FROM_SCRIPT = (
+    "\n\nFirst read the ad script below and infer where this person would "
+    "naturally be filming themselves — a cozy living room, a kitchen, a home "
+    "office, a car, a bathroom counter, a gym — then generate that location."
+    "\n\nSCRIPT:\n"
+)
+
+_BG_SCENE_RECREATE_REF = (
+    "\n\nRecreate the location in the reference image as that background plate: "
+    "the same place, same furniture, materials, colours, window light and mood, "
+    "from the same eye-level camera height — but tidied into a clean EMPTY set: "
+    "remove any people, products, readable text and clutter."
+)
+
+_BG_SCENE_STYLE_REF = (
+    "\n\nUse the reference image as the visual guide: match its style of space, "
+    "materials, colour palette and lighting."
+)
+
+
+@app.post("/api/background/generate")
+def api_background_generate():
+    """Nano Banana designs a scene that MATCHES the video's script (plus any
+    extra direction) and drops it straight into the scene library. Same fal.ai
+    cost gate as the Image editor (402 → confirm_cost)."""
+    body = request.get_json(force=True)
+    stem = Path(body.get("stem") or "").name
+    if not stem:
+        abort(400, "no stem")
+    hint = (body.get("hint") or "").strip()
+    model = body.get("model", "nano-banana")
+    if model not in IMG_MODELS:
+        abort(400, "unknown model")
+
+    ref = None
+    if body.get("ref"):
+        ref = (IMG_REFS / Path(body["ref"]).name).resolve()
+        if not str(ref).startswith(str(IMG_REFS.resolve())) or not ref.is_file():
+            abort(400, "bad reference image")
+
+    if hint:
+        # the user said exactly what they want — their words ARE the scene brief;
+        # the script is deliberately left out so nothing fights their description
+        prompt = _BG_SCENE_BASE + f"\n\nSCENE TO GENERATE (follow this exactly): {hint}"
+        if ref is not None:
+            prompt += _BG_SCENE_STYLE_REF
+    elif ref is not None:
+        # a photo alone: rebuild that exact place as a clean, empty set
+        prompt = _BG_SCENE_BASE + _BG_SCENE_RECREATE_REF
+    else:
+        script_file = SWAP_WORK / stem / "script-edited.txt"
+        script = script_file.read_text(encoding="utf-8").strip() if script_file.is_file() \
+            else transcript_plain_text(stem)
+        if not script:
+            abort(400, "no script or transcript yet — transcribe first, or just type "
+                       "the background you want in the box (or add a reference photo)")
+        prompt = _BG_SCENE_BASE + _BG_SCENE_FROM_SCRIPT + script[:1500]
+
+    est = _img_estimate(model, 1, "1K")
+    if not body.get("confirm_cost"):
+        return jsonify({"needs_confirm": True, "estimate": est}), 402
+
+    work = IMG_OUT / f"bg-{stem}"
+    work.mkdir(parents=True, exist_ok=True)
+    cv_py = Path(CONFIG["venvs"]["cv"])
+    cmd = [str(cv_py), str(IMG_ENGINE), "--work", str(work), "--mode", "generate",
+           "--prompt", prompt, "--model", model, "--num", "1",
+           "--aspect", "16:9", "--resolution", "1K", "--format", "png",
+           "--user-text", hint or ("recreate the reference photo" if ref is not None
+                                   else "scene matched to the script"),
+           "--env-file", str(FAL_ENV_FILE)]
+    if ref is not None:
+        cmd += ["--ref", str(ref)]
+
+    def _thread(job_id, cmd, slug, est, work, stem):
+        before = {p.name for p in work.glob("v*.*")}
+        run_img_job(job_id, cmd, slug, est)
+        job = jobs[job_id]
+        if job["status"] != "done":
+            return
+        fresh = sorted((p for p in work.glob("v*.*")
+                        if p.suffix.lower() in BG_IMAGE_EXTS and p.name not in before),
+                       key=lambda p: p.stat().st_mtime, reverse=True)
+        if not fresh:
+            with jobs_lock:
+                job["lines"].append("[background] no image came back from the engine")
+            job["status"] = "failed"
+            return
+        BACKGROUNDS_DIR.mkdir(parents=True, exist_ok=True)
+        dest, n = BACKGROUNDS_DIR / f"{stem}-scene.png", 2
+        while dest.exists():
+            dest = BACKGROUNDS_DIR / f"{stem}-scene-{n}.png"
+            n += 1
+        shutil.copy2(fresh[0], dest)
+        with jobs_lock:
+            job["lines"].append(f"🌄 added to the scene library: {dest.name}")
+        job["bg_scene"] = dest.name
+
+    job_id = jobs_create("background-scene", stem, f"Nano Banana scene — {stem}")
+    threading.Thread(target=_thread, args=(job_id, cmd, f"bg-{stem}", est, work, stem),
+                     daemon=True).start()
+    return jsonify({"job_id": job_id, "estimate": est})
 
 
 # ------------------------------------------------ Exports (Phase 5: one deliverables view)

@@ -35,8 +35,10 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("video")
     ap.add_argument("--name", required=True)
-    ap.add_argument("--tier", choices=["pro", "standard", "veed", "latentsync"], default="pro")
-    ap.add_argument("--tts", choices=["hd", "turbo", "f5"], default="hd")
+    ap.add_argument("--tier", choices=["sync3", "pro", "standard", "hummingbird",
+                                       "veed", "latentsync", "musetalk"], default="pro")
+    ap.add_argument("--tts", choices=["hd", "turbo", "hd25", "turbo25", "f5", "chatterbox"],
+                    default="hd")
     ap.add_argument("--captions", action="store_true",
                     help="burn word-timed captions from the script after lip-sync (free, local)")
     args = ap.parse_args()
@@ -125,7 +127,7 @@ def main() -> int:
     elif prev.get("tier", "pro") != args.tier and (ready.is_file() or final.is_file()):
         archive_videos(f"lip-sync tier changed ({prev.get('tier', 'pro')} -> {args.tier})")
 
-    if args.tts != "f5":
+    if args.tts not in ("f5", "chatterbox"):    # zero-shot voices clone free in the speak stage
         run_stage("clone", [str(video), "--name", args.name])   # cached after first run (voice.json)
     run_stage("speak", [str(video), "--name", args.name, "--tts", args.tts])
     run_stage("lipsync", ["--name", args.name, "--tier", args.tier])

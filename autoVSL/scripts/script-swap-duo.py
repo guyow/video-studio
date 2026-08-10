@@ -108,6 +108,13 @@ def build_reference(cfg: dict, name: str, speaker: str) -> Path:
         streams = "".join(f"[{i}:a]" for i in range(len(parts)))
         filt = f"{streams}concat=n={len(parts)}:v=0:a=1[out]"
         ff([*inputs, "-filter_complex", filt, "-map", "[out]", "-ar", "32000", "-ac", "1", str(ref)])
+    # MiniMax voice-clone rejects samples under 10s (422 audio_duration_too_short);
+    # loop short references — repeated speech clones fine, silence padding doesn't.
+    if probe_dur(ref) < 10.5:
+        looped = work / f"ref-{speaker}-looped.wav"
+        loops = max(1, int(10.5 // max(probe_dur(ref), 0.5)) + 1)
+        ff(["-stream_loop", str(loops), "-i", str(ref), "-t", "15", str(looped)])
+        looped.replace(ref)
     return ref
 
 
