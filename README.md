@@ -80,11 +80,12 @@ Without it, everything local still runs; the cloud features stay off.
 | `dubbing-studio/` | XTTS voice cloning + Wav2Lip lip-sync |
 | `subtitle-studio/` | subtitle removal + caption burning |
 | `install/` | pinned requirements + machine setup + packaging scripts |
-| `docs/` | architecture and handoff notes |
+| `PROJECT-SUMMARY.md` | architecture and developer handoff notes |
+| `docs/` | operational handoff notes (e.g. giving the app to a VA) |
 
 Jobs are persistent and GPU-arbitrated (one GPU job at a time), so a render survives
 a restart. Two rules the engines follow deliberately: **`-shortest` is never used**
 (it silently drops frames — build to a known duration and verify), and **every paid
 call is estimated and confirmed before it runs**.
 
-Start with `docs/ARCHITECTURE.md`.
+Start with `PROJECT-SUMMARY.md`.
