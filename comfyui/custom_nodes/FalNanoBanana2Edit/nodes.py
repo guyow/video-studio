@@ -167,22 +167,41 @@ class FalNanoBanana2Edit:
                 "(e.g. the actual candy, the contents of the package, etc.)."
             )
 
-        final_prompt = "\n".join(
+        # --- 14-image limit enforcement ---
+        total_images = len(images)
+        if total_images > 14:
+            excess = total_images - 14
+            images = images[:14]
+            labels = labels[:14]
+            print(
+                f"[FalNanoBanana2Edit] WARNING: NanoBanana Edit supports max 14 "
+                f"images. Dropping {excess} image(s). "
+                f"Total: 14/{total_images} kept."
+            )
+
+        prompt_parts = []
+        prompt_parts.extend(
             [
                 *labels,
                 "",
                 "Use the reference images according to their descriptions above.",
                 "The actual product must remain recognizable and commercially accurate.",
                 "Do not redesign the package, logo, brand identity, or printed claims.",
-                prompt.strip(),
             ]
         )
+        prompt_parts.append(prompt.strip())
+        final_prompt = "\n".join(prompt_parts)
 
         with tempfile.TemporaryDirectory(prefix="comfy_fal_nano_") as tmpdir:
-            image_urls = [
-                _upload_image(fal_client, image, tmpdir, f"input_{index}")
-                for index, image in enumerate(images, start=1)
-            ]
+            image_urls = []
+            for index, image in enumerate(images, start=1):
+                if isinstance(image, torch.Tensor):
+                    url = _upload_image(fal_client, image, tmpdir, f"input_{index}")
+                else:
+                    pil_path = Path(tmpdir) / f"input_{index}.png"
+                    image.save(pil_path, format="PNG")
+                    url = fal_client.upload_file(str(pil_path))
+                image_urls.append(url)
 
             arguments = {
                 "prompt": final_prompt,
