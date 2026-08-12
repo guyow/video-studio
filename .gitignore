@@ -111,3 +111,7 @@ Thumbs.db
 video-studio/output/
 video-studio/server.log
 video-studio/server.err.log
+
+.opencode/
+docs/plan
+opencode.json
