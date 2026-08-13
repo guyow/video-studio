@@ -1,0 +1,420 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Poster Studio — Video Studio</title>
+<link rel="stylesheet" href="/static/vs.css">
+<script src="/static/vs-nav.js" defer></script>
+<style>
+  * { box-sizing:border-box; margin:0; }
+  body { background:radial-gradient(1100px 500px at 75% -10%, #1a2036 0%, var(--bg) 55%);
+         color:var(--text); min-height:100vh; }
+  a { color:var(--accent2); text-decoration:none; }
+  .cols { display:grid; grid-template-columns:400px 1fr; gap:18px; align-items:start; }
+  @media (max-width:960px){ .cols{ grid-template-columns:1fr; } }
+  label.fld { display:block; font-size:12px; color:var(--dim); margin:12px 0 4px;
+    text-transform:uppercase; letter-spacing:.4px; }
+  select, input[type=text], input[type=number], textarea { width:100%; background:#0a0d13;
+    border:1px solid var(--line); border-radius:10px; color:var(--text); padding:9px 12px;
+    font-size:13.5px; font-family:inherit; }
+  textarea { resize:vertical; min-height:52px; }
+  .drop-img { border:2px dashed var(--line); border-radius:12px; min-height:96px; display:flex;
+    align-items:center; justify-content:center; text-align:center; color:var(--dim); cursor:pointer;
+    padding:12px; transition:.15s; }
+  .drop-img:hover,.drop-img.drag { border-color:var(--accent); color:var(--accent2);
+    background:rgba(124,92,255,.06); }
+  .drop-img.on { border-style:solid; border-color:var(--ok); color:var(--ok); }
+  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:9px; }
+  .row label.lbl { font-size:12px; color:var(--dim); min-width:64px; }
+  .row select, .row input { flex:1; }
+  .chk { display:flex; gap:8px; align-items:center; font-size:12.5px; color:var(--dim); margin-top:9px; }
+  .chk input { accent-color:var(--accent); }
+  .est { font-size:13px; color:var(--warn); font-weight:600; margin-top:10px; }
+  .free { color:var(--ok); }
+  .copyfields { background:var(--panel2); border:1px solid var(--line); border-radius:12px;
+    padding:12px; margin-top:10px; display:none; }
+  .gallery { display:grid; grid-template-columns:repeat(auto-fill,minmax(170px,1fr)); gap:12px; }
+  .gcard { background:var(--panel); border:1px solid var(--line); border-radius:12px;
+    overflow:hidden; }
+  .gcard img { width:100%; display:block; aspect-ratio:1; object-fit:cover; background:#0a0d14; cursor:zoom-in; }
+  .gcard .meta { padding:6px 9px; font-size:11px; color:var(--dim); display:flex; gap:6px; align-items:center; }
+  .gcard .meta .use { margin-left:auto; }
+  .gcard button { background:var(--panel2); border:1px solid var(--line); color:var(--text);
+    border-radius:7px; padding:3px 8px; font-size:11px; cursor:pointer; }
+  .gcard button:hover { border-color:var(--accent); }
+  .vs-hint { color:var(--dim); font-size:12px; }
+  #lb { position:fixed; inset:0; z-index:90; display:flex; align-items:center; justify-content:center;
+    background:rgba(4,6,10,.86); backdrop-filter:blur(3px); }
+  #lb .box { background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:12px;
+    max-width:92vw; max-height:92vh; display:flex; flex-direction:column; gap:10px; }
+  #lb img { max-width:88vw; max-height:74vh; border-radius:9px; display:block;
+    background:repeating-conic-gradient(#12161f 0% 25%, #0d1017 0% 50%) 50%/22px 22px; }
+  #lb .bar { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  #lb .bar .nm { font-size:12px; color:var(--dim); margin-right:auto; }
+  #joblog { background:#080b11; border:1px solid var(--line); border-radius:9px; padding:8px 10px;
+    font:12px/1.5 ui-monospace,Consolas,monospace; color:#9fb0c8; max-height:180px; overflow:auto;
+    white-space:pre-wrap; display:none; margin-top:8px; }
+</style>
+</head>
+<body>
+<div class="vs-page" style="max-width:1240px">
+  <h2>🖼 Poster Studio <span class="vs-hint">— product photo → branded poster</span></h2>
+  <p class="lead">One product photo + a text brief becomes a finished, brand-text-composited liitt
+    poster. A vision planner writes the scene + copy, Nano Banana paints the background, and the
+    compositor overlays headline / subtitle / body + the locked wordmark.</p>
+
+  <div class="cols">
+    <div class="vs-panel" style="margin:0">
+      <h3>1 · Product</h3>
+      <label class="drop-img" id="drop">
+        <input type="file" id="pfile" accept="image/png,image/jpeg,image/webp" style="display:none">
+        <span id="dropmsg">⬆ Drop the product photo here<br>
+          <span class="vs-hint">jpg · png · webp — up to 25 MB</span></span>
+      </label>
+      <div class="drop-img" id="objdrop" style="min-height:70px">
+        <input type="file" id="ofile" accept="image/png,image/jpeg,image/webp" style="display:none">
+        <span id="objmsg">＋ Optional: an additional object / prop image</span>
+      </div>
+
+      <h3 style="margin-top:18px">2 · Brief</h3>
+      <textarea id="brief" rows="4" placeholder="describe the poster — e.g. a dreamy midnight ad for the Fairy Flame gummies"></textarea>
+      <div class="vs-hint" style="margin-top:4px">Override blocks (optional):
+        <code>[PRODUCT]:</code>, <code>[MOOD]:</code>, <code>[COLOR]:</code> — one per line.</div>
+
+      <h3 style="margin-top:18px">3 · Plan</h3>
+      <div class="row"><label class="lbl">Vision</label>
+        <select id="provider"></select>
+        <select id="pmodel"></select></div>
+      <div class="row">
+        <button class="vs-btn primary" id="btn-plan">🧠 Write the plan</button>
+        <button class="vs-btn ghost" id="btn-replan" style="display:none">↻ re-plan</button>
+      </div>
+      <div class="vs-hint" id="plannote" style="margin-top:6px"></div>
+
+      <div class="copyfields" id="copyfields">
+        <label class="fld">Headline</label><textarea id="c-headline"></textarea>
+        <label class="fld">Subtitle</label><textarea id="c-subtitle"></textarea>
+        <label class="fld">Body</label><textarea id="c-body"></textarea>
+        <div class="vs-hint" style="margin-top:6px">Edits here are cosmetic — the compositor uses the
+          plan's copy. Regenerate the plan to change wording.</div>
+      </div>
+
+      <h3 style="margin-top:18px">4 · Generate</h3>
+      <div class="row"><label class="lbl">Model</label><select id="genmodel"></select></div>
+      <div class="row" id="resrow"><label class="lbl">Resolution</label><select id="resolution"></select></div>
+      <div class="row"><label class="lbl">Format</label><select id="aspect"></select></div>
+      <div class="row"><label class="lbl">Variants</label>
+        <select id="num">
+          <option value="1">1 image</option><option value="2">2</option>
+          <option value="3">3</option><option value="4">4</option>
+        </select>
+        <label class="lbl">Seed</label><input type="number" id="seed" value="0" min="0"></div>
+      <label class="chk"><input type="checkbox" id="scrim"> Soft scrim under text (legibility on busy scenes)</label>
+      <label class="chk"><input type="checkbox" id="editable"> Editable mode — pick a raw, then composite</label>
+      <div class="est" id="est">estimated cost: —</div>
+      <div class="row">
+        <button class="vs-btn primary" id="btn-generate">✨ Generate the poster</button>
+      </div>
+    </div>
+
+    <div>
+      <div class="vs-hint" id="jobnote" style="margin-top:8px"></div>
+      <div id="joblog"></div>
+      <h3 style="margin-top:16px; font-size:14px; color:var(--accent2)">Posters</h3>
+      <div class="gallery" id="gallery"><div class="vs-hint">nothing yet — upload a product photo →</div></div>
+    </div>
+  </div>
+</div>
+
+<div id="lb" style="display:none">
+  <div class="box">
+    <img id="lbimg" alt="">
+    <div class="bar">
+      <span class="nm" id="lbname"></span>
+      <a class="vs-btn primary" id="lbsave" download>⬇ Save</a>
+      <button class="vs-btn" id="lbclose">✕ Close</button>
+    </div>
+  </div>
+</div>
+
+<script src="/static/js/vs-core.js"></script>
+<script>
+(async () => {
+  const $ = s => document.querySelector(s);
+  const S = { slug:null, cfg:null, plan:null, provider:"claude", busy:false };
+
+  // ── config ──────────────────────────────────────────────────────────
+  try { S.cfg = await VS.api("/api/poster/config"); }
+  catch (e) { VS.toast("could not load config: " + e.message); return; }
+
+  function populateProviders() {
+    $("#provider").innerHTML = Object.entries(S.cfg.providers).map(([k, v]) =>
+      `<option value="${k}">${k === "claude" ? "Claude (free plan)" : "Gemini ($0.03)"}</option>`).join("");
+    populateModels();
+  }
+  function populateModels() {
+    const p = S.provider;
+    const models = S.cfg.providers[p].models;
+    $("#pmodel").innerHTML = models.map(m =>
+      `<option value="${m}">${m}</option>`).join("");
+  }
+  $("#provider").onchange = e => { S.provider = e.target.value; populateModels(); refreshEst(); };
+  populateProviders();
+
+  $("#genmodel").innerHTML = S.cfg.gen_models.map(m =>
+    `<option value="${m.key}">${VS.esc(m.label)}</option>`).join("");
+  $("#genmodel").value = S.cfg.defaults.gen_model;
+  $("#aspect").innerHTML = S.cfg.aspects.map(a =>
+    `<option value="${a.key}"${a.key === S.cfg.defaults.aspect ? " selected" : ""}>${a.key === "ig_feed" ? "Instagram 4:5 (1080×1350)" : "TikTok 9:16 (1080×1920)"}</option>`).join("");
+  $("#num").value = S.cfg.defaults.num;
+  $("#resolution").innerHTML = S.cfg.resolutions.map(r =>
+    `<option value="${r}"${r === S.cfg.defaults.resolution ? " selected" : ""}>${r}</option>`).join("");
+
+  function genMeta(k) { return S.cfg.gen_models.find(m => m.key === k) || S.cfg.gen_models[0]; }
+  function syncRes() {
+    const rs = genMeta($("#genmodel").value).resolutions || [];
+    $("#resrow").style.display = rs.length ? "" : "none";
+  }
+  syncRes();
+  $("#genmodel").onchange = () => { syncRes(); refreshEst(); };
+  $("#aspect").onchange = () => {};
+  $("#num").onchange = refreshEst;
+  $("#resolution").onchange = refreshEst;
+
+  async function refreshEst() {
+    if (!S.cfg) return;
+    try {
+      const e = await VS.post("/api/poster/estimate", {
+        gen_model: $("#genmodel").value, num: +$("#num").value,
+        resolution: $("#resolution").value, provider: S.provider,
+      });
+      $("#est").textContent = `estimated cost: ~$${e.this_run.toFixed(3)}  ·  ${e.summary}`;
+    } catch (e) { /* non-fatal */ }
+  }
+
+  // ── upload (product + optional object, sent together) ───────────────
+  const drop = $("#drop"), pfile = $("#pfile");
+  const objdrop = $("#objdrop"), ofile = $("#ofile");
+  drop.onclick = () => pfile.click();
+  pfile.onchange = e => { if (e.target.files[0]) { S.productFile = e.target.files[0]; doUpload(); } };
+  ["dragover","dragleave","drop"].forEach(ev => drop.addEventListener(ev, e => {
+    e.preventDefault(); drop.classList.toggle("drag", ev === "dragover");
+    if (ev === "drop" && e.dataTransfer.files[0]) { S.productFile = e.dataTransfer.files[0]; doUpload(); }
+  }));
+  objdrop.onclick = () => ofile.click();
+  ofile.onchange = e => { if (e.target.files[0]) { S.objectFile = e.target.files[0]; doUpload(); } };
+  ["dragover","dragleave","drop"].forEach(ev => objdrop.addEventListener(ev, e => {
+    e.preventDefault(); objdrop.classList.toggle("drag", ev === "dragover");
+    if (ev === "drop" && e.dataTransfer.files[0]) { S.objectFile = e.dataTransfer.files[0]; doUpload(); }
+  }));
+
+  async function doUpload() {
+    if (!S.productFile) { VS.toast("drop the product photo first"); return; }
+    const fd = new FormData();
+    fd.append("product", S.productFile);
+    if (S.objectFile) fd.append("object", S.objectFile);
+    $("#dropmsg").textContent = "uploading…";
+    try {
+      const r = await fetch("/api/poster/upload", {method:"POST", body: fd});
+      if (!r.ok) throw new Error((await r.text()).slice(0, 160));
+      const d = await r.json();
+      S.slug = d.slug; S.plan = null;
+      drop.classList.add("on");
+      $("#dropmsg").textContent = "✓ " + d.product.split("/").pop();
+      if (d.object) {
+        objdrop.classList.add("on");
+        $("#objmsg").textContent = "✓ " + d.object.split("/").pop();
+      }
+      $("#copyfields").style.display = "none";
+      $("#btn-replan").style.display = "none";
+      $("#plannote").textContent = "";
+      $("#jobnote").textContent = "Uploaded — write the brief, then Write the plan.";
+      renderGallery({raws: [], finals: []});
+    } catch (e) { VS.toast("Upload failed: " + e.message); }
+  }
+
+  // ── plan ────────────────────────────────────────────────────────────
+  function parseCopyElements(text) {
+    const out = {headline:"", subtitle:"", body:""};
+    for (const line of (text || "").split("\n")) {
+      const l = line.trim();
+      if (!l.startsWith("{")) continue;
+      try {
+        const o = JSON.parse(l);
+        if (o.type === "HEADLINE") out.headline = o.text || "";
+        else if (o.type === "SUBTITLE") out.subtitle = o.text || "";
+        else if (o.type === "BODY") out.body = o.text || "";
+      } catch (e) { /* skip */ }
+    }
+    return out;
+  }
+
+  async function runPlan() {
+    if (!S.slug) { VS.toast("upload a product photo first"); return; }
+    const brief = $("#brief").value.trim();
+    const body = {slug: S.slug, provider: S.provider, model: $("#pmodel").value, brief};
+    if (S.provider === "gemini" &&
+        !confirm("⚠ Gemini planner costs ~$0.03 on fal.ai.\n\nApprove? (Cancel = nothing charged)")) {
+      VS.toast("Cancelled — nothing charged"); return;
+    }
+    $("#btn-plan").disabled = true;
+    $("#plannote").textContent = "🧠 planning… (one fast LLM call)";
+    try {
+      const d = await VS.post("/api/poster/plan", body);
+      S.plan = d.plan;
+      const ce = parseCopyElements(d.plan.copy_elements);
+      $("#c-headline").value = ce.headline;
+      $("#c-subtitle").value = ce.subtitle;
+      $("#c-body").value = ce.body;
+      $("#copyfields").style.display = "block";
+      $("#btn-replan").style.display = "";
+      const cost = d.planner_cost ? ` · planner $${d.planner_cost.toFixed(2)}` : "";
+      $("#plannote").textContent = "✓ plan ready" + cost;
+      VS.toast("✓ plan written");
+    } catch (e) {
+      $("#plannote").textContent = "";
+      VS.toast("Planning failed: " + e.message);
+    } finally { $("#btn-plan").disabled = false; }
+  }
+  $("#btn-plan").onclick = runPlan;
+  $("#btn-replan").onclick = runPlan;
+
+  // ── generate (402 cost gate) ────────────────────────────────────────
+  async function priceOf(body) {
+    const r = await fetch("/api/poster/generate", {method:"POST",
+      headers:{"Content-Type":"application/json"}, body: JSON.stringify(body)});
+    if (r.status === 402) return (await r.json()).estimate;
+    if (!r.ok) throw new Error((await r.text()).slice(0, 200));
+    return null;
+  }
+
+  function startJobLog(label) {
+    $("#joblog").style.display = "block";
+    $("#joblog").textContent = "";
+    $("#jobnote").textContent = label || "working…";
+  }
+
+  async function watch(jobId) {
+    let off = 0, status = "running";
+    while (status === "running") {
+      await new Promise(r => setTimeout(r, 1500));
+      let j; try { j = await VS.api(`/api/job/${jobId}?offset=${off}`); } catch (e) { continue; }
+      for (const line of (j.lines || [])) {
+        const d = document.createElement("div");
+        d.textContent = line;
+        if (/error|failed|traceback/i.test(line)) d.style.color = "var(--bad)";
+        $("#joblog").appendChild(d);
+      }
+      $("#joblog").scrollTop = $("#joblog").scrollHeight;
+      off = j.next_offset != null ? j.next_offset : off + (j.lines || []).length;
+      status = j.status;
+    }
+    $("#jobnote").textContent = status === "done" ? "✅ done" : "❌ " + status;
+    if (status !== "done") VS.toast("Job " + status + " — see the log");
+    return status;
+  }
+
+  async function generate() {
+    if (!S.slug) { VS.toast("upload a product photo first"); return; }
+    if (!S.plan) { VS.toast("write the plan first (step 3)"); return; }
+    const body = {
+      slug: S.slug, gen_model: $("#genmodel").value, aspect: $("#aspect").value,
+      num: +$("#num").value, seed: +$("#seed").value || 0,
+      resolution: $("#resolution").value, scrim: $("#scrim").checked,
+      editable: $("#editable").checked,
+    };
+    let est;
+    try { est = await priceOf(body); }
+    catch (e) { VS.toast("Error: " + e.message); return; }
+    if (est && !confirm(`⚠ This spends money on fal.ai:\n\n${est.summary}\n\n≈ $${est.this_run.toFixed(3)}\n\nApprove and generate? (Cancel = nothing charged)`)) {
+      VS.toast("Cancelled — nothing charged"); return;
+    }
+    S.busy = true; $("#btn-generate").disabled = true;
+    startJobLog("✨ generating…");
+    try {
+      const r = await VS.post("/api/poster/generate", Object.assign({confirm_cost:true}, body));
+      const st = await watch(r.job_id);
+      if (st === "done") { await reload(); }
+    } catch (e) { VS.toast("Generate failed: " + e.message); }
+    S.busy = false; $("#btn-generate").disabled = false;
+  }
+  $("#btn-generate").onclick = generate;
+
+  async function composite(raw) {
+    if (!S.slug || !S.plan) { VS.toast("run the planner first"); return; }
+    S.busy = true;
+    startJobLog("🧩 compositing… (free, local Pillow)");
+    try {
+      const r = await VS.post("/api/poster/composite", {slug: S.slug, raw, aspect: $("#aspect").value, scrim: $("#scrim").checked});
+      const st = await watch(r.job_id);
+      if (st === "done") await reload();
+    } catch (e) { VS.toast("Composite failed: " + e.message); }
+    S.busy = false;
+  }
+
+  // ── gallery + item ──────────────────────────────────────────────────
+  async function reload() {
+    if (!S.slug) return;
+    const d = await VS.api(`/api/poster/item/${S.slug}`);
+    renderGallery(d);
+  }
+
+  function renderGallery(d) {
+    const g = $("#gallery");
+    const editable = $("#editable").checked;
+    const raws = (d.raws || []);
+    const finals = (d.finals || []);
+    const cards = [];
+    if (editable && raws.length) {
+      cards.push(`<div style="grid-column:1/-1" class="vs-hint">Raws — pick one to composite:</div>`);
+      raws.forEach(r => cards.push(`
+        <div class="gcard">
+          <img src="${r.url}" data-url="${r.url}" data-name="${r.name}" alt="">
+          <div class="meta"><span>${VS.esc(r.name)}</span>
+            <button class="use" data-raw="${VS.esc(r.name)}">🧩 use this one</button></div>
+        </div>`));
+    }
+    if (finals.length) {
+      cards.push(`<div style="grid-column:1/-1" class="vs-hint">Finals:</div>`);
+      finals.forEach(f => cards.push(`
+        <div class="gcard">
+          <img src="${f.url}" data-url="${f.url}" data-name="${f.name}" alt="">
+          <div class="meta"><span>${VS.esc(f.name)}</span></div>
+        </div>`));
+    }
+    if (!cards.length) {
+      g.innerHTML = `<div class="vs-hint">${S.slug ? "no posters yet — generate one →" : "nothing yet — upload a product photo →"}</div>`;
+      return;
+    }
+    g.innerHTML = cards.join("");
+  }
+  $("#gallery").onclick = e => {
+    const use = e.target.closest("[data-raw]");
+    if (use) { composite(use.dataset.raw); return; }
+    const img = e.target.closest("img[data-url]");
+    if (img) openLB(img.dataset.url, img.dataset.name);
+  };
+
+  // ── lightbox ────────────────────────────────────────────────────────
+  let lbName = null;
+  function openLB(url, name) {
+    lbName = name;
+    $("#lbimg").src = url;
+    $("#lbsave").href = url;
+    $("#lbsave").download = name;
+    $("#lbname").textContent = name;
+    $("#lb").style.display = "flex";
+  }
+  function closeLB() { $("#lb").style.display = "none"; }
+  $("#lbclose").onclick = closeLB;
+  $("#lb").onclick = e => { if (e.target.id === "lb") closeLB(); };
+  document.addEventListener("keydown", e => {
+    if (e.key === "Escape" && $("#lb").style.display !== "none") closeLB();
+  });
+
+  refreshEst();
+})();
+</script>
+</body>
+</html>

@@ -20,10 +20,11 @@
         ["🖼 Image Editor", "/image-editor", "erase / replace / re-frame stills"],
         ["🔬 Frame Reader", "/frame-reader", "winning UGC → shot-by-shot script"],
       ] },
-    { label: "🏷 Brand & Ads", match: ["/batches", "/brand-studio", "/creator", "/mission", "/studio"],
+    { label: "🏷 Brand & Ads", match: ["/batches", "/brand-studio", "/creator", "/mission", "/studio", "/poster"],
       items: [
         ["📦 Ad Batches", "/batches", "template → copy → production tracker"],
         ["🎨 Brand Studio", "/brand-studio", "brand-locked social statics"],
+        ["🖼 Poster Studio", "/poster", "product photo → branded poster"],
         ["🏭 Ads Factory", "/creator", "products, research, VSL builds"],
         ["🚀 Missions", "/mission", "multi-step ad missions"],
         ["🧪 ComfyUI (raw)", "/studio", "direct image generation"],

@@ -6507,6 +6507,40 @@ def batches_page():
     return send_from_directory(STATIC, "batches.html")
 
 
+# ---------------------------------------------------------------- poster studio
+# Single static poster: product photo + brief → planner → Nano Banana gen →
+# Pillow composite. Its own blueprint for the same reason as the others above.
+import api_poster  # noqa: E402
+
+POSTER_PLANNER_PY = APP_DIR / "engines" / "poster_planner.py"
+POSTER_GEN_PY = APP_DIR / "engines" / "poster_gen.py"
+POSTER_COMPOSITOR_DIR = ROOT.parent / "comfyui" / "custom_nodes" / "LiittCompositor"
+POSTER_BRAND_DIR = ROOT.parent / "comfyui" / "brand"
+POSTER_LAYOUT_JSON = POSTER_BRAND_DIR / "liitt_layout_templates-revised.json"
+POSTER_PROMPT_FILE = ROOT / "banks" / "poster-brand" / "planner-prompt.txt"
+api_poster.init(
+    ROOT,
+    cv_py=str(Path(CONFIG["venvs"]["cv"])),
+    fal_env=FAL_ENV_FILE,
+    claude_exe=CLAUDE_EXE or "",
+    planner_py=POSTER_PLANNER_PY,
+    gen_py=POSTER_GEN_PY,
+    compositor_dir=POSTER_COMPOSITOR_DIR,
+    brand_dir=POSTER_BRAND_DIR,
+    layout_json=POSTER_LAYOUT_JSON,
+    prompt_file=POSTER_PROMPT_FILE,
+    jobs_create=jobs_create,
+    run_job=run_job,
+    record_spend=record_spend,
+)
+app.register_blueprint(api_poster.bp)
+
+
+@app.get("/poster")
+def poster_page():
+    return send_from_directory(STATIC, "poster.html")
+
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", CONFIG.get("port", 5181)))
     # bind to all interfaces (phone access) only when lan_access is on AND a PIN is set
