@@ -70,11 +70,11 @@ GUIDELINES - use your design judgment within these bounds:
    Fire: #C34605 (dragon), Cosmic: #C9C3DC (unicorn)
 
 TEXT COLORS (approved for text on #0A0A0A backgrounds):
-- Headlines / Display: #C9C3DA (Soft Lavender) - primary headline color
-- Headline accent / Wordmark: #FFC233 (Signature Yellow) - wordmark, price, emphasis
+- Headlines / Display: #C9C3DA (Soft Lavender) or Ivory White (#FAFAF7) - primary headline color
 - Headline alt: #FF5A1F (Electric Flame Orange) - alternative headline accent
+- Headline accent / Wordmark: #FFC233 (Signature Yellow) - wordmark, price, emphasis
 - Subtitles / Mood badges: use the chosen mood's hex color as accent
-- Body copy / Descriptions: #8E899F (Dusty Purple Gray) - editorial body text
+- Body copy / Descriptions: #8E899F (Dusty Purple Gray) or Ivory White (#FAFAF7) - editorial body text
 - Captions / Secondary: #14122B (Dark Navy Blue) - subtle secondary text, low contrast on dark backgrounds
 
 7. TYPOGRAPHY - Display/H1: Bricolage Grotesque bold. UI/labels: Hanken 
@@ -299,7 +299,7 @@ positions in natural language only. The three parts above map
 directly to the layout's product / text-zone / background areas.>
 
 IMPORTANT (always output this exact line, immediately after [IMAGE SCENE]):
-Do not render any copy elements, only design scene.
+Do not render any copy elements, brand or wordmark logo, only design scene.
 
 [COPY_ELEMENTS_MACHINE]              (always)
 <Machine-parseable copy elements for the compositor. One JSON object per
@@ -325,6 +325,12 @@ MODE B ZONE MAPPING RULES (NEW_GENERATION only):
   SUBTITLE -> subheadline zone
   BODY     -> body zone (only if the layout supports body)
   WORDMARK -> logo position (from [CHOSEN LAYOUT])
+- SUBTITLE must be 7-12 words - a substantive benefit/mood line, not a 2-word label.
+- BODY COPY FORM (MODE B): Vary the body copy across ONE of these 3 forms, matched to the chosen mood/theme and layout — do NOT default to storytelling every time:
+  1. STORYTELLING — a short narrative beat (a moment, a feeling, a before/after glimpse).
+  2. SOCIAL PROOF / DATA-DRIVEN BENEFIT — a compact benefit list or a proof/data line (ratings, counts, or 2–3 inline benefits).
+  3. PROBLEM-SOLUTION & REASON-WHY — the 'before' tension, then the reason the product resolves it.
+  BODY must be 15–30 words. Write benefits INLINE (comma or short-phrase separated) — do NOT use bullet characters ("•", "-", "*") or line breaks; the compositor renders BODY as a single wrapped paragraph.
 - TAGLINE is NOT a standalone element: if the tagline must appear, fold
   it into the HEADLINE or BODY text — never invent a new screen position.
 - If the chosen layout has no body zone (body:NO), do NOT emit a BODY
@@ -405,6 +411,7 @@ def _load_layout_templates(filepath):
     # Resolve relative paths against ComfyUI root
     if not os.path.isabs(path):
         from folder_paths import get_input_directory
+
         comfy_root = os.path.dirname(get_input_directory())
         path = os.path.join(comfy_root, path)
         path = os.path.realpath(path)
@@ -562,9 +569,7 @@ class UGCVisionPlanner:
                 brand_dir = brand_guide_val
             else:
                 brand_root = os.path.realpath(
-                    os.path.join(
-                        os.path.dirname(__file__), "..", "..", "..", "brand"
-                    )
+                    os.path.join(os.path.dirname(__file__), "..", "..", "..", "brand")
                 )
                 brand_dir = os.path.join(brand_root, brand_guide_val)
             brand_dir = os.path.realpath(brand_dir)

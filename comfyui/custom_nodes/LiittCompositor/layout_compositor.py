@@ -33,6 +33,7 @@ LAYOUT_SPEC_RE = re.compile(
 
 FALLBACK_HEADLINE_HEX = "#C9C3DA"
 FALLBACK_BODY_HEX = "#8E899F"
+FALLBACK_BODY_BRIGHT_HEX = "#FAFAF7"
 FALLBACK_SUBTITLE_HEX = "#C9C3DA"
 DEFAULT_BG_HEX = "#0A0A0A"
 DEFAULT_SHADOW_COLOR = (11, 10, 28)
@@ -47,6 +48,9 @@ GLOW_BLUR = 12
 LUMINANCE_THRESHOLD = 128
 LOGOMARK_MIN_HEIGHT = 120
 LOGOMARK_MAX_HEIGHT = 150
+# Vertical gap kept between the wordmark and text zones when they collide
+# (as a fraction of canvas height).
+LOGO_CLEARANCE_RATIO = 0.03
 
 # Map family + weight → static .ttf filename.
 FONT_FILES: dict[str, dict[str, str]] = {
@@ -106,6 +110,55 @@ def _box_px(box, W, H):
         return (0, 0, W, H)
     x0, y0, x1, y1 = box
     return (int(x0 * W), int(y0 * H), int(x1 * W), int(y1 * H))
+
+
+def _overlaps(a, b) -> bool:
+    """True when two pixel boxes intersect on BOTH the x and y axes."""
+    return a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]
+
+
+def _shift_box(box, dy: int):
+    """Translate a pixel box vertically by dy (keeps width/height)."""
+    x0, y0, x1, y1 = box
+    return (x0, y0 + dy, x1, y1 + dy)
+
+
+def _avoid_logo_overlap(
+    logo_box,
+    logo_is_top: bool,
+    headline_box,
+    subhead_box,
+    body_box,
+    H: int,
+):
+    """Nudge text zones so the pasted wordmark never covers text.
+
+    A TOP logo collides with the headline: the whole text stack (headline,
+    subheadline, body) is moved DOWN together (preserving relative spacing) so
+    the headline starts below the logo. A BOTTOM logo collides with the
+    body/subheadline: those boxes are moved UP so they end above the logo.
+    Boxes that don't overlap the logo (horizontally or vertically) are left
+    untouched. Returns the possibly-adjusted (headline, subheadline, body).
+    """
+    margin = int(LOGO_CLEARANCE_RATIO * H)
+    if logo_is_top:
+        if _overlaps(logo_box, headline_box):
+            dy = (logo_box[3] + margin) - headline_box[1]
+            if dy > 0:
+                headline_box = _shift_box(headline_box, dy)
+                subhead_box = _shift_box(subhead_box, dy)
+                if body_box:
+                    body_box = _shift_box(body_box, dy)
+    else:
+        if body_box and _overlaps(logo_box, body_box):
+            dy = (logo_box[1] - margin) - body_box[3]
+            if dy < 0:
+                body_box = _shift_box(body_box, dy)
+        if _overlaps(logo_box, subhead_box):
+            dy = (logo_box[1] - margin) - subhead_box[3]
+            if dy < 0:
+                subhead_box = _shift_box(subhead_box, dy)
+    return headline_box, subhead_box, body_box
 
 
 def _normalize_weight(weight: str) -> str:
@@ -284,12 +337,15 @@ def _fit_logo(
     box_px,
     min_h: int = LOGOMARK_MIN_HEIGHT,
     max_h: int = LOGOMARK_MAX_HEIGHT,
+    canvas_size=None,
 ):
     """Resize logo to fit inside box_px while preserving aspect ratio.
 
     If the requested box is shorter than min_h, scale it outward preserving
     the box center. If the box is taller than max_h, scale it inward preserving
-    the box center. Returns (resized_rgba, (paste_x, paste_y)).
+    the box center. When canvas_size=(W, H) is supplied the final box is
+    clamped to the canvas so a top logo can never render off-canvas.
+    Returns (resized_rgba, (paste_x, paste_y)).
     """
     x0, y0, x1, y1 = box_px
     box_w = x1 - x0
@@ -315,6 +371,18 @@ def _fit_logo(
         y0 = int(cy - box_h / 2)
         x1 = x0 + box_w
         y1 = y0 + box_h
+    # Clamp the (possibly outward-scaled) box to the canvas so the paste stays
+    # on-screen — top logos scaled around their center can push y0 negative.
+    if canvas_size:
+        W, H = canvas_size
+        x0 = max(0, x0)
+        y0 = max(0, y0)
+        x1 = min(W, x1)
+        y1 = min(H, y1)
+        box_w = x1 - x0
+        box_h = y1 - y0
+        if box_w <= 0 or box_h <= 0:
+            return img, (0, 0)
     if iw <= 0 or ih <= 0:
         return img, (x0, y0)
     scale = min(box_w / iw, box_h / ih)
@@ -552,6 +620,12 @@ def render_layout(
     body_box = _box_px(body_zone_spec.get("box"), W, H) if body_supported else None
     logo_box = _box_px(templates.logo_box(logo_position), W, H)
 
+    # --- keep the wordmark clear of text (top logo vs headline, bottom vs body)
+    logo_is_top = logo_position.startswith("top_")
+    headline_box, subhead_box, body_box = _avoid_logo_overlap(
+        logo_box, logo_is_top, headline_box, subhead_box, body_box, H
+    )
+
     # --- optional scrim under zones
     if scrim:
         zones = [headline_box, subhead_box, logo_box]
@@ -605,7 +679,7 @@ def render_layout(
             )
             sub_family = subtitle_el.get("font_family", "Hanken Grotesk")
             sub_weight = subtitle_el.get("font_weight", "medium")
-            sub_size = max(18, min(48, int(0.35 * headline_final_size)))
+            sub_size = max(28, min(56, int(0.45 * headline_final_size)))
             try:
                 sub_font = _load_font(brand.font_path(sub_family, sub_weight), sub_size)
                 sub_lines = _wrap_text(
@@ -631,9 +705,11 @@ def render_layout(
             body_color = _hex_rgb(
                 body_el.get("color"), default=_hex_rgb(FALLBACK_BODY_HEX)
             )
+            if _is_dark(canvas) and body_color == _hex_rgb(FALLBACK_BODY_HEX):
+                body_color = _hex_rgb(FALLBACK_BODY_BRIGHT_HEX)
             body_family = body_el.get("font_family", "Newsreader")
-            body_weight = body_el.get("font_weight", "regular")
-            body_size = max(16, min(40, int(0.55 * headline_final_size)))
+            body_weight = body_el.get("font_weight", "medium")
+            body_size = max(16, min(38, int(0.48 * headline_final_size)))
             try:
                 body_font = _load_font(
                     brand.font_path(body_family, body_weight), body_size
@@ -668,7 +744,9 @@ def render_layout(
     if wordmark_p.is_file():
         try:
             wm = Image.open(wordmark_p).convert("RGBA")
-            wm_resized, paste_xy = _fit_logo(wm, logo_box, min_h=LOGOMARK_MIN_HEIGHT)
+            wm_resized, paste_xy = _fit_logo(
+                wm, logo_box, min_h=LOGOMARK_MIN_HEIGHT, canvas_size=(W, H)
+            )
             canvas.paste(wm_resized, paste_xy, wm_resized)
         except Exception as e:
             print(f"[LiittCompositor] WARNING: failed to load wordmark: {e}")
