@@ -2,9 +2,15 @@
    Interview mode (two speakers, both voices cloned, active-speaker sync). */
 (function () {
   const VS = window.VS;
+  // offline fallback only — real rates come from /api/prices (one source of truth)
   const SC = {latentsync: "~$0.20/40s", musetalk: "~$0.20/40s", veed: "~$0.40/min",
               hummingbird: "~$2.10/min", standard: "~$3/min", pro: "~$6/min",
               sync3: "~$8/min"};
+  VS.api("/api/prices").then(p => {
+    for (const [tier, perSec] of Object.entries(p.lipsync_per_sec || {})) {
+      if (perSec > 0) SC[tier] = `~$${(perSec * 60).toFixed(2)}/min`;
+    }
+  }).catch(() => {});
   const TTSNAMES = {hd: "MiniMax 02-HD", turbo: "MiniMax 02-turbo",
                     hd25: "MiniMax 2.5-HD", turbo25: "MiniMax 2.5-turbo",
                     f5: "F5-TTS", chatterbox: "Chatterbox HD"};
@@ -200,15 +206,33 @@
           body.tts = el.querySelector("#dub-tts").value;
           body.tier = el.querySelector("#dub-tier").value;
         }
-        if (p.paid) {
-          if (!confirm("⚠ This run spends money on fal.ai:\n\n" + p.summary +
-            "\n\nApprove and start? (Cancel = nothing charged)")) return;
-          body.confirm_cost = true;
-        }
+        // ask the server for the real price first (402 → {estimate}); only send
+        // confirm_cost after the user approves the actual dollar number
         try {
           const r = await VS.post("/api/run", body);
           VS.drawer.watch(r.job_id);
           VS.toast(p.paid ? "🎙 Cloud dub started" : "🎙 Free local dub started");
+          return;
+        } catch (e) {
+          if (e.status !== 402 || !e.body || !e.body.estimate) {
+            el.querySelector("#dub-busy").textContent =
+              e.status === 409
+                ? "⏳ another dub is already running — one at a time keeps the GPU alive. It'll free up soon."
+                : "⚠ " + e.message;
+            if (e.status !== 409) VS.toast("Couldn't start: " + e.message);
+            return;
+          }
+          const est = e.body.estimate;
+          const warn = est.warn ? "\n\n🚨 That's above the $5 warning threshold." : "";
+          if (!confirm(`⚠ This run spends money on fal.ai:\n\n${est.summary}\n\n≈ $${est.this_run.toFixed(2)} for THIS video${warn}\n\nApprove and start? (Cancel = nothing charged)`)) {
+            VS.toast("Cancelled — nothing charged");
+            return;
+          }
+        }
+        try {
+          const r = await VS.post("/api/run", {...body, confirm_cost: true});
+          VS.drawer.watch(r.job_id);
+          VS.toast("🎙 Cloud dub started");
         } catch (e) {
           el.querySelector("#dub-busy").textContent =
             e.status === 409
@@ -312,7 +336,7 @@
         }
         el.querySelector("#duo-cost").textContent =
           `Estimated $${est.this_run.toFixed(2)} — ${est.summary}`;
-        if (!confirm(`⚠ Interview dub spends money on fal.ai:\n\n${est.summary}\n\n≈ $${est.this_run.toFixed(2)}\n\nApprove and start?`)) {
+        if (!confirm(`⚠ Interview dub spends money on fal.ai:\n\n${est.summary}\n\n≈ $${est.this_run.toFixed(2)}${est.warn ? "\n\n🚨 That's above the $5 warning threshold." : ""}\n\nApprove and start?`)) {
           VS.toast("Cancelled — nothing charged");
           return;
         }

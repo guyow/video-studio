@@ -36,6 +36,10 @@ def main() -> int:
     ap.add_argument("--tier", choices=["pro", "standard"], default="pro")
     args = ap.parse_args()
 
+    # the interview dub is the most expensive pipeline — never start it on a dead key
+    from fal_guard import preflight_fal
+    preflight_fal("interview dub")
+
     work = ROOT / "output" / "script-swap" / args.name
     cfg_file = work / "duo-config.json"
     if not cfg_file.is_file():

@@ -74,16 +74,22 @@ def subscribe(endpoint: str, arguments: dict) -> dict:
     import fal_client
 
     print(f"  calling {endpoint} …", flush=True)
-    return fal_client.subscribe(endpoint, arguments=arguments, with_logs=True)
+    try:
+        return fal_client.subscribe(endpoint, arguments=arguments, with_logs=True)
+    except Exception as e:  # one clean line instead of a stacked traceback
+        raise SystemExit(f"fal.ai call failed ({endpoint}): {str(e)[:300]}") from None
 
 
 def download(url: str, dest: Path) -> None:
     import httpx
 
+    # temp-then-rename so a killed run can't leave a plausible half-file behind
+    tmp = dest.with_suffix(dest.suffix + ".part")
     with httpx.Client(follow_redirects=True, timeout=300) as client:
         r = client.get(url)
         r.raise_for_status()
-        dest.write_bytes(r.content)
+        tmp.write_bytes(r.content)
+    tmp.replace(dest)
 
 
 def build_reference(cfg: dict, name: str, speaker: str) -> Path:
@@ -285,6 +291,14 @@ def main() -> int:
     if not os.environ.get("FAL_KEY"):
         print("Set FAL_KEY in .env", file=sys.stderr)
         return 1
+
+    if args.stage != "budget":   # every other stage can spend — probe the account first (free)
+        try:
+            sys.path.insert(0, str(ROOT / "dashboard"))
+            from fal_guard import preflight_fal
+            preflight_fal(f"duo {args.stage}")
+        except ImportError:
+            pass
 
     cfg = load_cfg(args.name)
     work = work_dir(args.name)

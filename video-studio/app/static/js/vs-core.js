@@ -28,6 +28,29 @@
     return Math.round(d / 86400) + "d ago";
   };
 
+  /* job logs are written for debugging (full commands, exe paths, argument
+   * dumps). UIs show only the human lines by default — the raw log stays one
+   * toggle away. Shared here so the drawer and the timeline editor agree. */
+  VS.friendlyLine = l => {
+    l = String(l || "").trim();
+    if (!l) return "";
+    if (l.charAt(0) === "+") return "";
+    if (/^[A-Za-z]:[\\/]/.test(l)) return "";
+    if (/ffmpeg\.exe|ffprobe\.exe|python\.exe/i.test(l)) return "";
+    if (/^arguments?:/i.test(l)) return "";
+    if (/^\[dashboard\]/.test(l)) return "";
+    if (/^(File |Traceback|  at )/i.test(l)) return "";
+    return l.replace(/^\[seq\]\s*/, "");
+  };
+  VS.friendlyTail = (lines, n) => {
+    const out = [];
+    (lines || []).forEach(l => {
+      const c = VS.friendlyLine(l);
+      if (c) out.push(c);
+    });
+    return out.slice(-(n || 3));
+  };
+
   // the universal "make it liitt" conversion — shared by the Creator's Script step
   // and the Editor so the prompt can't drift between the two.  Send with
   // {brand:true, slug:"fairy-flame"} so /api/copywrite grounds it in offer.md + banks.

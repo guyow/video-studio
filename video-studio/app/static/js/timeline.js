@@ -855,29 +855,10 @@
 
   var AI = { models: [], refs: [], busyJob: null, history: [] };
 
-  /* job logs are written for debugging (full commands, exe paths, argument
-   * dumps). The editor shows only the human lines — the raw log stays
-   * available under Tools -> Jobs for when something truly breaks. */
-  function friendlyLine(l) {
-    l = String(l || "").trim();
-    if (!l) return "";
-    if (l.charAt(0) === "+") return "";
-    if (/^[A-Za-z]:[\\/]/.test(l)) return "";
-    if (/ffmpeg\.exe|ffprobe\.exe|python\.exe/i.test(l)) return "";
-    if (/^arguments?:/i.test(l)) return "";
-    if (/^\[dashboard\]/.test(l)) return "";
-    if (/^(File |Traceback|  at )/i.test(l)) return "";
-    l = l.replace(/^\[seq\]\s*/, "");
-    return l;
-  }
-  function friendlyTail(lines, n) {
-    var out = [];
-    (lines || []).forEach(function (l) {
-      var c = friendlyLine(l);
-      if (c) out.push(c);
-    });
-    return out.slice(-(n || 3));
-  }
+  /* The friendly-log filter lives in vs-core.js (VS.friendlyLine) so the
+   * Creator's job drawer and the editor can't drift apart. */
+  var friendlyLine = window.VS.friendlyLine;
+  var friendlyTail = window.VS.friendlyTail;
 
   function chatAdd(cls, html) {
     var log = $("#chatlog");

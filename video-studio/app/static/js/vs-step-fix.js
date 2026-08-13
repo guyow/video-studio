@@ -45,11 +45,23 @@
             <button class="vs-btn" data-fix="refit" title="re-stretch the voice to fit">⏱ Refit voice</button>
           </div>
           <div class="vs-row">
-            <span class="vs-hint">Replace exact moments with the original footage:</span>
+            <span class="vs-hint">Mark the exact moments (watch the video, then):</span>
             <button class="vs-btn" id="fix-mark-in">⏺ mark start</button>
             <button class="vs-btn" id="fix-mark-out">⏹ mark end</button>
             <span class="vs-hint" id="fix-marks">no ranges marked</span>
-            <button class="vs-btn" id="fix-swap" disabled>▶ Swap marked ranges</button>
+          </div>
+          <div class="vs-row">
+            <button class="vs-btn" id="fix-swap" disabled title="free — put the ORIGINAL frames back">▶ Swap marked with original (free)</button>
+            <select class="vs-sel" id="fix-seg-tier" title="fal tier for the marked-range re-lipsync">
+              <option value="latentsync" selected>LatentSync ~$0.30/min 💰</option>
+              <option value="veed">VEED ~$0.40/min 💰</option>
+              <option value="standard">sync v2 ~$3/min 💰</option>
+              <option value="pro">sync v2 PRO ~$6/min 💰</option>
+              <option value="sync3">sync-3 ~$8/min 💰</option>
+              <option value="musetalk">MuseTalk ~$0.30/min 💰</option>
+            </select>
+            <button class="vs-btn" id="fix-segsync" disabled
+              title="paid — redo the fal lip-sync on JUST the marked seconds (bills only those seconds)">👄 Re-lipsync marked (fal $)</button>
           </div>
           <div class="vs-hint" style="margin-top:6px">need the drawing tools? <a href="/dubsync-lab" target="_blank">open the DubSync lab ↗</a></div>
         </div>
@@ -86,12 +98,16 @@
         runRepair(a === "relipsync" ? {action: a, restorer: "gfpgan"} : {action: a});
       });
 
-      // swap ranges
+      // marked ranges (shared by the free swap and the paid segment re-lipsync)
+      const markedRanges = () => marks.filter(m => m[1] > m[0])
+        .map(m => ({start: +m[0].toFixed(2), end: +m[1].toFixed(2)}));
       const updMarks = () => {
         el.querySelector("#fix-marks").textContent = marks.length
           ? marks.map(m => `${m[0].toFixed(2)}–${(m[1] || 0).toFixed(2)}s`).join(", ")
           : "no ranges marked";
-        el.querySelector("#fix-swap").disabled = !marks.some(m => m[1] > m[0]);
+        const none = !marks.some(m => m[1] > m[0]);
+        el.querySelector("#fix-swap").disabled = none;
+        el.querySelector("#fix-segsync").disabled = none;
       };
       el.querySelector("#fix-mark-in").onclick = () => {
         marks.push([vid.currentTime, null]);
@@ -104,10 +120,37 @@
         updMarks();
       };
       el.querySelector("#fix-swap").onclick = () => {
-        const ranges = marks.filter(m => m[1] > m[0]).map(m => `${m[0].toFixed(2)}-${m[1].toFixed(2)}`);
-        runRepair({action: "swap", ranges});
+        // the server expects {start,end} objects (the old string form 400'd)
+        runRepair({action: "swap", ranges: markedRanges()});
         marks = [];
         updMarks();
+      };
+      el.querySelector("#fix-segsync").onclick = async () => {
+        const ranges = markedRanges();
+        const tier = el.querySelector("#fix-seg-tier").value;
+        const body = {stem: v.stem, action: "relipsync-segment", ranges, tier};
+        try {
+          const r = await VS.post("/api/dubsync/repair", body);
+          VS.drawer.watch(r.job_id);        // shouldn't happen — server 402s first
+        } catch (e) {
+          if (e.status !== 402 || !e.body || !e.body.estimate) {
+            VS.toast("Error: " + e.message);
+            return;
+          }
+          const est = e.body.estimate;
+          const warn = est.warn ? "\n\n🚨 That's above the $5 warning threshold." : "";
+          if (!confirm(`⚠ This repair spends money on fal.ai:\n\n${est.summary}${warn}\n\nApprove and start? (Cancel = nothing charged)`)) {
+            VS.toast("Cancelled — nothing charged");
+            return;
+          }
+          try {
+            const r2 = await VS.post("/api/dubsync/repair", {...body, confirm_cost: true});
+            VS.drawer.watch(r2.job_id);
+            VS.toast("👄 Segment re-lipsync running — bills only the marked seconds");
+            marks = [];
+            updMarks();
+          } catch (e2) { VS.toast("Error: " + e2.message); }
+        }
       };
 
       // advisor

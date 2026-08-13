@@ -135,6 +135,11 @@ def main() -> int:
     video = Path(args.video).resolve()
     if not video.is_file():
         sys.exit(f"Video not found: {video}")
+    if args.lipsync in FAL_TIERS:
+        # paid fal lip-sync comes AFTER minutes of local XTTS — check the account
+        # can pay NOW so a dead key never wastes the whole voice stage
+        from fal_guard import preflight_fal
+        preflight_fal("local dub + fal lip-sync")
     if not DS_PY.is_file() or not DS_APP.is_file():
         sys.exit(f"Local dubbing tool not found at {DUBBING_STUDIO} — expected venv + app.py.\n"
                  "This is the standalone XTTS voice-clone tool.")
@@ -220,13 +225,8 @@ def main() -> int:
             sys.exit("could not prepare audio for lip-sync")
         (work / "source.txt").write_text(str(video) + "\n", encoding="utf-8")
 
-        import os
-        env_file = ROOT / ".env"
-        if env_file.is_file():
-            for line in env_file.read_text().splitlines():
-                if "=" in line and not line.strip().startswith("#"):
-                    k, _, v = line.partition("=")
-                    os.environ.setdefault(k.strip(), v.strip())
+        from fal_guard import load_env
+        load_env()   # FAL_KEY etc. for the script-swap child (probe already ran at startup)
         try:
             rc = subprocess.run([sys.executable, str(SWAP), "lipsync",
                                  "--name", args.name, "--tier", args.lipsync],

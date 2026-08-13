@@ -24,11 +24,15 @@ def run_stage(stage: str, extra: list[str]) -> None:
     print(f"\n=== stage: {stage} ===", flush=True)
     try:
         # hard cap: fal.ai calls occasionally hang forever — fail loudly instead of stalling the queue
-        subprocess.run([sys.executable, str(SWAP), stage, *extra],
-                       check=True, cwd=str(ROOT), timeout=1800)
+        r = subprocess.run([sys.executable, str(SWAP), stage, *extra],
+                           cwd=str(ROOT), timeout=1800)
     except subprocess.TimeoutExpired:
         sys.exit(f"stage '{stage}' timed out after 30 min — fal.ai did not respond. "
                  "Nothing more will be charged for this run; try again (or use the local engine).")
+    if r.returncode != 0:
+        # the stage already printed its own error — keep it the last thing in the log
+        sys.exit(f"stage '{stage}' failed — see the error above. "
+                 "Finished stages are cached and won't re-bill on the next run.")
 
 
 def main() -> int:
@@ -54,23 +58,8 @@ def main() -> int:
         sys.exit("No edited script found — use 'Edit script' in the dashboard and save first.")
 
     # fail fast with a clear message if the fal account can't pay (free probe, no charge)
-    import os
-    env_file = ROOT / ".env"
-    if env_file.is_file():
-        for line in env_file.read_text().splitlines():
-            if "=" in line and not line.strip().startswith("#"):
-                k, _, v = line.partition("=")
-                os.environ.setdefault(k.strip(), v.strip())
-    try:
-        import fal_client
-        fal_client.upload(b"ok", "text/plain")
-    except Exception as e:
-        msg = str(e)
-        if "403" in msg or "locked" in msg.lower() or "balance" in msg.lower():
-            sys.exit("STOPPED BEFORE SPENDING: the fal.ai account for the key in autoVSL/.env is "
-                     "locked or out of balance.\nFix: create your own key at fal.ai/dashboard/keys "
-                     "(add billing), then replace the FAL_KEY=... line in autoVSL/.env")
-        sys.exit(f"fal.ai unreachable: {msg[:200]}")
+    from fal_guard import preflight_fal
+    preflight_fal("dub")
 
     # Seed transcript.txt from the free local transcript so nothing ever
     # triggers the paid fal whisper stage for this job.

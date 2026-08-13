@@ -989,7 +989,19 @@
       try { await VS.post("/api/run", body);
         VS.toast(engine === "local" ? "🎙 Free local dub started" : "🎙 Cloud dub started");
         renderTimeline(); renderInspector(); }
-      catch (e) { VS.toast("Couldn't start: " + e.message); }
+      catch (e) {
+        // 402 = the server wants the real price approved (paid lip-sync tier)
+        if (e.status === 402 && e.body && e.body.estimate) {
+          const est = e.body.estimate;
+          if (!confirm(`⚠ This spends money on fal.ai:\n\n${est.summary}\n\n≈ $${est.this_run.toFixed(2)} for this video\n\nApprove and start?`)) return;
+          try { await VS.post("/api/run", {...body, confirm_cost: true});
+            VS.toast("🎙 Dub started");
+            renderTimeline(); renderInspector(); }
+          catch (e2) { VS.toast("Couldn't start: " + e2.message); }
+          return;
+        }
+        VS.toast("Couldn't start: " + e.message);
+      }
     };
   };
 

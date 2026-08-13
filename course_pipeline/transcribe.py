@@ -51,6 +51,26 @@ def find_ffmpeg() -> str:
                  "Run: pip install imageio-ffmpeg  (or install ffmpeg)")
 
 
+def has_audio(ffmpeg: str, src: Path) -> bool:
+    """True if the file has at least one audio stream.
+
+    Silent clips (e.g. WhatsApp screen recordings, generated b-roll) used to
+    crash the whole batch inside ffmpeg — they're a skip, not a failure.
+    """
+    ffprobe = str(Path(ffmpeg).with_name("ffprobe" + Path(ffmpeg).suffix))
+    if Path(ffprobe).is_file() or shutil.which("ffprobe"):
+        exe = ffprobe if Path(ffprobe).is_file() else "ffprobe"
+        r = subprocess.run([exe, "-v", "error", "-select_streams", "a",
+                            "-show_entries", "stream=codec_type", "-of", "csv=p=0", str(src)],
+                           capture_output=True, text=True)
+        if r.returncode == 0:
+            return "audio" in (r.stdout or "")
+    # no ffprobe — fall back to parsing ffmpeg's stream listing
+    r = subprocess.run([ffmpeg, "-hide_banner", "-nostdin", "-i", str(src)],
+                       capture_output=True, text=True)
+    return "Audio:" in (r.stderr or "")
+
+
 def extract_audio(ffmpeg: str, src: Path, dst: Path) -> None:
     """Extract 16kHz mono 16-bit PCM wav (what Whisper consumes natively)."""
     dst.parent.mkdir(parents=True, exist_ok=True)
@@ -157,12 +177,27 @@ def write_markdown(md_path: Path, src: Path, rel: Path, duration: float,
 
 
 def transcribe_file(model, src: Path, rel: Path, out_dir: Path, cache_dir: Path,
-                    ffmpeg: str, args, meta_base: dict) -> None:
+                    ffmpeg: str, args, meta_base: dict) -> str:
+    """Transcribe one file. Returns 'done' or 'skipped' (no audio stream)."""
     from tqdm import tqdm
 
     md_path = out_dir / rel.parent / f"{src.stem}.md"
     json_path = out_dir / rel.parent / f"{src.stem}.json"
     md_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if not has_audio(ffmpeg, src):
+        # mark it complete so re-runs skip it via is_complete(); downstream sees
+        # skipped=no-audio and an empty text instead of a crashed batch
+        meta = dict(meta_base)
+        meta.update({"source": rel.as_posix(), "status": "complete",
+                     "skipped": "no-audio", "empty": True,
+                     "transcribed_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")})
+        json_path.write_text(json.dumps({"meta": meta, "segments": []},
+                                        ensure_ascii=False, indent=1), encoding="utf-8")
+        md_path.write_text(f"# {src.stem}\n\n_No audio stream — nothing to transcribe._\n",
+                           encoding="utf-8")
+        print(f"  SKIPPED (no audio stream): {src.name}")
+        return "skipped"
 
     # --- audio extraction (skipped for already-small audio sources is not worth it:
     # we always normalize to 16k mono wav so Whisper never touches the big file) ---
@@ -205,6 +240,11 @@ def transcribe_file(model, src: Path, rel: Path, out_dir: Path, cache_dir: Path,
         "realtime_factor": round(speed, 2),
         "status": "complete",
     })
+    if not any(s["text"].strip() for s in segments):
+        # audio track exists but is silence — flag it so a blank script is
+        # visible downstream instead of masquerading as a real transcript
+        meta["empty"] = True
+        print(f"  ⚠ transcript is EMPTY — the audio track appears silent ({src.name})")
 
     write_markdown(md_path, src, rel, duration, meta, segments)
     json_path.write_text(json.dumps({"meta": meta, "segments": segments},
@@ -213,6 +253,7 @@ def transcribe_file(model, src: Path, rel: Path, out_dir: Path, cache_dir: Path,
     if not args.keep_audio:
         wav_path.unlink(missing_ok=True)
     print(f"  done in {hms(elapsed)} ({speed:.1f}x realtime) -> {md_path}")
+    return "done"
 
 
 def is_complete(json_path: Path) -> bool:
@@ -278,10 +319,12 @@ def main() -> None:
     meta_base = {"model": args.model, "device": device, "compute_type": compute_type}
 
     failures = []
+    no_audio = 0
     for i, (f, rel) in enumerate(todo, 1):
         print(f"[{i}/{len(todo)}] {rel.as_posix()}")
         try:
-            transcribe_file(model, f, rel, out_dir, cache_dir, ffmpeg, args, meta_base)
+            if transcribe_file(model, f, rel, out_dir, cache_dir, ffmpeg, args, meta_base) == "skipped":
+                no_audio += 1
         except KeyboardInterrupt:
             print("\nInterrupted — progress on completed files is saved; re-run to continue.")
             raise
@@ -289,10 +332,11 @@ def main() -> None:
             failures.append((rel.as_posix(), str(e)))
             print(f"  FAILED: {e}")
 
-    print(f"\nDone: {len(todo) - len(failures)} transcribed, {skipped} skipped, {len(failures)} failed.")
+    print(f"\nDone: {len(todo) - len(failures) - no_audio} transcribed, "
+          f"{no_audio} skipped (no audio), {skipped} already done, {len(failures)} failed.")
     for name, err in failures:
         print(f"  FAILED {name}: {err[:200]}")
-    if failures:
+    if failures:      # silent clips are skips, not failures — only real errors fail the job
         sys.exit(1)
 
 
