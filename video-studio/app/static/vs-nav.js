@@ -13,12 +13,15 @@
   var NAV = [
     ["🎬 Create", "/", ["/"]],
     ["✂ Edit", "/timeline", ["/timeline"]],
-    { label: "✨ Generate", match: ["/image-to-video", "/broll", "/image-editor", "/frame-reader"],
+    { label: "✨ Generate", match: ["/commercial", "/image-to-video", "/broll", "/image-editor", "/frame-reader", "/motion-capture"],
       items: [
+        ["🤳 UGC Factory", "/commercial", "avatar photo → talking Veo 3 UGC video"],
+        ["📺 Text → Commercial AI", "/commercial?mode=cml", "describe the product → finished ad"],
         ["🎞 Image → Video", "/image-to-video", "a still becomes a 10–30s clip"],
         ["🎬 B-Roll Factory", "/broll", "reference → recipe → generated b-roll"],
         ["🖼 Image Editor", "/image-editor", "erase / replace / re-frame stills"],
         ["🔬 Frame Reader", "/frame-reader", "winning UGC → shot-by-shot script"],
+        ["🕺 Motion Capture", "/motion-capture", "video or webcam drives a 3D avatar"],
       ] },
     { label: "🏷 Brand & Ads", match: ["/batches", "/brand-studio", "/creator", "/mission", "/studio"],
       items: [

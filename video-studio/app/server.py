@@ -3224,12 +3224,26 @@ def _background_target(stem: str, body: dict) -> tuple[str, Path]:
 
 
 def _background_opts(body: dict) -> list[str]:
+    if body.get("reverse"):
+        # person → green screen: alpha sources are flattened; opaque sources go
+        # through local AI matting (person_matte.py) — no scene needed
+        return ["--reverse",
+                "--green-color", str(body.get("green_color") or "0x00FF00")]
     bg = _background_path(body.get("background") or "")
     cmd = ["--background", str(bg),
            "--key-color", str(body.get("key_color") or "auto"),
            "--similarity", str(float(body.get("similarity") or 0.15)),
            "--blend", str(float(body.get("blend") or 0.05)),
+           "--fill-holes", str(int(body.get("fill_holes", 2))),
            "--bg-blur", str(float(body.get("bg_blur", 6)))]
+    if body.get("ai_key"):
+        # full AI key: the person matte IS the alpha, no chromakey at all —
+        # works even with bad green-screen lighting or no green screen
+        cmd.append("--ai-key")
+    elif body.get("protect_person", True):
+        # AI person mask forces the actor fully opaque — the key can only
+        # remove the screen, never the person
+        cmd.append("--protect-person")
     if body.get("no_despill"):
         cmd.append("--no-despill")
     return cmd
@@ -3252,8 +3266,11 @@ def api_background_preview():
            "--input", str(src)] + _background_opts(body) + \
           ["--preview", str(work / "bg-preview.png"),
            "--at", str(float(body.get("at") or 1.0))]
+    # reverse / AI-key / person-shield previews may load the matting model
+    ai = body.get("reverse") or body.get("ai_key") or body.get("protect_person", True)
     r = subprocess.run(cmd, cwd=str(ROOT), env=job_env(), capture_output=True,
-                       text=True, encoding="utf-8", errors="replace", timeout=180)
+                       text=True, encoding="utf-8", errors="replace",
+                       timeout=420 if ai else 180)
     if r.returncode != 0:
         abort(500, (r.stdout or "")[-400:] or "preview failed")
     key = ""
@@ -3277,16 +3294,71 @@ def api_background_replace():
         abort(400, "no stem")
     mode, target = _background_target(stem, body)
     py = str(Path(CONFIG["venvs"]["cv"]))
+    what = "Green screen (reverse)" if body.get("reverse") else "Background swap"
     if mode == "dub":
         cmd = [py, str(BACKGROUND_SWAP_PY), "--work", str(target)] + _background_opts(body)
-        label = f"Background swap (dubbed take) — {stem}"
+        if body.get("promote", True):
+            # replace what the user sees: new take becomes final.mp4, the
+            # previous final is archived as a promotable take in Fix & QA
+            cmd.append("--promote")
+        label = f"{what} (dubbed take) — {stem}"
     else:
         cmd = [py, str(BACKGROUND_SWAP_PY), "--input", str(target),
                "--replace", "--backup-dir", str(UPLOADS / ".originals")] + _background_opts(body)
-        label = f"Background swap (source footage) — {stem}"
-    job_id = jobs_create("background-swap", stem, label, gpu=False)
+        label = f"{what} (source footage) — {stem}"
+    # reverse, AI key and the person shield all run AI matting on the GPU
+    gpu = bool(body.get("reverse") or body.get("ai_key")
+               or body.get("protect_person", True))
+    job_id = jobs_create("background-swap", stem, label, gpu=gpu)
     threading.Thread(target=run_job, args=(job_id, cmd), daemon=True).start()
     return jsonify({"job_id": job_id, "mode": mode})
+
+
+@app.post("/api/background/save")
+def api_background_save():
+    """Save the current video (with its replaced background) to the Desktop
+    exports folder — the dubbed final when one exists, otherwise the source
+    footage that the swap replaced in place."""
+    body = request.get_json(force=True)
+    stem = Path(body.get("stem") or "").name
+    if not stem:
+        abort(400, "no stem")
+    mode, target = _background_target(stem, body)
+    src = target / "final.mp4" if mode == "dub" else target
+    if not src.is_file():
+        abort(404, "video not found")
+    EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
+    dest, n = EXPORTS_DIR / f"{stem}-background.mp4", 2
+    while dest.exists():                       # never clobber an earlier export
+        dest = EXPORTS_DIR / f"{stem}-background-{n}.mp4"
+        n += 1
+    shutil.copy2(src, dest)
+    return jsonify({"saved": dest.name, "dir": str(EXPORTS_DIR), "mode": mode})
+
+
+@app.post("/api/background/extract")
+def api_background_extract():
+    """Extract the person out of the current video (dubbed final if one exists,
+    otherwise the source footage) as a file with a REAL transparent background —
+    .webm (VP9+alpha, small, slow encode) or .mov (ProRes 4444, big, fast).
+    Lands in the Desktop exports folder next to the other deliverables."""
+    body = request.get_json(force=True)
+    stem = Path(body.get("stem") or "").name
+    if not stem:
+        abort(400, "no stem")
+    mode, target = _background_target(stem, body)
+    src = target / "final.mp4" if mode == "dub" else target
+    fmt = "mov" if body.get("format") == "mov" else "webm"
+    out_dir = Path(CONFIG.get("exports_dir") or (SWAP_WORK / stem))
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out = out_dir / f"{stem}-person.{fmt}"
+    cmd = [str(Path(CONFIG["venvs"]["cv"])),
+           str(BACKGROUND_SWAP_PY.with_name("person_matte.py")),
+           "--input", str(src), "--emit", "alpha", "--output", str(out)]
+    job_id = jobs_create("person-extract", stem,
+                         f"Extract person (transparent .{fmt}) — {stem}", gpu=True)
+    threading.Thread(target=run_job, args=(job_id, cmd), daemon=True).start()
+    return jsonify({"job_id": job_id, "mode": mode, "out": str(out)})
 
 
 # shared technical constraints — every background plate obeys these regardless of
@@ -4497,6 +4569,20 @@ def api_brollvid_run():
     if motion == "fal-t2v" and t2v_model not in T2V_FAL_MODELS:
         abort(400, "unknown text-to-video model")
     shots = max(2, min(12, int(b.get("shots") or 6)))
+    # which Claude writes the shot list: sonnet (default) or opus — the
+    # Text → Commercial tab sends opus so the whole ad is Opus-directed.
+    script_model = b.get("script_model", "sonnet")
+    if script_model not in ("sonnet", "opus", "haiku"):
+        abort(400, "bad script model")
+    # optional saved Voice-Bank narrator (instead of cloning a reference video)
+    voice_ref = None
+    vid = Path(str(b.get("voice_id") or "")).name
+    if vid:
+        voice_ref = VOICES_DIR / vid / "ref.wav"
+        if not voice_ref.is_file():
+            abort(400, "that saved voice has no ref.wav — pick another on the Voices tab")
+    # kind=commercial → own slug family so the Commercial tab shows only its own work
+    is_commercial = b.get("kind") == "commercial"
 
     # optional real-world assets: the user's actual product (so the object on
     # screen is theirs, not something the model invented), look references, and
@@ -4587,11 +4673,11 @@ def api_brollvid_run():
         return jsonify({"needs_confirm": True, "estimate": est}), 402
 
     stamp = time.strftime("%m%d-%H%M%S")
-    batch = f"script-{stamp}"
+    batch = f"{'commercial' if is_commercial else 'script'}-{stamp}"
     work = BROLL_OUT / batch
     work.mkdir(parents=True, exist_ok=True)
     (work / "script.txt").write_text(script + "\n", encoding="utf-8")
-    out_dir = I2V_OUT / f"brollvid-{stamp}"
+    out_dir = I2V_OUT / (f"commercial-{stamp}" if is_commercial else f"brollvid-{stamp}")
     out_dir.mkdir(parents=True, exist_ok=True)
     cv_py = _cv_py()
 
@@ -4604,7 +4690,7 @@ def api_brollvid_run():
                             else "Claude turns the script into a shot list"),
          [cv_py, str(BROLLVID_ENGINE), "storyboard", "--script", str(work / "script.txt"),
           "--work", str(work), "--aspect", aspect, "--shots", str(shots),
-          "--claude", str(CLAUDE_EXE), "--model", "sonnet"]
+          "--claude", str(CLAUDE_EXE), "--model", script_model]
          + (["--brand"] if b.get("brand", True) else [])
          + (["--ugc"] if b.get("ugc", True) else [])
          + (["--preset", "ugc10"] if b.get("preset") == "ugc10" else [])
@@ -4644,6 +4730,7 @@ def api_brollvid_run():
           "--out-dir", str(out_dir), "--ds-py", str(DUB_VENV_PY),
           "--ds-app", str(Path(CONFIG["dubbing_studio"]) / "app.py")]
          + (["--ref-video", str(ref)] if ref else [])
+         + (["--voice", str(voice_ref)] if voice_ref and not ref else [])
          + (["--banner", str(banner_imgs[0]), "--banner-mode", banner_mode,
              "--banner-seconds", f"{banner_seconds:g}"] if banner_imgs else []),
          1800),
@@ -4660,7 +4747,9 @@ def api_brollvid_run():
               "--recipe", str(work / "recipe.json"), "--out", str(out_dir / "clip-tagged.mp4")],
              900),
         ]
-    job_id = jobs_create("brollvid", batch, f"Script → b-roll video — {batch} [{motion}]")
+    job_id = jobs_create("brollvid", batch,
+                         (f"Text → Commercial — {batch} [{t2v_model}]" if is_commercial
+                          else f"Script → b-roll video — {batch} [{motion}]"))
     threading.Thread(target=run_chain_job, args=(job_id, steps, est, batch), daemon=True).start()
     return jsonify({"job_id": job_id, "batch": batch, "slug": out_dir.name, "estimate": est})
 
@@ -4758,6 +4847,243 @@ def api_tags_burn():
         abort(502, f"burning tags failed: {(r.stderr or r.stdout or '')[-300:]}")
     return jsonify({"ok": True, "video": f"output/i2v/{out_dir.name}/clip-tagged.mp4",
                     "mtime": out.stat().st_mtime})
+
+
+# ── Text → Commercial AI: a product brief becomes a finished ad ─────────────
+# The script is written by Claude Opus (claude-opus-5 — the strongest widely
+# available Claude for creative work, via the subscription CLI, so it's free).
+# Rendering then reuses the proven brollvid chain (storyboard → fal text→video
+# → assemble + narration → story tags) with kind="commercial" + script_model
+# ="opus", so the whole ad is Opus-directed end to end.
+COMMERCIAL_PROMPT = """You are a world-class commercial director and direct-response \
+copywriter. Write the VOICEOVER SCRIPT for a {length_s}-second video commercial.
+
+THE PRODUCT:
+{product_block}
+
+THE COMMERCIAL:
+- Tone: {tone}.
+- Audience: {audience}.
+- Structure: a scroll-stopping hook in the first 2 seconds → the problem or desire → \
+introduce the product as the answer → 2-3 vivid, concrete benefits (show, don't list) → \
+close with the offer and one clear call to action{offer_line}
+- It must SOUND great read aloud: short sentences, rhythm, punch. No filler words, no clichés.
+- Write claims as personal experience or plain product facts — never medical or guaranteed-outcome claims.
+- LENGTH IS A HARD CONSTRAINT (the voiceover must fit the video): write {lo}-{hi} words \
+(target ~{target}). Count your words and land inside the range — never go over.
+{steer_block}
+Respond with ONLY the voiceover script text — no headings, no scene directions, no emojis, \
+no hashtags, no quotation marks, no preamble, no markdown."""
+
+
+@app.post("/api/commercial/script")
+def api_commercial_script():
+    """Product brief → commercial VO script (Claude Opus via the CLI — free)."""
+    b = request.get_json(force=True)
+    product = (b.get("product_name") or "").strip()[:200]
+    desc = (b.get("description") or "").strip()[:2000]
+    if len((product + " " + desc).split()) < 3:
+        abort(400, "describe the product first — what is it, what does it do?")
+    if not CLAUDE_EXE:
+        abort(500, "claude CLI not found — install Claude Code or add it to PATH")
+    length_s = max(10, min(90, int(b.get("length_s") or 30)))
+    audience = (b.get("audience") or "").strip()[:300] or "a broad social-media audience"
+    tone = (b.get("tone") or "").strip()[:120] or "confident, modern, energetic"
+    offer = (b.get("offer") or "").strip()[:300]
+    steer = (b.get("steer") or "").strip()[:600]
+    target = round(length_s * 2.35)          # comfortable VO pace ≈ 2.35 words/sec
+    lo, hi = round(target * 0.88), round(target * 1.02)
+    prompt = COMMERCIAL_PROMPT.format(
+        length_s=length_s, tone=tone, audience=audience, target=target, lo=lo, hi=hi,
+        product_block=(f"- Name: {product}\n" if product else "") + f"- What it is / does: {desc}",
+        offer_line=(f" — the offer is: {offer}." if offer else "."),
+        steer_block=(f"\nEXTRA DIRECTION FROM THE MARKETER: {steer}\n" if steer else ""))
+    env = job_env()
+    env.pop("CLAUDECODE", None)
+    try:
+        result = subprocess.run(
+            [CLAUDE_EXE, "-p", "--model", "opus",
+             "--disallowedTools", "Write,Edit,Bash,NotebookEdit,WebFetch,WebSearch"],
+            input=prompt, capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=240, cwd=str(ROOT), env=env)
+    except subprocess.TimeoutExpired:
+        abort(504, "Claude took too long — try again")
+    out = (result.stdout or "").strip()
+    if result.returncode != 0 or not out:
+        abort(502, f"claude CLI failed (rc={result.returncode}): {(result.stderr or '')[:300]}")
+    return jsonify({"script": out, "words": len(out.split()),
+                    "target_words": target, "length_s": length_s, "model": "claude-opus-5"})
+
+
+# ── UGC Factory: avatar photo → talking Veo 3 UGC clip ──────────────────────
+# One shot, no chain: the avatar image (optionally with the real product merged
+# in via nano-banana) goes through Veo 3 image→video with NATIVE speech — the
+# person on screen says the script, lip-synced, in the chosen voice + emotion,
+# framed by a scene template. Engine: app/engines/ugc_avatar.py.
+UGC_ENGINE = APP_DIR / "engines" / "ugc_avatar.py"
+# mirror of ugc_avatar.MODELS — every fal image→video model. audio=True models
+# SPEAK natively; silent ones need a Voice-Bank voice (free) or voice="none".
+UGC_MODELS = {
+    "veo3-fast": {"label": "Google Veo 3 Fast — 720P · speaks (recommended)",
+                  "audio": True, "durations": (4, 6, 8), "cost_per_s": 0.15},
+    "veo3":      {"label": "Google Veo 3 — 1080P · speaks (premium)",
+                  "audio": True, "durations": (4, 6, 8), "cost_per_s": 0.40},
+    "sora-2":    {"label": "Sora 2 — OpenAI realism · speaks",
+                  "audio": True, "durations": (4, 8, 12), "cost_per_s": 0.30},
+    "kling-2.6-pro": {"label": "Kling 2.6 Pro — native voice at half Veo's price · speaks",
+                      "audio": True, "durations": (5, 10),
+                      "cost_per_s": 0.14, "cost_per_s_silent": 0.07},
+    "kling-2.5-pro":    {"label": "Kling 2.5 Turbo Pro — great motion · silent",
+                         "audio": False, "durations": (5, 10), "cost_per_s": 0.07},
+    "kling-2.1-master": {"label": "Kling 2.1 Master — cinematic · silent",
+                         "audio": False, "durations": (5, 10), "cost_per_s": 0.09},
+    "seedance-pro": {"label": "Seedance 1.0 Pro — 1080P flexible · silent",
+                     "audio": False, "durations": tuple(range(2, 13)), "cost_per_s": 0.12},
+    "hailuo-02": {"label": "MiniMax Hailuo 02 — lively, cheap · silent",
+                  "audio": False, "durations": (6, 10), "cost_per_s": 0.05},
+    "wan-2.2":   {"label": "Wan 2.2 — budget · silent",
+                  "audio": False, "durations": (5,), "cost_per_s": 0.04},
+}
+UGC_TEMPLATES = ("selfie", "selling", "podcast", "car", "mirror", "stream", "static")
+UGC_VOICES = ("auto", "whisper", "rough", "harsh", "soft", "low", "high", "none")
+UGC_EMOTIONS = ("auto", "happy", "angry", "fearful", "surprised", "disgusted",
+                "excited", "calm", "playful", "serious")
+UGC_MERGE_COST = 0.039          # nano-banana edit, when a product photo is added
+UGC_WPS = 2.3                   # spoken pace used to size the clip to the words
+UGC_MAX_SECONDS = 120           # 15 chained Veo segments — long scripts just chain more
+
+
+def _ugc_segments(seconds: int, durations: tuple[int, ...]) -> list[int]:
+    """Mirror of the engine's plan: longest segments + one allowed tail."""
+    durs = sorted(durations)
+    seg_max = durs[-1]
+    segs, left = [], max(durs[0], min(UGC_MAX_SECONDS, seconds))
+    while left > 0:
+        if left >= seg_max:
+            segs.append(seg_max)
+            left -= seg_max
+        else:
+            segs.append(next((s for s in durs if s >= left), seg_max))
+            left = 0
+    return segs
+
+
+@app.get("/api/ugc/options")
+def api_ugc_options():
+    return jsonify({
+        "models": [{"key": k, **v} for k, v in UGC_MODELS.items()],
+        "templates": list(UGC_TEMPLATES), "voices": list(UGC_VOICES),
+        "emotions": list(UGC_EMOTIONS), "merge_cost": UGC_MERGE_COST,
+    })
+
+
+@app.post("/api/ugc/run")
+def api_ugc_run():
+    b = request.get_json(force=True)
+    model = b.get("model", "veo3-fast")
+    if model not in UGC_MODELS:
+        abort(400, "unknown model")
+    template = b.get("template", "selfie")
+    if template not in UGC_TEMPLATES:
+        abort(400, "unknown template")
+    voice = b.get("voice", "auto")
+    if voice not in UGC_VOICES:
+        abort(400, "unknown voice type")
+    emotion = b.get("emotion", "auto")
+    if emotion not in UGC_EMOTIONS:
+        abort(400, "unknown emotion")
+    script = (b.get("script") or "").strip()[:900]
+    action = (b.get("action") or "").strip()[:900]
+    bg = (b.get("bg") or "").strip()[:300]
+    if voice != "none" and not script:
+        abort(400, "type the audio text — what should the avatar say? (or set voice to 'no sound')")
+    if voice == "none" and not (script or action):
+        abort(400, "describe the action — with no sound the character still needs something to do")
+    # voice from a previous video: a saved Voice-Bank clone re-voices the clip
+    # locally (XTTS, free) after Veo films the avatar mouthing the words
+    voice_ref = None
+    vid = Path(str(b.get("voice_id") or "")).name
+    if vid:
+        if voice == "none":
+            abort(400, "a saved voice needs speech — set a voice type other than 'no sound'")
+        if not script:
+            abort(400, "a saved voice needs the audio text — type what they should say")
+        voice_ref = VOICES_DIR / vid / "ref.wav"
+        if not voice_ref.is_file():
+            abort(400, "that saved voice has no ref.wav — pick another on the Voices tab")
+
+    def _img(key: str, required: bool) -> Path | None:
+        rel = (b.get(key) or "").replace("\\", "/")
+        if not rel:
+            if required:
+                abort(400, "upload (or paste) the avatar image first")
+            return None
+        p = (ROOT / rel).resolve()
+        if not str(p).startswith(str(I2V_UPLOADS.resolve())) or not p.is_file():
+            abort(400, f"{key}: upload that image again — it isn't on disk")
+        return p
+
+    avatar = _img("image", required=True)
+    product = _img("product", required=False)
+
+    # duration follows the words: 'auto' sizes the clip to the script (~2.3
+    # words/sec); anything past Veo's 8s cap is covered by chained segments.
+    m = UGC_MODELS[model]
+    # a silent model can't speak the script by itself — it needs a Voice-Bank
+    # voice (free XTTS over the footage) or voice="none"
+    if voice != "none" and script and not m["audio"] and not voice_ref:
+        abort(400, f"{m['label'].split(' — ')[0]} films silent video — pick a Voice-Bank "
+                   "voice from the voice list (free), set voice to 'no sound', or switch "
+                   "to a speaking model (Veo 3 / Sora 2)")
+
+    raw_sec = str(b.get("seconds") or "auto").strip().lower()
+    n_words = len(script.split())
+    if raw_sec == "auto":
+        seconds = max(2, min(UGC_MAX_SECONDS, math.ceil(n_words / UGC_WPS))) if n_words \
+            else max(m["durations"])
+    else:
+        try:
+            seconds = max(2, min(UGC_MAX_SECONDS, int(raw_sec)))
+        except ValueError:
+            abort(400, "seconds must be 'auto' or a number of seconds (2-120)")
+    segs = _ugc_segments(seconds, m["durations"])
+    eff_seconds = sum(segs)
+    # some models (Kling 2.6) bill less with their native audio off — which is
+    # the case when a Voice-Bank voice re-voices the clip, or voice is "none"
+    native_speech = m["audio"] and voice != "none" and not voice_ref
+    rate = (m.get("cost_per_s_silent") if (not native_speech and m.get("cost_per_s_silent"))
+            else m["cost_per_s"])
+    total = round(eff_seconds * rate + (UGC_MERGE_COST if product else 0), 2)
+    summary = (f"{eff_seconds}s talking UGC ({len(segs)} segment{'s' if len(segs) > 1 else ''}"
+               + (f", sized to your {n_words} words" if raw_sec == "auto" and n_words else "")
+               + f") on {m['label'].split(' — ')[0]} ≈ ${total:.2f}"
+               + (f" (incl. ${UGC_MERGE_COST} product merge)" if product else ""))
+    est = {"this_run": total, "engine": "fal-ugc", "model": model, "seconds": eff_seconds,
+           "segments": len(segs), "summary": summary}
+    if not b.get("confirm_cost"):
+        return jsonify({"needs_confirm": True, "estimate": est}), 402
+
+    slug = f"ugc-{time.strftime('%m%d-%H%M%S')}"
+    out = I2V_OUT / slug
+    out.mkdir(parents=True, exist_ok=True)
+    cmd = [_cv_py(), str(UGC_ENGINE), "--image", str(avatar),
+           "--template", template, "--action", action, "--script", script,
+           "--voice", voice, "--emotion", emotion, "--bg", bg,
+           "--model", model, "--seconds", str(seconds),
+           "--out", str(out), "--name", slug, "--env-file", str(FAL_ENV_FILE)]
+    if product:
+        cmd += ["--product", str(product)]
+    if voice_ref:
+        cmd += ["--voice-ref", str(voice_ref), "--ds-py", str(DUB_VENV_PY),
+                "--ds-app", str(Path(CONFIG["dubbing_studio"]) / "app.py")]
+    job_id = jobs_create("ugc", slug, f"UGC Factory — {slug} [{template}/{model}]")
+    threading.Thread(target=run_i2v_job, args=(job_id, cmd, slug, est), daemon=True).start()
+    return jsonify({"job_id": job_id, "slug": slug, "estimate": est})
+
+
+@app.get("/commercial")
+def page_commercial():
+    return send_from_directory(STATIC, "commercial.html")
 
 
 @app.get("/image-to-video")
@@ -6808,6 +7134,33 @@ app.register_blueprint(api_batches.bp)
 @app.get("/batches")
 def batches_page():
     return send_from_directory(STATIC, "batches.html")
+
+
+# ---------------------------------------------------------------- motion capture
+# Browser-side mocap: MediaPipe tracks the actor (uploaded video or live
+# webcam), Kalidokit rigs a VRM avatar, the composite is recorded in-browser.
+# The server only stores recordings and runs the ffmpeg finalize — free, local,
+# no GPU job. Own blueprint, same reason as the others.
+import mimetypes  # noqa: E402
+
+mimetypes.add_type("application/wasm", ".wasm")  # MediaPipe's instantiateStreaming needs it
+
+import api_mocap  # noqa: E402
+
+api_mocap.init(
+    ROOT, APP_DIR / "engines" / "mocap_finalize.py", jobs_create, run_job,
+    sys.executable, UPLOADS, STATIC,
+    exports_dir=lambda: EXPORTS_DIR,   # settings can retarget it at runtime
+    soft_delete=soft_delete,
+    ff_tool=ff_tool, fal_env=FAL_ENV_FILE, record_spend=record_spend,
+    comfy_url=COMFY_HOST,
+)
+app.register_blueprint(api_mocap.bp)
+
+
+@app.get("/motion-capture")
+def motion_capture_page():
+    return send_from_directory(STATIC, "motion-capture.html")
 
 
 if __name__ == "__main__":

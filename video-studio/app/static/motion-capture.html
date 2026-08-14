@@ -1,0 +1,258 @@
+<!doctype html><html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Motion Capture — Video Studio</title>
+<link rel="stylesheet" href="/static/vs.css">
+<script src="/static/vs-nav.js" defer></script>
+<script type="importmap">
+{
+  "imports": {
+    "three": "/static/vendor/three/three.module.js",
+    "three/addons/": "/static/vendor/three/addons/",
+    "@pixiv/three-vrm": "/static/vendor/three-vrm/three-vrm.module.min.js"
+  }
+}
+</script>
+<style>
+  .vs-page > h1 { color: var(--text); }
+  .mc-layout { display: grid; grid-template-columns: 330px 1fr; gap: 14px; align-items: start; }
+  @media (max-width: 1000px) { .mc-layout { grid-template-columns: 1fr; } }
+  .mc-side .vs-panel { margin-bottom: 12px; }
+  .mc-side h3 { margin: 0 0 8px; font-size: 13px; letter-spacing: .4px;
+                text-transform: uppercase; color: var(--dim); }
+  .mc-row { display: flex; gap: 8px; align-items: center; margin: 6px 0; flex-wrap: wrap; }
+  .mc-row label { font-size: 13px; color: var(--text); }
+  .mc-row input[type=range] { flex: 1; accent-color: var(--accent); }
+  .mc-row select, .mc-row input[type=color] {
+    background: var(--panel2); color: var(--text); border: 1px solid var(--line);
+    border-radius: 8px; padding: 6px 8px; font: inherit; }
+  .mc-row select { flex: 1; min-width: 0; }
+  .mc-toggle { display: flex; gap: 6px; align-items: center; font-size: 13px;
+               background: var(--panel2); border: 1px solid var(--line);
+               border-radius: 999px; padding: 5px 11px; cursor: pointer; user-select: none; }
+  .mc-toggle input { accent-color: var(--accent); margin: 0; }
+  .mc-toggle.off { opacity: .55; }
+
+  #avList { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .mc-av { border: 1px solid var(--line); border-radius: 10px; background: var(--panel2);
+           padding: 10px 8px; text-align: center; cursor: pointer; font-size: 13px;
+           overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .mc-av.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+
+  .mc-stage-wrap { position: relative; background:
+      repeating-conic-gradient(#10141f 0% 25%, #0b0e14 0% 50%) 0 0/24px 24px;
+      border-radius: 10px; overflow: hidden; }
+  #stage { display: block; width: 100%; height: auto; cursor: grab; touch-action: none; }
+  #stage.dragging { cursor: grabbing; }
+  #stageEmpty { position: absolute; inset: 0; display: flex; flex-direction: column;
+                gap: 6px; align-items: center; justify-content: center;
+                color: var(--dim); font-size: 14px; pointer-events: none; text-align: center; }
+  .mc-reclight { position: absolute; top: 10px; left: 10px; display: none; align-items: center;
+                 gap: 6px; background: rgba(0,0,0,.55); border-radius: 999px;
+                 padding: 4px 12px; font-size: 12px; color: #fff; }
+  .mc-reclight.on { display: flex; }
+  .mc-reclight i { width: 9px; height: 9px; border-radius: 50%; background: #ff4d5e;
+                   animation: mcblink 1.1s infinite; }
+  @keyframes mcblink { 50% { opacity: .25; } }
+
+  #recBtns .vs-btn { min-width: 0; }
+  #mcLog { max-height: 180px; overflow: auto; display: none; margin-top: 8px; }
+  #mcLog.on { display: block; }
+  #srcInfo, #camInfo { font-size: 12px; color: var(--dim); margin-top: 6px; word-break: break-all; }
+  .mc-hint { font-size: 12px; color: var(--dim); margin-top: 6px; line-height: 1.5; }
+  .mc-hint a { color: var(--accent2); }
+
+  body.mode-mirror .wan-only { display: none !important; }
+  body.mode-mirror .mirror-only { display: block !important; }
+  #camPip { display: none; position: absolute; right: 12px; bottom: 12px; width: 22%;
+            border-radius: 10px; border: 1px solid rgba(255,255,255,.35);
+            transform: scaleX(-1); box-shadow: 0 4px 18px rgba(0,0,0,.5); }
+  #personList { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .mc-person { width: 54px; height: 54px; border-radius: 8px; object-fit: cover;
+               border: 2px solid var(--line); cursor: pointer; background: var(--panel2); }
+  .mc-person.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+
+  #gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
+  .mc-take { background: var(--panel2); border: 1px solid var(--line); border-radius: 10px;
+             overflow: hidden; }
+  .mc-take video { width: 100%; display: block; background: #000; aspect-ratio: 9/12; object-fit: contain; }
+  .mc-take .meta { padding: 8px 10px; font-size: 12px; color: var(--dim);
+                   display: flex; justify-content: space-between; gap: 6px; align-items: center; }
+  .mc-take .acts { display: flex; gap: 6px; padding: 0 10px 10px; }
+  .mc-take .acts .vs-btn { padding: 5px 10px; font-size: 12px; flex: 1; }
+</style>
+</head><body>
+<div class="vs-page">
+  <h1>🕺 Motion Capture</h1>
+  <p style="color:var(--dim); margin-top:-6px">
+    Take the motion of a video — or yourself on webcam — and put it on someone else.
+    Two routes: a <b>3D avatar</b> (free, local, tracks body + hands + lips live) or a
+    <b>real person from a photo</b> (AI, paid) who delivers the exact same performance
+    with the original audio.
+  </p>
+
+  <div class="mc-layout">
+    <div class="mc-side">
+
+      <div class="vs-panel">
+        <h3>Mode</h3>
+        <div class="vs-chips">
+          <button class="vs-chip on" id="modeVideo" type="button">🎥 From a video</button>
+          <button class="vs-chip" id="modeLive" type="button">📷 Live camera</button>
+          <button class="vs-chip" id="modeMirror" type="button">🪞 Avatar Creator</button>
+        </div>
+        <div class="mc-hint" id="modeHint">
+          Upload footage of a person — the avatar copies their moves and lips, stuck right on the video.
+        </div>
+        <button class="vs-btn ghost" id="btnXR" type="button" style="width:100%;margin-top:10px">
+          🧍 Pro full-body real-time — launch XR Animator</button>
+        <div class="mc-hint">The desktop mocap studio: webcam drives a VRM character live —
+          face, eyes, mouth, fingers, whole body — and exports BVH/VRMA motion for
+          Blender or Unreal. Same avatars work in both.</div>
+      </div>
+
+      <div class="vs-panel" id="panelVrm">
+        <h3>Avatar</h3>
+        <div id="avList"><span style="color:var(--dim);font-size:13px">loading…</span></div>
+        <div class="mc-row" style="margin-top:10px">
+          <button class="vs-btn ghost" id="avUploadBtn" type="button" style="flex:1">⬆ Upload .vrm</button>
+          <input type="file" id="avFile" accept=".vrm" hidden>
+        </div>
+        <div class="mc-hint">
+          Free avatars: <a href="https://hub.vroid.com" target="_blank" rel="noopener">VRoid&nbsp;Hub</a>
+          — download as .vrm and drop it here.
+        </div>
+      </div>
+
+      <div class="vs-panel" id="panelVideo">
+        <h3>Source video</h3>
+        <div class="vs-drop" id="srcDrop">drop a video here<br>or click to browse</div>
+        <input type="file" id="srcFile" accept="video/mp4,video/webm,video/quicktime,.mp4,.mov,.webm,.m4v,.mkv" hidden>
+        <div id="srcInfo"></div>
+      </div>
+
+      <div class="vs-panel" id="panelLive" style="display:none">
+        <h3>Camera</h3>
+        <div class="mc-row"><select id="camSel"><option value="">default camera</option></select></div>
+        <div class="mc-row">
+          <label class="mc-toggle"><input type="checkbox" id="mirrorChk"> mirror preview</label>
+          <label class="mc-toggle"><input type="checkbox" id="micChk" checked> record mic</label>
+        </div>
+        <div id="camInfo"></div>
+      </div>
+
+      <div class="vs-panel" id="panelReal">
+        <h3 id="realTitle">🧑 Real person (AI)</h3>
+        <div class="mc-hint wan-only" style="margin:0 0 8px">
+          Skip the 3D avatar: a photo of a <b>real person</b> performs the source video —
+          body, lips, timing, original audio kept. Paid (fal.ai), renders in the cloud,
+          lands in Finished takes.
+        </div>
+        <div class="mc-hint mirror-only" style="display:none;margin:0 0 8px">
+          <b>Pick the face.</b> This is who you become: upload a sharp, front-facing
+          photo (an AI-generated spokesperson, anyone you have rights to). Then Start
+          camera, hit Record, and perform — the face delivers your exact performance
+          with your voice. Free, rendered on this PC.
+        </div>
+        <div class="mirror-only" style="display:none">
+          <div class="vs-chips" style="margin-top:8px">
+            <button class="vs-chip" id="recInstant" type="button">⚡ Instant — record the live avatar</button>
+            <button class="vs-chip on" id="recStudio" type="button">💎 Studio — perfect render after Stop</button>
+          </div>
+          <div class="mc-hint" id="recModeHint">Studio records your real face and renders the
+            flawless version on the GPU after you stop (a few minutes).</div>
+        </div>
+        <div class="vs-drop" id="personDrop">drop a photo of the person<br>or click to browse</div>
+        <input type="file" id="personFile" accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp" hidden>
+        <div id="personList"></div>
+        <div class="mc-row wan-only" style="margin-top:8px">
+          <select id="realEngine">
+            <option value="wan-replace|480p">Wan Animate @480p — ~$0.075/s · test quality</option>
+            <option value="wan-replace|720p">Wan Animate @720p — ~$0.15/s · delivery</option>
+            <option value="pixverse|720p">PixVerse @720p — keeps wardrobe &amp; set</option>
+          </select>
+          <input type="number" id="realSeed" placeholder="seed (auto)" min="0" step="1"
+                 title="same seed = same look. Leave empty for a new one; paste a previous run's seed to reproduce its look"
+                 style="width:110px">
+          <input type="number" id="realTest" placeholder="test s" min="2" step="1"
+                 title="cheap test: swap only the first N seconds (10s ≈ $0.75 @480p). Happy with the look? Clear this and re-run full with the same seed"
+                 style="width:74px">
+        </div>
+        <div class="mc-row wan-only" style="margin-top:6px">
+          <label class="mc-toggle" title="render the whole clip in ONE API call — same price, zero look-jumps mid-take. Uncheck only if fal rejects a long video, then it falls back to seeded segments with dissolves">
+            <input type="checkbox" id="realOneCall" checked> one call — no seams (continuous take)</label>
+        </div>
+        <div class="mc-hint wan-only">Wan re-renders the whole frame — best likeness &amp; lips, but wardrobe
+          and background may change. PixVerse keeps the original wardrobe/set, quality is lower.
+          Best reference photo: tight head-and-shoulders on a neutral background.</div>
+        <button class="vs-btn wan-only" id="btnReal" type="button" style="width:100%;margin-top:8px">
+          🧑 Make them perform it</button>
+        <button class="vs-btn ghost wan-only" id="btnLP" type="button" style="width:100%;margin-top:6px">
+          🎭 Free photoreal head — local GPU</button>
+        <div class="mc-hint wan-only">The free route (LivePortrait) copies head, expressions and lips onto the
+          photo — the body stays still. Great for talking heads; needs ComfyUI running.</div>
+        <div id="realStatus" style="font-size:13px;color:var(--dim);margin-top:6px"></div>
+      </div>
+
+      <div class="vs-panel" id="panelTrack">
+        <h3>Tracking &amp; overlay</h3>
+        <div class="mc-row">
+          <label class="mc-toggle"><input type="checkbox" id="tBody" checked> body</label>
+          <label class="mc-toggle"><input type="checkbox" id="tHands" checked> hands</label>
+          <label class="mc-toggle"><input type="checkbox" id="tFace" checked> face + lips</label>
+        </div>
+        <div class="mc-row">
+          <label style="min-width:76px">smoothing</label>
+          <input type="range" id="smoothRange" min="5" max="80" value="35">
+        </div>
+        <div class="mc-row">
+          <label style="min-width:76px">avatar size</label>
+          <input type="range" id="scaleRange" min="25" max="300" value="100">
+        </div>
+        <div class="mc-row">
+          <label style="min-width:76px">background</label>
+          <select id="bgSel">
+            <option value="footage">the footage</option>
+            <option value="green">green screen</option>
+            <option value="color">solid color</option>
+          </select>
+          <input type="color" id="bgColor" value="#101522" style="display:none">
+        </div>
+        <div class="mc-hint">drag on the preview to move the avatar · scroll to resize</div>
+      </div>
+
+      <div class="vs-panel">
+        <h3>Take</h3>
+        <div class="mc-row" id="recBtns">
+          <button class="vs-btn ghost" id="btnPreview" type="button">▶ Preview</button>
+          <button class="vs-btn" id="btnRecord" type="button">⏺ Record</button>
+          <button class="vs-btn ghost" id="btnStop" type="button" disabled>⏹ Stop</button>
+        </div>
+        <div id="mcStatus" style="font-size:13px;color:var(--dim);margin-top:8px">pick an avatar to begin</div>
+        <div class="vs-log" id="mcLog"></div>
+      </div>
+
+    </div>
+
+    <div class="mc-main">
+      <div class="vs-panel" style="padding:10px">
+        <div class="mc-stage-wrap">
+          <canvas id="stage" width="1280" height="720"></canvas>
+          <div id="stageEmpty"><b>nothing on stage yet</b>
+            <span>upload a source video or start the camera</span></div>
+          <div class="mc-reclight" id="recLight"><i></i>REC</div>
+          <video id="camPip" muted playsinline></video>
+        </div>
+      </div>
+      <div class="vs-panel" style="margin-top:12px">
+        <h3 style="margin:0 0 10px;font-size:13px;letter-spacing:.4px;text-transform:uppercase;color:var(--dim)">
+          Finished takes</h3>
+        <div id="gallery"><span style="color:var(--dim);font-size:13px">loading…</span></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="/static/js/vs-core.js"></script>
+<script src="/static/vendor/kalidokit/kalidokit.umd.js"></script>
+<script type="module" src="/static/js/motion-capture.js"></script>
+</body></html>

@@ -1,0 +1,722 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>UGC Factory · Text → Commercial AI — Video Studio</title>
+<link rel="stylesheet" href="/static/vs-creator.css">
+<link rel="stylesheet" href="/static/vs.css">
+<script src="/static/vs-nav.js" defer></script>
+<style>
+  main.cml { max-width:1180px; margin:0 auto; padding:20px 26px; }
+  .twocol { display:grid; grid-template-columns:430px 1fr; gap:20px; align-items:start; }
+  @media (max-width:1000px){ .twocol { grid-template-columns:1fr; } }
+  .chips { display:flex; gap:8px; flex-wrap:wrap; }
+  .chipbtn { background:var(--panel2); border:1px solid var(--line); color:var(--text);
+    border-radius:9px; padding:8px 14px; font-size:13px; cursor:pointer; }
+  .chipbtn.on { border-color:var(--accent); background:rgba(124,92,255,.16); }
+  .modes { display:flex; gap:10px; margin:0 auto 18px; max-width:1180px; padding:0 26px; }
+  .modebtn { flex:1; text-align:center; font-size:15px; font-weight:600; padding:13px 10px;
+    background:var(--panel); border:1px solid var(--line); border-radius:12px; cursor:pointer;
+    color:var(--dim); }
+  .modebtn.on { border-color:var(--accent); color:var(--text); background:rgba(124,92,255,.12); }
+  .modebtn small { display:block; font-weight:400; font-size:11.5px; margin-top:3px; color:var(--dim); }
+  .clipcard { background:var(--panel); border:1px solid var(--line); border-radius:12px; overflow:hidden; }
+  .clipcard video { width:100%; display:block; background:#000; max-height:420px; }
+  .clipcard .meta { padding:9px 12px; font-size:12px; color:var(--dim); }
+  .gallery { display:grid; grid-template-columns:repeat(auto-fill,minmax(230px,1fr)); gap:12px; }
+  .est { font-size:13px; color:var(--warn); font-weight:600; }
+  .stepno { display:inline-block; width:20px; height:20px; line-height:20px; text-align:center;
+    border-radius:50%; background:rgba(124,92,255,.22); color:var(--accent2); font-size:12px;
+    font-weight:700; margin-right:6px; }
+  .assetrow { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  .assetbox { background:var(--panel2); border:1px solid var(--line); border-radius:11px; padding:10px 11px; }
+  .assetbox.drag { border-color:var(--accent); background:rgba(124,92,255,.08); }
+  .assetlbl { font-size:12.5px; font-weight:600; margin-bottom:7px; }
+  .thumbs { display:flex; gap:6px; flex-wrap:wrap; }
+  .thumbs:empty { display:none; }
+  .thumbs figure { position:relative; margin:0; width:52px; height:52px; border-radius:8px;
+    overflow:hidden; border:1px solid var(--line); background:#0a0d14; }
+  .thumbs img { width:100%; height:100%; object-fit:cover; display:block; }
+  .thumbs button { position:absolute; top:1px; right:1px; width:17px; height:17px; line-height:15px;
+    padding:0; border:0; border-radius:5px; background:rgba(0,0,0,.72); color:#fff;
+    font-size:12px; cursor:pointer; }
+  .assetadd { display:inline-block; margin-top:7px; font-size:12px; color:var(--accent2);
+    border:1px dashed var(--line); border-radius:8px; padding:5px 9px; cursor:pointer; }
+  .assetadd.full { opacity:.4; pointer-events:none; }
+  #script { font:13px/1.6 var(--mono); }
+  /* UGC image slots: big drop targets that also take Ctrl+V */
+  .ugcimg { border:2px dashed var(--line); border-radius:12px; min-height:150px; display:flex;
+    align-items:center; justify-content:center; text-align:center; color:var(--dim); cursor:pointer;
+    overflow:hidden; transition:.15s; position:relative; }
+  .ugcimg:hover,.ugcimg.drag { border-color:var(--accent); color:var(--accent2); background:rgba(124,92,255,.06); }
+  .ugcimg.active { border-style:solid; border-color:var(--accent); }
+  .ugcimg img { width:100%; height:100%; max-height:260px; object-fit:contain; display:block; }
+  .ugcimg .clear { position:absolute; top:6px; right:6px; width:22px; height:22px; border:0;
+    border-radius:6px; background:rgba(0,0,0,.72); color:#fff; cursor:pointer; display:none; }
+  .ugcimg.has .clear { display:block; }
+  .tplgrid { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+  .tpl { background:var(--panel2); border:1px solid var(--line); border-radius:10px; padding:9px 11px;
+    cursor:pointer; font-size:13px; }
+  .tpl small { display:block; color:var(--dim); font-size:11px; margin-top:2px; }
+  .tpl.on { border-color:var(--accent); background:rgba(124,92,255,.14); }
+</style>
+</head>
+<body>
+<header class="vs-head">
+  <h1>🤳 UGC <b>Factory</b> · 📺 Text → <b>Commercial AI</b></h1>
+  <div class="sub">make an avatar talk on Google Veo 3 — or describe a product and get a full commercial</div>
+</header>
+
+<div class="modes">
+  <button class="modebtn" id="mbtn-ugc">🤳 UGC Factory
+    <small>avatar photo → talking UGC video with real voice</small></button>
+  <button class="modebtn on" id="mbtn-cml">📺 Text → Commercial
+    <small>product brief → Opus script → multi-shot ad</small></button>
+</div>
+
+<main class="cml">
+
+<!-- ═══════════════════ UGC FACTORY ═══════════════════ -->
+<div class="twocol" id="mode-ugc" style="display:none">
+  <section>
+    <div class="vs-panel">
+      <h3><span class="stepno">1</span>Template</h3>
+      <div class="tplgrid" id="utpl">
+        <div class="tpl on" data-t="selfie">🤳 General selfie<small>phone at arm's length</small></div>
+        <div class="tpl" data-t="selling">🛍 Selling<small>UGC product pitch to camera</small></div>
+        <div class="tpl" data-t="podcast">🎙 Podcast<small>big mic, studio vibe</small></div>
+        <div class="tpl" data-t="car">🚗 Car talking<small>driver's seat, phone on dash</small></div>
+        <div class="tpl" data-t="mirror">🪞 Mirror<small>filming into the mirror</small></div>
+        <div class="tpl" data-t="stream">🖥 Stream<small>webcam + ring-light look</small></div>
+        <div class="tpl" data-t="static">🎥 Static<small>fixed tripod, straight to lens</small></div>
+      </div>
+    </div>
+
+    <div class="vs-panel">
+      <h3><span class="stepno">2</span>Image</h3>
+      <div class="vs-hint">Your avatar — the person on screen <b>(required)</b></div>
+      <label class="ugcimg active" id="uav" style="margin-top:5px">
+        <input type="file" accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp" style="display:none">
+        <span class="msg">⬆ Drop / click / <b>Ctrl+V paste</b> the avatar photo<br>
+          <span class="vs-hint">PNG · JPG — clipboard paste works</span></span>
+        <button class="clear" type="button">×</button>
+      </label>
+      <div class="vs-hint" style="margin-top:12px">Product image <b>(optional)</b> — merged into their hands (~$0.04)</div>
+      <label class="ugcimg" id="upr" style="margin-top:5px;min-height:110px">
+        <input type="file" accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp" style="display:none">
+        <span class="msg">⬆ Drop / click / <b>Ctrl+V paste</b> the product<br>
+          <span class="vs-hint">PNG · JPG — click a box first, then paste</span></span>
+        <button class="clear" type="button">×</button>
+      </label>
+    </div>
+
+    <div class="vs-panel">
+      <h3><span class="stepno">3</span>AI model</h3>
+      <select class="vs-sel" id="umodel" style="width:100%">
+        <option value="veo3-fast" selected>Google Veo 3 Fast — 720P · speaks (recommended)</option>
+      </select>
+      <div class="vs-hint" id="umodelnote" style="margin-top:6px;opacity:.85">🗣 <b>speaks</b> models voice the
+        script themselves · 🎞 <b>silent</b> models film the person mouthing it — pair them with a Voice-Bank
+        voice (free) for sound</div>
+      <div class="vs-hint" style="margin-top:12px">Length</div>
+      <div class="chips" id="ulen">
+        <button class="chipbtn on" data-s="auto">🪄 auto — as long as the words</button>
+        <button class="chipbtn" data-s="8">8s</button>
+        <button class="chipbtn" data-s="16">16s</button>
+        <button class="chipbtn" data-s="24">24s</button>
+        <button class="chipbtn" data-s="40">40s</button>
+      </div>
+      <div class="vs-hint" style="margin-top:7px;opacity:.85">Models film short segments (4–12s each) — longer
+        clips are chained seamlessly (every segment continues from the last frame). Tip: a Voice-Bank voice
+        stays perfectly consistent across segments.</div>
+    </div>
+  </section>
+
+  <section>
+    <div class="vs-panel">
+      <h3><span class="stepno">4</span>Action</h3>
+      <textarea class="vs-ta" id="uaction" rows="3"
+        placeholder="describe the action — extra detail that guides your character's behavior. e.g. she smiles, holds the jar up to the lens, points at the label, then winks"></textarea>
+    </div>
+
+    <div class="vs-panel">
+      <h3><span class="stepno">5</span>Audio</h3>
+      <div class="vs-hint">Audio text — what the avatar says</div>
+      <textarea class="vs-ta" id="uscript" rows="4" style="margin-top:5px"
+        placeholder="type the script — the avatar speaks it out loud, lip-synced. e.g. okay I wasn't going to post this, but these gummies actually fixed my 3pm crash…"></textarea>
+      <div class="vs-row" style="gap:10px;flex-wrap:wrap;margin-top:10px">
+        <label class="vs-hint">voice type
+          <select class="vs-sel" id="uvoice" style="margin-left:5px">
+            <option value="auto" selected>🎙 auto</option>
+            <option value="whisper">🤫 whisper</option>
+            <option value="rough">🪨 a bit rough</option>
+            <option value="harsh">⚡ harsh</option>
+            <option value="soft">🕊 soft and clear</option>
+            <option value="low">🪵 low and strong</option>
+            <option value="high">🎈 very high</option>
+            <option value="none">🔇 no sound</option>
+            <optgroup label="🎬 from a previous video (Voice Bank)" id="uvoicebank"></optgroup>
+          </select></label>
+        <label class="vs-hint">emotion
+          <select class="vs-sel" id="uemotion" style="margin-left:5px">
+            <option value="auto" selected>✨ auto</option>
+            <option value="happy">😊 happy</option>
+            <option value="angry">😠 angry</option>
+            <option value="fearful">😨 fearful</option>
+            <option value="surprised">😲 surprised</option>
+            <option value="disgusted">🤢 disgusted</option>
+            <option value="excited">🤩 excited</option>
+            <option value="calm">😌 calm</option>
+            <option value="playful">😜 playful</option>
+            <option value="serious">😐 serious</option>
+          </select></label>
+      </div>
+      <div class="vs-hint" id="uvoicenote" style="margin-top:7px;opacity:.85">Voice-Bank voices are cloned from
+        your earlier videos — free &amp; local. The avatar mouths the words on camera and your saved voice speaks
+        them. <a href="/voices" style="color:var(--accent2)">clone a new voice →</a></div>
+      <div class="vs-hint" style="margin-top:10px">Background sound</div>
+      <input class="vs-in" id="ubg" style="width:100%;margin-top:5px"
+        placeholder="e.g. quiet café hum, soft lo-fi music, birds outside the car window">
+    </div>
+
+    <div class="vs-panel" style="border-color:var(--accent)">
+      <div class="est" id="uest">estimated cost: ~$1.20 · 8s on Veo 3 Fast</div>
+      <div class="vs-row" style="margin-top:8px">
+        <button class="vs-btn primary" id="ugo">🤳 Make the UGC video</button>
+        <span class="vs-hint" id="ugomsg"></span>
+      </div>
+      <div id="uprog" style="display:none;margin-top:10px">
+        <div class="vs-hint" id="uproglbl">starting…</div>
+        <div id="ulog" style="background:#080b11;border:1px solid var(--line);border-radius:9px;
+          padding:9px 11px;margin-top:6px;font:11px/1.5 var(--mono);color:#b9c3d8;max-height:220px;
+          overflow:auto;white-space:pre-wrap"></div>
+      </div>
+    </div>
+  </section>
+</div>
+
+<!-- ═══════════════════ TEXT → COMMERCIAL ═══════════════════ -->
+<div class="twocol" id="mode-cml">
+  <section>
+    <div class="vs-panel">
+      <h3><span class="stepno">1</span>What are we selling?</h3>
+      <input class="vs-in" id="pname" placeholder="product name — e.g. Fairy Flame" style="width:100%">
+      <textarea class="vs-ta" id="pdesc" rows="4" style="margin-top:8px"
+        placeholder="what it is + what it does — the more specific, the better the ad. e.g. flame-shaped wellness gummies with ashwagandha; melts stress without the groggy feeling…"></textarea>
+      <input class="vs-in" id="paud" placeholder="who it's for — e.g. stressed 25-40yo professionals" style="width:100%;margin-top:8px">
+      <input class="vs-in" id="poffer" placeholder="the offer / CTA — e.g. 20% off your first jar, link below" style="width:100%;margin-top:8px">
+    </div>
+
+    <div class="vs-panel">
+      <h3><span class="stepno">2</span>The feel</h3>
+      <div class="vs-hint">Tone</div>
+      <select class="vs-sel" id="ptone" style="width:100%;margin-top:5px">
+        <option value="confident, modern, energetic" selected>⚡ Energetic — fast, modern, punchy</option>
+        <option value="warm, sincere, reassuring">🤍 Warm — sincere, human, calm</option>
+        <option value="premium, minimal, luxurious">💎 Luxury — premium, minimal, slow burn</option>
+        <option value="playful, witty, a little irreverent">😏 Funny — playful, witty</option>
+        <option value="authoritative, expert, trustworthy">🎓 Expert — authoritative, factual</option>
+        <option value="casual first-person UGC, like a friend recommending it">📱 UGC — a friend talking to camera</option>
+      </select>
+      <div class="vs-hint" style="margin-top:12px">Length</div>
+      <div class="chips" id="len">
+        <button class="chipbtn" data-s="15">15s</button>
+        <button class="chipbtn on" data-s="30">30s</button>
+        <button class="chipbtn" data-s="60">60s</button>
+      </div>
+      <div class="vs-hint" style="margin-top:12px">Aspect</div>
+      <div class="chips" id="asp">
+        <button class="chipbtn on" data-a="9:16">9:16 vertical</button>
+        <button class="chipbtn" data-a="1:1">1:1 square</button>
+        <button class="chipbtn" data-a="16:9">16:9 wide</button>
+      </div>
+      <div class="vs-hint" style="margin-top:12px">Visual style</div>
+      <select class="vs-sel" id="pstyle" style="width:100%;margin-top:5px">
+        <option value="cine" selected>🎬 Cinematic commercial — polished, ad-grade shots</option>
+        <option value="ugc">📱 UGC realism — handheld phone, 2–3s cuts</option>
+      </select>
+    </div>
+
+    <div class="vs-panel">
+      <h3><span class="stepno">3</span>The script <span class="r vs-hint">written by Claude Opus</span></h3>
+      <div class="vs-row">
+        <button class="vs-btn primary" id="write">✍ Write my commercial</button>
+        <span class="vs-hint" id="writemsg"></span>
+      </div>
+      <textarea class="vs-ta" id="script" rows="9" style="margin-top:9px"
+        placeholder="the voiceover script lands here — edit anything before it's filmed"></textarea>
+      <div class="vs-hint" id="scriptmeta" style="margin-top:5px"></div>
+      <div class="vs-row" style="margin-top:8px">
+        <input class="vs-in" id="steer" style="flex:1"
+          placeholder="want it different? e.g. lean harder on the hook, mention the smell…">
+        <button class="vs-btn" id="rewrite" title="rewrite with your direction">↻</button>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="vs-panel" style="border-color:var(--accent)">
+      <h3><span class="stepno">4</span>Film it</h3>
+
+      <div class="assetrow" style="margin-top:4px">
+        <div class="assetbox" data-slot="product">
+          <div class="assetlbl">📦 Your real product<span class="vs-hint"> · up to 3 photos</span></div>
+          <div class="thumbs" id="th-product"></div>
+          <label class="assetadd">＋ add a photo
+            <input type="file" accept="image/png,image/jpeg,image/webp" multiple style="display:none"></label>
+          <div class="vs-hint">Optional — but this puts <b>your</b> product on screen instead of an AI-invented one.</div>
+        </div>
+        <div class="assetbox" data-slot="banner">
+          <div class="assetlbl">🏷 Offer banner<span class="vs-hint"> · 1</span></div>
+          <div class="thumbs" id="th-banner"></div>
+          <label class="assetadd">＋ add your offer graphic
+            <input type="file" accept="image/png,image/jpeg,image/webp" style="display:none"></label>
+          <div class="vs-hint">Shown as an end card after the last shot.</div>
+        </div>
+      </div>
+
+      <div class="vs-row" style="gap:10px;flex-wrap:wrap;margin-top:12px">
+        <label class="vs-hint">shots
+          <input type="number" id="pshots" value="6" min="2" max="12" style="width:56px;margin-left:5px"></label>
+        <select class="vs-sel" id="pt2v" style="width:auto"></select>
+        <select class="vs-sel" id="pvoice" style="width:auto">
+          <option value="">🎙 default narrator voice</option>
+        </select>
+      </div>
+      <div class="vs-row" style="gap:14px;flex-wrap:wrap;margin-top:8px">
+        <label class="vs-hint"><input type="checkbox" id="ptags" checked> ✏️ on-screen story text</label>
+        <label class="vs-hint"><input type="checkbox" id="pbrand"> 🏷 liitt brand look</label>
+      </div>
+
+      <div class="est" id="est" style="margin-top:12px">estimated cost: —</div>
+      <div class="vs-row" style="margin-top:8px">
+        <button class="vs-btn primary" id="go">🎬 Make the commercial</button>
+        <span class="vs-hint" id="gomsg"></span>
+      </div>
+      <div id="prog" style="display:none;margin-top:10px">
+        <div class="vs-hint" id="proglbl">starting…</div>
+        <div id="log" style="background:#080b11;border:1px solid var(--line);border-radius:9px;
+          padding:9px 11px;margin-top:6px;font:11px/1.5 var(--mono);color:#b9c3d8;max-height:240px;
+          overflow:auto;white-space:pre-wrap"></div>
+      </div>
+    </div>
+  </section>
+</div>
+
+<div class="vs-panel" style="margin-top:20px">
+  <h3>Your videos <span class="r vs-hint" id="falspend"></span></h3>
+  <div class="gallery" id="gallery"><div class="vs-hint">nothing yet — make your first one ↑</div></div>
+</div>
+
+</main>
+
+<script src="/static/js/vs-core.js"></script>
+<script>
+(async () => {
+  const $ = s => document.querySelector(s);
+
+  /* ═══ mode switcher — 🤳 UGC Factory / 📺 Text → Commercial ═══ */
+  function setMode(m) {
+    $("#mode-ugc").style.display = m === "ugc" ? "" : "none";
+    $("#mode-cml").style.display = m === "ugc" ? "none" : "";
+    $("#mbtn-ugc").classList.toggle("on", m === "ugc");
+    $("#mbtn-cml").classList.toggle("on", m !== "ugc");
+  }
+  $("#mbtn-ugc").onclick = () => setMode("ugc");
+  $("#mbtn-cml").onclick = () => setMode("cml");
+  // UGC Factory opens first; /commercial?mode=cml deep-links the commercial side
+  setMode(new URLSearchParams(location.search).get("mode") === "cml" ? "cml" : "ugc");
+
+  /* ════════════════════ UGC FACTORY ════════════════════ */
+  let uSeconds = "auto", uBusy = false;
+  const UIMG = {av: null, pr: null};                 // uploaded rel paths
+  let activeBox = "uav";                             // which box Ctrl+V fills
+
+  // every fal image→video model, from the server (speaks vs silent)
+  let UGC_OPT = {"veo3-fast": {audio: true, durations: [4, 6, 8], cost_per_s: 0.15,
+                               label: "Google Veo 3 Fast — 720P · speaks"}};
+  try {
+    const o = await VS.api("/api/ugc/options");
+    UGC_OPT = {};
+    const speak = [], silent = [];
+    for (const m of (o.models || [])) {
+      UGC_OPT[m.key] = m;
+      (m.audio ? speak : silent).push(m);
+    }
+    $("#umodel").innerHTML =
+      '<optgroup label="🗣 Speaks — the avatar voices the script itself">'
+      + speak.map(m => `<option value="${m.key}"${m.key === "veo3-fast" ? " selected" : ""}>${VS.esc(m.label)}</option>`).join("")
+      + '</optgroup><optgroup label="🎞 Silent — pair with a Voice-Bank voice (free)">'
+      + silent.map(m => `<option value="${m.key}">${VS.esc(m.label)}</option>`).join("")
+      + "</optgroup>";
+  } catch (e) { /* fallback options stay */ }
+
+  // voices cloned from previous videos (Voice Bank) → the voice-type picker
+  try {
+    const v = await VS.api("/api/voices");
+    const bank = $("#uvoicebank");
+    for (const vc of (v.voices || []))
+      bank.insertAdjacentHTML("beforeend",
+        `<option value="bank:${VS.esc(vc.id)}">🎬 ${VS.esc(vc.name)} — from your video</option>`);
+    if (!(v.voices || []).length)
+      bank.label = "🎬 Voice Bank — empty (clone one on the Voices tab)";
+  } catch (e) { /* the bank is optional */ }
+
+  // template picker
+  let uTemplate = "selfie";
+  $("#utpl").onclick = e => {
+    const t = e.target.closest(".tpl");
+    if (!t) return;
+    uTemplate = t.dataset.t;
+    document.querySelectorAll("#utpl .tpl").forEach(x => x.classList.toggle("on", x === t));
+  };
+
+  // length + model → estimate. "auto" sizes the clip to the words (~2.3 w/s);
+  // past the model's per-call cap the server chains segments — mirror its plan.
+  const UGC_WPS = 2.3, UGC_MAX = 120;
+  const uModel = () => UGC_OPT[$("#umodel").value] || {audio: true, durations: [4, 6, 8], cost_per_s: 0.15, label: $("#umodel").value};
+  function uPlan(sec) {
+    const durs = [...uModel().durations].sort((a, b) => a - b);
+    const segMax = durs[durs.length - 1];
+    const segs = []; let left = Math.max(durs[0], Math.min(UGC_MAX, sec));
+    while (left > 0) {
+      if (left >= segMax) { segs.push(segMax); left -= segMax; }
+      else { segs.push(durs.find(s => s >= left) || segMax); left = 0; }
+    }
+    return segs;
+  }
+  function uEffSeconds() {
+    if (uSeconds !== "auto") return uPlan(+uSeconds);
+    const words = $("#uscript").value.trim().split(/\s+/).filter(Boolean).length;
+    return uPlan(words ? Math.ceil(words / UGC_WPS) : Math.max(...uModel().durations));
+  }
+  $("#ulen").onclick = e => { if (e.target.dataset.s) { uSeconds = e.target.dataset.s;
+    document.querySelectorAll("#ulen .chipbtn").forEach(b => b.classList.toggle("on", b === e.target));
+    uEstimate(); } };
+  $("#umodel").onchange = uEstimate;
+  function uEstimate() {
+    const m = uModel(), segs = uEffSeconds(), sec = segs.reduce((a, b) => a + b, 0);
+    const words = $("#uscript").value.trim().split(/\s+/).filter(Boolean).length;
+    const v = $("#uvoice").value;
+    const nativeSpeech = m.audio && v !== "none" && !v.startsWith("bank:");
+    const rate = (!nativeSpeech && m.cost_per_s_silent) ? m.cost_per_s_silent : (m.cost_per_s || 0.15);
+    const c = sec * rate + (UIMG.pr ? 0.039 : 0);
+    const silentNote = !m.audio && $("#uvoice").value !== "none"
+      && !$("#uvoice").value.startsWith("bank:") ? " · ⚠ silent model — pick a Voice-Bank voice" : "";
+    $("#uest").textContent = `estimated cost: ~$${c.toFixed(2)} · ${sec}s`
+      + (segs.length > 1 ? ` in ${segs.length} chained segments` : "")
+      + (uSeconds === "auto" && words ? ` — sized to your ${words} words` : "")
+      + ` on ${(m.label || "").split(" — ")[0]}` + (UIMG.pr ? " · incl. product merge" : "")
+      + silentNote;
+  }
+  $("#uscript").addEventListener("input", uEstimate);
+  $("#uvoice").addEventListener("change", uEstimate);
+
+  // image slots: click / drag / Ctrl+V paste
+  async function uUpload(slot, fileOrBlob) {
+    const box = $(slot === "av" ? "#uav" : "#upr");
+    const msg = box.querySelector(".msg");
+    const old = msg.innerHTML;
+    msg.textContent = "uploading…";
+    const fd = new FormData();
+    const f = fileOrBlob.name ? fileOrBlob
+      : new File([fileOrBlob], "paste.png", {type: fileOrBlob.type || "image/png"});
+    fd.append("file", f);
+    try {
+      const r = await fetch("/api/i2v/upload", {method: "POST", body: fd});
+      if (!r.ok) throw new Error((await r.text()).slice(0, 120));
+      const d = await r.json();
+      UIMG[slot] = d.image;
+      let img = box.querySelector("img");
+      if (!img) { img = document.createElement("img"); box.insertBefore(img, box.querySelector(".clear")); }
+      img.src = "/media/" + d.image;
+      msg.style.display = "none";
+      box.classList.add("has");
+      uEstimate();
+    } catch (e) { msg.innerHTML = old; VS.toast("Upload failed: " + e.message); }
+  }
+  for (const [id, slot] of [["#uav", "av"], ["#upr", "pr"]]) {
+    const box = $(id), inp = box.querySelector("input[type=file]");
+    box.addEventListener("click", e => {
+      activeBox = id.slice(1);
+      document.querySelectorAll(".ugcimg").forEach(b => b.classList.toggle("active", b === box));
+      if (e.target.classList.contains("clear")) {
+        e.preventDefault();
+        UIMG[slot] = null;
+        const img = box.querySelector("img"); if (img) img.remove();
+        box.classList.remove("has");
+        box.querySelector(".msg").style.display = "";
+        uEstimate();
+      }
+    });
+    inp.onchange = e => { if (e.target.files[0]) uUpload(slot, e.target.files[0]); e.target.value = ""; };
+    ["dragover", "dragleave", "drop"].forEach(ev => box.addEventListener(ev, e => {
+      e.preventDefault();
+      box.classList.toggle("drag", ev === "dragover");
+      if (ev === "drop" && e.dataTransfer.files[0]) uUpload(slot, e.dataTransfer.files[0]);
+    }));
+  }
+  // clipboard paste → whichever box was clicked last (avatar by default)
+  document.addEventListener("paste", e => {
+    if ($("#mode-ugc").style.display === "none") return;
+    const items = [...(e.clipboardData ? e.clipboardData.items : [])];
+    const img = items.find(it => it.type && it.type.startsWith("image/"));
+    if (!img) return;
+    e.preventDefault();
+    uUpload(activeBox === "upr" ? "pr" : "av", img.getAsFile());
+    VS.toast("📋 pasted into the " + (activeBox === "upr" ? "product" : "avatar") + " slot");
+  });
+
+  // generate (402 gate → job watch)
+  $("#ugo").onclick = async () => {
+    if (uBusy) return;
+    if (!UIMG.av) { VS.toast("Upload (or paste) the avatar image first"); return; }
+    const rawVoice = $("#uvoice").value;
+    const bankVoice = rawVoice.startsWith("bank:") ? rawVoice.slice(5) : "";
+    const voice = bankVoice ? "auto" : rawVoice;
+    if (voice !== "none" && !$("#uscript").value.trim()) {
+      VS.toast("Type the audio text — what should they say?"); return;
+    }
+    if (!uModel().audio && voice !== "none" && !bankVoice) {
+      VS.toast("This model films silent — pick a Voice-Bank voice in the voice list, or set 'no sound'");
+      return;
+    }
+    const body = {image: UIMG.av, product: UIMG.pr || "", template: uTemplate,
+      action: $("#uaction").value.trim(), script: $("#uscript").value.trim(),
+      voice, voice_id: bankVoice, emotion: $("#uemotion").value, bg: $("#ubg").value.trim(),
+      model: $("#umodel").value, seconds: uSeconds};
+    const hdr = {"Content-Type": "application/json"};
+    uBusy = true; $("#ugo").disabled = true; $("#ugomsg").textContent = "";
+    try {
+      let r = await fetch("/api/ugc/run", {method: "POST", headers: hdr, body: JSON.stringify(body)});
+      if (r.status === 402) {
+        const d = await r.json();
+        if (!confirm(`⚠ This films on fal.ai (spends money).\n\n${d.estimate.summary}\n\nApprove and start? (Cancel = nothing charged)`)) {
+          uBusy = false; $("#ugo").disabled = false; VS.toast("Cancelled — nothing charged"); return;
+        }
+        r = await fetch("/api/ugc/run", {method: "POST", headers: hdr,
+          body: JSON.stringify(Object.assign({confirm_cost: true}, body))});
+      }
+      if (!r.ok) throw new Error((await r.text()).replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 160));
+      const d = await r.json();
+      $("#uprog").style.display = "block";
+      $("#ulog").textContent = "";
+      VS.toast("🤳 Filming your avatar — ~1-3 min");
+      uWatch(d.job_id);
+    } catch (e) { VS.toast("Couldn't start: " + e.message); uBusy = false; $("#ugo").disabled = false; }
+  };
+
+  async function uWatch(jobId) {
+    let off = 0, status = "running";
+    const box = $("#ulog");
+    while (status === "running" || status === "queued") {
+      await new Promise(r => setTimeout(r, 2500));
+      let j; try { j = await VS.api(`/api/job/${jobId}?offset=${off}`); } catch (e) { continue; }
+      status = j.status;
+      if (j.lines && j.lines.length) {
+        off += j.lines.length;
+        box.textContent += (box.textContent ? "\n" : "") + j.lines.join("\n");
+        box.scrollTop = box.scrollHeight;
+      }
+    }
+    uBusy = false; $("#ugo").disabled = false;
+    if (status === "done") { $("#uproglbl").textContent = "✅ done"; VS.toast("✅ UGC video ready"); loadClips(); }
+    else { $("#uproglbl").textContent = "❌ " + status; VS.toast("Failed — see the log"); }
+  }
+
+  /* ════════════════════ TEXT → COMMERCIAL ════════════════════ */
+  let lengthS = 30, aspect = "9:16", busy = false, t2vModels = [];
+
+  $("#len").onclick = e => { if (e.target.dataset.s) { lengthS = +e.target.dataset.s;
+    document.querySelectorAll("#len .chipbtn").forEach(b => b.classList.toggle("on", b === e.target));
+    $("#pshots").value = ({15: 4, 30: 6, 60: 10})[lengthS] || 6; estimate(); } };
+  $("#asp").onclick = e => { if (e.target.dataset.a) { aspect = e.target.dataset.a;
+    document.querySelectorAll("#asp .chipbtn").forEach(b => b.classList.toggle("on", b === e.target)); } };
+
+  try {
+    const t = await VS.api("/api/t2v/models");
+    t2vModels = t.models || [];
+    $("#pt2v").innerHTML = t2vModels.map(m =>
+      `<option value="${m.key}"${m.key === "veo3-fast" ? " selected" : ""}>${VS.esc(m.label)}</option>`).join("");
+  } catch (e) { $("#pt2v").innerHTML = '<option value="veo3-fast">Veo 3 Fast</option>'; }
+  $("#pt2v").onchange = estimate;
+  $("#pshots").oninput = estimate;
+
+  try {
+    const v = await VS.api("/api/voices");
+    for (const vc of (v.voices || []))
+      $("#pvoice").insertAdjacentHTML("beforeend",
+        `<option value="${VS.esc(vc.id)}">🎙 ${VS.esc(vc.name)}</option>`);
+  } catch (e) { /* voices are optional */ }
+
+  function estimate() {
+    const m = t2vModels.find(x => x.key === $("#pt2v").value);
+    if (!m) { $("#est").textContent = "estimated cost: —"; return; }
+    const shots = Math.max(2, Math.min(12, +$("#pshots").value || 6));
+    const total = shots * m.min_s * m.cost_per_s;
+    $("#est").textContent = `estimated cost: ~$${total.toFixed(2)} · ${shots} shots × ${m.min_s}s on ${m.label.split(" — ")[0]} (script writing is free)`;
+  }
+  estimate();
+
+  const ASSETS = {product: [], banner: []};
+  const ASSET_MAX = {product: 3, banner: 1};
+  function drawAssets(slot) {
+    const box = $(`#th-${slot}`);
+    box.innerHTML = ASSETS[slot].map((p, i) =>
+      `<figure><img src="/media/${p}" alt=""><button data-i="${i}" title="remove">×</button></figure>`).join("");
+    box.querySelectorAll("button").forEach(b => b.onclick = () => {
+      ASSETS[slot].splice(+b.dataset.i, 1); drawAssets(slot);
+    });
+    document.querySelector(`.assetbox[data-slot="${slot}"] .assetadd`)
+      .classList.toggle("full", ASSETS[slot].length >= ASSET_MAX[slot]);
+  }
+  async function addAssets(slot, files) {
+    for (const f of [...files]) {
+      if (ASSETS[slot].length >= ASSET_MAX[slot]) { VS.toast(`${slot}: max ${ASSET_MAX[slot]}`); break; }
+      const fd = new FormData(); fd.append("file", f);
+      try {
+        const r = await fetch("/api/i2v/upload", {method: "POST", body: fd});
+        if (!r.ok) throw new Error((await r.text()).slice(0, 120));
+        ASSETS[slot].push((await r.json()).image);
+      } catch (e) { VS.toast("Upload failed: " + e.message); }
+    }
+    drawAssets(slot);
+  }
+  document.querySelectorAll(".assetbox").forEach(box => {
+    const slot = box.dataset.slot, inp = box.querySelector("input[type=file]");
+    inp.onchange = e => { addAssets(slot, e.target.files); e.target.value = ""; };
+    ["dragover", "dragleave", "drop"].forEach(ev => box.addEventListener(ev, e => {
+      e.preventDefault();
+      box.classList.toggle("drag", ev === "dragover");
+      if (ev === "drop" && e.dataTransfer.files.length) addAssets(slot, e.dataTransfer.files);
+    }));
+  });
+
+  async function writeScript(steer) {
+    const desc = $("#pdesc").value.trim();
+    if ((($("#pname").value.trim() + " " + desc).split(/\s+/).filter(Boolean)).length < 3) {
+      VS.toast("Describe the product first (step 1)"); return;
+    }
+    const btns = [$("#write"), $("#rewrite")];
+    btns.forEach(b => b.disabled = true);
+    $("#writemsg").textContent = "✍ Claude Opus is writing… (~30-60s)";
+    try {
+      const d = await VS.post("/api/commercial/script", {
+        product_name: $("#pname").value.trim(), description: desc,
+        audience: $("#paud").value.trim(), offer: $("#poffer").value.trim(),
+        tone: $("#ptone").value, length_s: lengthS, steer: steer || ""});
+      $("#script").value = d.script;
+      $("#scriptmeta").textContent =
+        `✓ ${d.words} words for ${d.length_s}s (target ~${d.target_words}) · written by ${d.model} · edit freely`;
+      $("#writemsg").textContent = "";
+    } catch (e) { $("#writemsg").textContent = ""; VS.toast("Couldn't write it: " + e.message); }
+    btns.forEach(b => b.disabled = false);
+  }
+  $("#write").onclick = () => writeScript("");
+  $("#rewrite").onclick = () => writeScript($("#steer").value.trim());
+
+  $("#go").onclick = async () => {
+    if (busy) return;
+    const script = $("#script").value.trim();
+    if (script.split(/\s+/).filter(Boolean).length < 5) {
+      VS.toast("Write the script first (step 3)"); return;
+    }
+    const ugc = $("#pstyle").value === "ugc";
+    const body = {kind: "commercial", script, script_model: "opus",
+      motion: "fal-t2v", t2v_model: $("#pt2v").value || "veo3-fast",
+      shots: Math.max(2, Math.min(12, +$("#pshots").value || 6)),
+      aspect, ugc, brand: $("#pbrand").checked, tags: $("#ptags").checked,
+      voice_id: $("#pvoice").value || "",
+      product_images: ASSETS.product,
+      product_name: $("#pname").value.trim(),
+      banner_image: ASSETS.banner, banner_mode: "end", banner_seconds: 2.5};
+    const hdr = {"Content-Type": "application/json"};
+    busy = true; $("#go").disabled = true; $("#gomsg").textContent = "";
+    try {
+      let r = await fetch("/api/brollvid/run", {method: "POST", headers: hdr, body: JSON.stringify(body)});
+      if (r.status === 402) {
+        const d = await r.json();
+        if (!confirm(`⚠ This films the commercial on fal.ai (spends money).\n\n${d.estimate.summary}\n\nApprove and start? (Cancel = nothing charged)`)) {
+          busy = false; $("#go").disabled = false; VS.toast("Cancelled — nothing charged"); return;
+        }
+        r = await fetch("/api/brollvid/run", {method: "POST", headers: hdr,
+          body: JSON.stringify(Object.assign({confirm_cost: true}, body))});
+      }
+      if (!r.ok) throw new Error((await r.text()).replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 160));
+      const d = await r.json();
+      $("#prog").style.display = "block";
+      $("#log").textContent = "";
+      $("#gomsg").textContent = "shot list → footage → narration…";
+      VS.toast("🎬 Filming your commercial");
+      watch(d.job_id);
+    } catch (e) { VS.toast("Couldn't start: " + e.message); busy = false; $("#go").disabled = false; }
+  };
+
+  async function watch(jobId) {
+    let off = 0, status = "running";
+    const box = $("#log");
+    while (status === "running" || status === "queued") {
+      await new Promise(r => setTimeout(r, 2500));
+      let j; try { j = await VS.api(`/api/job/${jobId}?offset=${off}`); } catch (e) { continue; }
+      status = j.status;
+      if (j.lines && j.lines.length) {
+        off += j.lines.length;
+        box.textContent += (box.textContent ? "\n" : "") + j.lines.join("\n");
+        box.scrollTop = box.scrollHeight;
+        const step = [...j.lines].reverse().find(l => l.startsWith("=== step"));
+        if (step) $("#proglbl").textContent = step.replace(/=/g, "").trim();
+      }
+    }
+    busy = false; $("#go").disabled = false;
+    if (status === "done") {
+      $("#proglbl").textContent = "✅ done";
+      $("#gomsg").textContent = "✓ your commercial is below";
+      VS.toast("✅ Commercial ready"); loadClips();
+    } else {
+      $("#proglbl").textContent = "❌ " + status;
+      $("#gomsg").textContent = "see the log above";
+      VS.toast("Failed — " + status);
+    }
+  }
+
+  /* ═══ shared gallery: ugc-* + commercial-* ═══ */
+  async function loadClips() {
+    try {
+      const d = await VS.api("/api/i2v/list");
+      const items = (d.items || []).filter(c =>
+        c.slug.startsWith("commercial-") || c.slug.startsWith("ugc-"));
+      const g = $("#gallery");
+      if (!items.length) { g.innerHTML = '<div class="vs-hint">nothing yet — make your first one ↑</div>'; return; }
+      g.innerHTML = "";
+      items.forEach(c => {
+        const el = document.createElement("div");
+        el.className = "clipcard";
+        const running = c.job && c.job.status === "running";
+        const badge = c.slug.startsWith("ugc-") ? "🤳 UGC" : "📺 Commercial";
+        el.innerHTML = (c.ready
+            ? `<video controls preload="none" src="/media/${c.clip}?v=${c.clip_mtime}"></video>`
+            : `<div style="padding:40px;text-align:center;color:var(--dim)">${running ? "⏳ filming…" : "❌ failed"}</div>`)
+          + `<div class="meta">${badge} · ${VS.esc((c.prompt || c.slug).slice(0, 64))}<br>
+             ~$${(c.est_cost || 0).toFixed(2)}
+             ${c.ready ? `· <a href="#" data-send="${VS.esc(c.clip)}">send to Desktop</a>
+               · <a href="/media/${c.clip}" download>download</a>` : ""}</div>`;
+        const send = el.querySelector("[data-send]");
+        if (send) send.onclick = async ev => {
+          ev.preventDefault();
+          try { const r = await VS.post("/api/exports/send", {path: send.dataset.send});
+            VS.toast("📤 Saved to " + r.saved_to); } catch (e) { VS.toast("Error: " + e.message); }
+        };
+        g.appendChild(el);
+      });
+    } catch (e) { /* ignore */ }
+  }
+  loadClips();
+  setInterval(loadClips, 12000);
+
+  try { const s = await VS.api("/api/spend"); $("#falspend").textContent = `fal spend $${s.total.toFixed(2)}`; }
+  catch (e) { /* ignore */ }
+})();
+</script>
+</body>
+</html>
