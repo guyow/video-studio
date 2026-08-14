@@ -83,6 +83,23 @@ FAMILY_DIR = {
     "Newsreader": "Newsreader",
 }
 
+VARIABLE_FONT_DIR = (
+    Path(__file__).resolve().parents[3] / "autoVSL" / "banks" / "brand-assets" / "fonts"
+)
+VARIABLE_FONT_FILES = {
+    "Bricolage Grotesque": "BricolageGrotesque.ttf",
+    "Hanken Grotesk": "HankenGrotesk.ttf",
+    "Newsreader": "Newsreader.ttf",
+}
+WEIGHT_MAP = {
+    "light": 300,
+    "regular": 400,
+    "medium": 500,
+    "semibold": 600,
+    "bold": 700,
+    "extrabold": 800,
+}
+
 
 class CompositorError(Exception):
     """Raised for hard-fail conditions (missing template, malformed input)."""
@@ -173,8 +190,18 @@ def _normalize_weight(weight: str) -> str:
     return weight.lower().replace(" ", "").replace("-", "")
 
 
-def _load_font(font_path: Path, size: int) -> ImageFont.FreeTypeFont:
-    return ImageFont.truetype(str(font_path), size)
+def _load_font(
+    font_path: Path, size: int, weight: str | None = None
+) -> ImageFont.FreeTypeFont:
+    font = ImageFont.truetype(str(font_path), size)
+    if weight is not None and str(Path(font_path)).startswith(str(VARIABLE_FONT_DIR)):
+        try:
+            font.set_variation_by_axes(
+                [float(WEIGHT_MAP.get(_normalize_weight(weight), 400))]
+            )
+        except Exception:
+            pass
+    return font
 
 
 def _text_w(draw: ImageDraw.ImageDraw, text: str, font, tracking: float = 0.0) -> float:
@@ -217,20 +244,21 @@ def _fit_headline(
     start_px: int,
     min_px: int = 40,
     lh: float = 1.06,
+    weight: str | None = None,
 ):
     """Binary descent — shrink the font until the wrapped headline fits."""
     size = start_px
     scratch = Image.new("RGB", (1, 1))
     d = ImageDraw.Draw(scratch)
     while size >= min_px:
-        font = _load_font(font_path, size)
+        font = _load_font(font_path, size, weight)
         lines = _wrap_text(text, font, max_w)
         total = len(lines) * size * lh
         widths_ok = all(d.textlength(line, font=font) <= max_w for line in lines)
         if total <= max_h and widths_ok:
             return font, lines, size
         size -= 4
-    font = _load_font(font_path, min_px)
+    font = _load_font(font_path, min_px, weight)
     return font, _wrap_text(text, font, max_w), min_px
 
 
@@ -243,6 +271,7 @@ def _fit_subhead(
     min_px: int = 18,
     lh: float = 1.06,
     tracking: float = 2.0,
+    weight: str | None = None,
 ):
     """Step descent — shrink the subtitle font until the wrapped lines fit the
     box on BOTH axes. Mirrors `_fit_headline`, but accounts for tracking (which
@@ -251,14 +280,14 @@ def _fit_subhead(
     scratch = Image.new("RGB", (1, 1))
     d = ImageDraw.Draw(scratch)
     while size >= min_px:
-        font = _load_font(font_path, size)
+        font = _load_font(font_path, size, weight)
         lines = _wrap_text(text, font, max_w)
         total = len(lines) * size * lh
         widths_ok = all(_text_w(d, line, font, tracking) <= max_w for line in lines)
         if total <= max_h and widths_ok:
             return font, lines, size
         size -= 4
-    font = _load_font(font_path, min_px)
+    font = _load_font(font_path, min_px, weight)
     return font, _wrap_text(text, font, max_w), min_px
 
 
@@ -482,6 +511,11 @@ class BrandAssets:
         )
         if fallback.is_file():
             return fallback
+        var_file = VARIABLE_FONT_FILES.get(family)
+        if var_file:
+            vp = VARIABLE_FONT_DIR / var_file
+            if vp.is_file():
+                return vp
         raise CompositorError(
             f"font file not found for family={family!r} weight={weight!r} "
             f"(resolved path={p})"
@@ -725,6 +759,7 @@ def render_layout(
                 max_h=box_h,
                 start_px=start_px,
                 min_px=min_px,
+                weight=weight,
             )
             align = headline_zone.get("align", "left")
             line_ops = _emit_lines(
@@ -753,6 +788,7 @@ def render_layout(
                     start_px=sub_size,
                     min_px=18,
                     tracking=2.0,
+                    weight=sub_weight,
                 )
                 sub_align = subhead_zone.get("align", "left")
                 sub_line_ops = _emit_lines(
@@ -781,7 +817,7 @@ def render_layout(
             body_size = max(16, min(38, int(0.48 * headline_final_size)))
             try:
                 body_font = _load_font(
-                    brand.font_path(body_family, body_weight), body_size
+                    brand.font_path(body_family, body_weight), body_size, body_weight
                 )
                 body_lines = _wrap_text(body_text, body_font, body_box[2] - body_box[0])
                 body_align = body_zone_spec.get("align", "left")
