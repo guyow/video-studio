@@ -1,0 +1,179 @@
+{
+  "_meta": {
+    "brand": "liitt",
+    "version": "0.1-draft",
+    "status": "UNVERIFIED — extracted by vision from BRAND_GUIDES slides. Review every value before production use.",
+    "source": "C:\\Users\\Wahyu\\Downloads\\BRAND_GUIDES",
+    "open_questions": [
+      "mood 'Open' — typo for 'Open'? Icon file is named Open-Mood-Icon.png. Not auto-corrected.",
+      "base color #FFC233 has no name — slide still shows placeholder literal 'Color Name'.",
+      "Secondary Palette slide (03 — COLOR PALETTE-2.png) has title + subtitle but EMPTY swatches.",
+      "RGB column in the Mood Spectrum slide reads (30, 30, 30) for 7 of 8 swatches — placeholder, not real values. HEX is authoritative; RGB below is computed from HEX, not transcribed."
+    ]
+  },
+
+  "identity": {
+    "wordmark": "liitt",
+    "wordmark_casing": "lowercase",
+    "tagline_primary": "Ignite Your Inner Light",
+    "tagline_secondary": "Pick your Mood, Pick your Fire",
+    "what_we_are": "A premium functional brand of compound gummies and instant drink sachets built on a spectrum of feeling states, from calm to cosmic. Liitt lets you dial in exactly how you want to feel, not just what you're taking.",
+    "product_types": ["Mushroom Coffee", "Fairy Flame Gummy"],
+    "product_category": "Dietary Supplement",
+    "formats": ["10 Sachets", "30 Flame Gummies"],
+    "domain": "liitt.co"
+  },
+
+  "logo": {
+    "description": "The liitt wordmark — flame rising between the twin i's — is the primary identifier.",
+    "master_mark": "the flame",
+    "reproduction_rule": "Always reproduce from the supplied transparent files. Never re-typeset it.",
+    "backgrounds_approved": ["#141428 (dark navy)", "#FF5A1F (orange)", "#0A0A0A (black)"],
+    "never_do": [
+      "Stretch or distort the logo",
+      "Change the logo colors",
+      "Add effects, shadows, or outlines",
+      "Place on low-contrast backgrounds"
+    ],
+    "min_size": {
+      "digital_px": 120,
+      "print_mm": 30
+    },
+    "_pipeline_note": "CONFLICT: 'never re-typeset' cannot be honoured by a diffusion/edit model that redraws pixels. User decided (this session) to accept redraw variance for ad posters. Treat as a documented, deliberate deviation — scope the absolute rule to designer-made final assets."
+  },
+
+  "palette": {
+    "base": [
+      { "name": "Deep Matte Black",       "hex": "#0A0A0A", "rgb": [10, 10, 10],    "tag": "Primary" },
+      { "name": null,                     "hex": "#FFC233", "rgb": [255, 194, 51],  "tag": "Primary",
+        "_note": "Slide label is still the placeholder 'Color Name'. Signature yellow — used for PRICE and BUTTON fill in the typography slide." },
+      { "name": "Electric Flame Orange",  "hex": "#FF5A1F", "rgb": [255, 90, 31],   "tag": "Primary" }
+    ],
+    "secondary": {
+      "_status": "EMPTY IN SOURCE — slide 03 — COLOR PALETTE-2.png has the heading and the note below, but no swatch values filled in.",
+      "applies_to": "liitt products: Gummies, Instant Drink",
+      "swatches": []
+    },
+    "mood_spectrum": [
+      { "mood": "Dream",  "hex": "#4B40C9", "rgb": [75, 64, 201],   "creature": "firefly" },
+      { "mood": "Calm",   "hex": "#0389F3", "rgb": [3, 137, 243],   "creature": "crescent moon + star" },
+      { "mood": "Oprn",   "hex": "#BE4EF3", "rgb": [190, 78, 243],  "creature": "butterfly",
+        "_note": "Name likely a typo for 'Open' — icon file is Open-Mood-Icon.png. Left verbatim; confirm before use." },
+      { "mood": "Bliss",  "hex": "#9BCB31", "rgb": [155, 203, 49],  "creature": "leaf / sprout" },
+      { "mood": "Wonder", "hex": "#A23A6D", "rgb": [162, 58, 109],  "creature": "fairy" },
+      { "mood": "Focus",  "hex": "#F8A30A", "rgb": [248, 163, 10],  "creature": "phoenix" },
+      { "mood": "Fire",   "hex": "#C34605", "rgb": [195, 70, 5],    "creature": "dragon" },
+      { "mood": "Cosmic", "hex": "#C9C3DC", "rgb": [201, 195, 220], "creature": "unicorn" }
+    ]
+  },
+
+  "text_colors": {
+    "_comment": "Approved text colors for liitt brand materials.",
+    "headlines": {
+      "name": "Soft Lavender",
+      "hex": "#C9C3DA",
+      "usage": "Primary headline / display text on dark backgrounds"
+    },
+    "body_copy": {
+      "name": "Dusty Purple Gray",
+      "hex": "#8E899F",
+      "usage": "Body copy, descriptions, editorial text"
+    },
+    "captions_secondary": {
+      "name": "Dark Navy Blue",
+      "hex": "#14122B",
+      "usage": "Captions, secondary text, subtle accents. Low contrast on #0A0A0A — use on lighter surfaces or as watermark."
+    },
+    "brand_accent_for_text": {
+      "name": "Signature Yellow",
+      "hex": "#FFC233",
+      "usage": "Wordmark, price, button fill, headline accent"
+    },
+    "brand_accent_alt": {
+      "name": "Electric Flame Orange",
+      "hex": "#FF5A1F",
+      "usage": "Alternative headline accent, mood callouts"
+    },
+    "mood_text_accents": {
+      "_comment": "Any of the 8 mood spectrum colors may be used as text accents matching the poster's selected mood.",
+      "usage": "Subtitle, mood badges, creature name callouts"
+    }
+  },
+
+  "typography": {
+    "families": [
+      {
+        "name": "Bricolage Grotesque",
+        "roles": ["DISPLAY / H1", "H2 / H3 SECTION", "PRICE", "BUTTON"],
+        "weight": "heaviest in the hierarchy"
+      },
+      {
+        "name": "Hanken Grotesk",
+        "roles": ["UI", "nav", "labels", "forms", "captions"],
+        "weight": "medium"
+      },
+      {
+        "name": "Newsreader",
+        "roles": ["editorial body", "descriptions", "quotes"],
+        "weight": "regular / light, serif"
+      }
+    ],
+    "hierarchy_example": {
+      "display": "Light it up",
+      "h2": "A little magic, in every gummy",
+      "price": "$38",
+      "button": "SHOP THE JAR"
+    },
+    "_pipeline_note": "These three REPLACE the 'invent a typographic system' instruction in UGCVisionPlanner SYSTEM_PROMPT (nodes.py lines ~112 and ~207-221)."
+  },
+
+  "creature_cast": {
+    "principle": "The flame is the master mark and each mood gets its own creature.",
+    "rationale": "The cast is a bigger, more ownable content engine than any single mascot — and no competitor has a cast.",
+    "rules": [
+      "One master mark: the flame",
+      "Eight creatures, one per mood",
+      "The gradient is the point",
+      "Commission one character designer for the full cast sheet"
+    ]
+  },
+
+  "art_direction": {
+    "background_rule": "Dark first — matte black backgrounds.",
+    "mood_color_usage": "Accent only. Never a full background.",
+    "_source": "07 — Social Media Guidelines",
+    "_pipeline_note": "VIOLATED TODAY by ads-poster/workflows/poster_local_api.json node 2, which prompts for a 'sunburst orange and yellow gradient background', and by compose.py which overlays a #FFC845 spotlight (note: #FFC845 is NOT a brand colour — nearest is #FFC233)."
+  },
+
+  "copywriting": {
+    "no_cta": true,
+    "_note": "Already enforced in UGCVisionPlanner SYSTEM_PROMPT Mode B (nodes.py ~123-126). Consistent with the social guidelines' no-hard-sell direction.",
+    "banned_visual_cliches": ["green smoothie", "yoga pose", "beige wellness palette"]
+  },
+
+  "locked_vs_free": {
+    "_comment": "Three-tier model for the planner. LOCKED goes into SYSTEM_PROMPT verbatim; GUIDED is a closed list the model picks from; FREE is where the model actually creates.",
+    "locked": [
+      "palette.base hex values",
+      "palette.mood_spectrum hex values",
+      "palette.text_colors hex values",
+      "typography.families and their roles",
+      "logo.never_do + logo.min_size",
+      "art_direction.background_rule",
+      "art_direction.mood_color_usage",
+      "copywriting.no_cta"
+    ],
+    "guided": [
+      "which mood (choose exactly one of the 8 in palette.mood_spectrum)",
+      "tone of voice within brand voice",
+      "layout archetype"
+    ],
+    "free": [
+      "composition and layout grid",
+      "camera angle, framing, depth of field",
+      "lighting design",
+      "props and styling",
+      "headline and body copywriting"
+    ]
+  }
+}
