@@ -124,7 +124,7 @@ def _shift_box(box, dy: int):
 
 
 def _avoid_logo_overlap(
-    logo_box,
+    logo_rect,
     logo_is_top: bool,
     headline_box,
     subhead_box,
@@ -132,6 +132,12 @@ def _avoid_logo_overlap(
     H: int,
 ):
     """Nudge text zones so the pasted wordmark never covers text.
+
+    ``logo_rect`` is the wordmark's ACTUAL rendered rectangle (paste_xy + the
+    resized size), NOT the raw layout ``logo_box``. `_fit_logo` can resize the
+    box around its center (min/max height scaling) and clamp it to the canvas,
+    so the pasted wordmark may extend outside the layout box — the overlap math
+    must use the real rectangle.
 
     A TOP logo collides with the headline: the whole text stack (headline,
     subheadline, body) is moved DOWN together (preserving relative spacing) so
@@ -142,20 +148,20 @@ def _avoid_logo_overlap(
     """
     margin = int(LOGO_CLEARANCE_RATIO * H)
     if logo_is_top:
-        if _overlaps(logo_box, headline_box):
-            dy = (logo_box[3] + margin) - headline_box[1]
+        if _overlaps(logo_rect, headline_box):
+            dy = (logo_rect[3] + margin) - headline_box[1]
             if dy > 0:
                 headline_box = _shift_box(headline_box, dy)
                 subhead_box = _shift_box(subhead_box, dy)
                 if body_box:
                     body_box = _shift_box(body_box, dy)
     else:
-        if body_box and _overlaps(logo_box, body_box):
-            dy = (logo_box[1] - margin) - body_box[3]
+        if body_box and _overlaps(logo_rect, body_box):
+            dy = (logo_rect[1] - margin) - body_box[3]
             if dy < 0:
                 body_box = _shift_box(body_box, dy)
-        if _overlaps(logo_box, subhead_box):
-            dy = (logo_box[1] - margin) - subhead_box[3]
+        if _overlaps(logo_rect, subhead_box):
+            dy = (logo_rect[1] - margin) - subhead_box[3]
             if dy < 0:
                 subhead_box = _shift_box(subhead_box, dy)
     return headline_box, subhead_box, body_box
@@ -221,6 +227,34 @@ def _fit_headline(
         lines = _wrap_text(text, font, max_w)
         total = len(lines) * size * lh
         widths_ok = all(d.textlength(line, font=font) <= max_w for line in lines)
+        if total <= max_h and widths_ok:
+            return font, lines, size
+        size -= 4
+    font = _load_font(font_path, min_px)
+    return font, _wrap_text(text, font, max_w), min_px
+
+
+def _fit_subhead(
+    text: str,
+    font_path: Path,
+    max_w: int,
+    max_h: int,
+    start_px: int,
+    min_px: int = 18,
+    lh: float = 1.06,
+    tracking: float = 2.0,
+):
+    """Step descent — shrink the subtitle font until the wrapped lines fit the
+    box on BOTH axes. Mirrors `_fit_headline`, but accounts for tracking (which
+    `_wrap_text` ignores) by checking rendered widths via `_text_w`."""
+    size = start_px
+    scratch = Image.new("RGB", (1, 1))
+    d = ImageDraw.Draw(scratch)
+    while size >= min_px:
+        font = _load_font(font_path, size)
+        lines = _wrap_text(text, font, max_w)
+        total = len(lines) * size * lh
+        widths_ok = all(_text_w(d, line, font, tracking) <= max_w for line in lines)
         if total <= max_h and widths_ok:
             return font, lines, size
         size -= 4
@@ -620,11 +654,41 @@ def render_layout(
     body_box = _box_px(body_zone_spec.get("box"), W, H) if body_supported else None
     logo_box = _box_px(templates.logo_box(logo_position), W, H)
 
+    # --- load + fit the wordmark FIRST so overlap avoidance uses the ACTUAL
+    # rendered rectangle. `_fit_logo` resizes the box around its center (min/max
+    # height scaling) and clamps it to the canvas, so the pasted wordmark can
+    # extend outside the raw layout logo_box — clearing the layout box alone
+    # leaves the headline under the real wordmark.
+    wordmark_p = brand.wordmark_path()
+    wm_resized = None
+    paste_xy = None
+    logo_rect = None
+    if wordmark_p.is_file():
+        try:
+            wm = Image.open(wordmark_p).convert("RGBA")
+            wm_resized, paste_xy = _fit_logo(
+                wm, logo_box, min_h=LOGOMARK_MIN_HEIGHT, canvas_size=(W, H)
+            )
+            logo_rect = (
+                paste_xy[0],
+                paste_xy[1],
+                paste_xy[0] + wm_resized.width,
+                paste_xy[1] + wm_resized.height,
+            )
+        except Exception as e:
+            print(f"[LiittCompositor] WARNING: failed to load wordmark: {e}")
+    else:
+        print(
+            f"[LiittCompositor] WARNING: wordmark not found at {wordmark_p}, "
+            f"skipping logo"
+        )
+
     # --- keep the wordmark clear of text (top logo vs headline, bottom vs body)
     logo_is_top = logo_position.startswith("top_")
-    headline_box, subhead_box, body_box = _avoid_logo_overlap(
-        logo_box, logo_is_top, headline_box, subhead_box, body_box, H
-    )
+    if logo_rect is not None:
+        headline_box, subhead_box, body_box = _avoid_logo_overlap(
+            logo_rect, logo_is_top, headline_box, subhead_box, body_box, H
+        )
 
     # --- optional scrim under zones
     if scrim:
@@ -681,9 +745,14 @@ def render_layout(
             sub_weight = subtitle_el.get("font_weight", "medium")
             sub_size = max(28, min(56, int(0.45 * headline_final_size)))
             try:
-                sub_font = _load_font(brand.font_path(sub_family, sub_weight), sub_size)
-                sub_lines = _wrap_text(
-                    sub_text, sub_font, subhead_box[2] - subhead_box[0]
+                sub_font, sub_lines, _ = _fit_subhead(
+                    text=sub_text,
+                    font_path=brand.font_path(sub_family, sub_weight),
+                    max_w=subhead_box[2] - subhead_box[0],
+                    max_h=subhead_box[3] - subhead_box[1],
+                    start_px=sub_size,
+                    min_px=18,
+                    tracking=2.0,
                 )
                 sub_align = subhead_zone.get("align", "left")
                 sub_line_ops = _emit_lines(
@@ -740,21 +809,8 @@ def render_layout(
     canvas = _render_with_shadow(canvas, all_ops)
 
     # --- logo (flat paste, no shadow)
-    wordmark_p = brand.wordmark_path()
-    if wordmark_p.is_file():
-        try:
-            wm = Image.open(wordmark_p).convert("RGBA")
-            wm_resized, paste_xy = _fit_logo(
-                wm, logo_box, min_h=LOGOMARK_MIN_HEIGHT, canvas_size=(W, H)
-            )
-            canvas.paste(wm_resized, paste_xy, wm_resized)
-        except Exception as e:
-            print(f"[LiittCompositor] WARNING: failed to load wordmark: {e}")
-    else:
-        print(
-            f"[LiittCompositor] WARNING: wordmark not found at {wordmark_p}, "
-            f"skipping logo"
-        )
+    if wm_resized is not None:
+        canvas.paste(wm_resized, paste_xy, wm_resized)
 
     return canvas.convert("RGB")
 
