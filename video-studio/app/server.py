@@ -4951,6 +4951,11 @@ UGC_EMOTIONS = ("auto", "happy", "angry", "fearful", "surprised", "disgusted",
 UGC_MERGE_COST = 0.039          # nano-banana edit, when a product photo is added
 UGC_WPS = 2.3                   # spoken pace used to size the clip to the words
 UGC_MAX_SECONDS = 120           # 15 chained Veo segments — long scripts just chain more
+# mirror of ugc_avatar.LIPSYNC — with a bank voice, the cloned voice is
+# lip-synced onto the footage. $/s for the cloud tiers; local + off are free.
+UGC_LIPSYNC = {"sync": 0.05, "pro": 0.10, "sync3": 0.1333, "veed": 0.0067,
+               "latentsync": 0.005, "gfpgan": 0.0, "fast": 0.0, "none": 0.0}
+UGC_LIPSYNC_DEFAULT = "sync"    # sync.so v2 — the engine behind the winning dub ads
 
 
 def _ugc_segments(seconds: int, durations: tuple[int, ...]) -> list[int]:
@@ -5053,10 +5058,13 @@ def api_ugc_run():
     native_speech = m["audio"] and voice != "none" and not voice_ref
     rate = (m.get("cost_per_s_silent") if (not native_speech and m.get("cost_per_s_silent"))
             else m["cost_per_s"])
-    total = round(eff_seconds * rate + (UGC_MERGE_COST if product else 0), 2)
+    lipsync = b.get("lipsync") if b.get("lipsync") in UGC_LIPSYNC else UGC_LIPSYNC_DEFAULT
+    ls_cost = round(eff_seconds * UGC_LIPSYNC[lipsync], 2) if voice_ref else 0.0
+    total = round(eff_seconds * rate + ls_cost + (UGC_MERGE_COST if product else 0), 2)
     summary = (f"{eff_seconds}s talking UGC ({len(segs)} segment{'s' if len(segs) > 1 else ''}"
                + (f", sized to your {n_words} words" if raw_sec == "auto" and n_words else "")
                + f") on {m['label'].split(' — ')[0]} ≈ ${total:.2f}"
+               + (f" (incl. ${ls_cost:.2f} {lipsync} lip-sync)" if ls_cost else "")
                + (f" (incl. ${UGC_MERGE_COST} product merge)" if product else ""))
     est = {"this_run": total, "engine": "fal-ugc", "model": model, "seconds": eff_seconds,
            "segments": len(segs), "summary": summary}
@@ -5075,8 +5083,11 @@ def api_ugc_run():
         cmd += ["--product", str(product)]
     if voice_ref:
         cmd += ["--voice-ref", str(voice_ref), "--ds-py", str(DUB_VENV_PY),
-                "--ds-app", str(Path(CONFIG["dubbing_studio"]) / "app.py")]
-    job_id = jobs_create("ugc", slug, f"UGC Factory — {slug} [{template}/{model}]")
+                "--ds-app", str(Path(CONFIG["dubbing_studio"]) / "app.py"),
+                "--lipsync", lipsync]
+    # a bank voice runs XTTS (and possibly Wav2Lip) locally — hold the GPU slot
+    job_id = jobs_create("ugc", slug, f"UGC Factory — {slug} [{template}/{model}]",
+                         gpu=bool(voice_ref))
     threading.Thread(target=run_i2v_job, args=(job_id, cmd, slug, est), daemon=True).start()
     return jsonify({"job_id": job_id, "slug": slug, "estimate": est})
 

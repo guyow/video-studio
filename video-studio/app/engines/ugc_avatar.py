@@ -95,6 +95,21 @@ TEMPLATES = {
                "into the lens, clean stable framing",
 }
 
+# cloud lip-sync tiers (fal.ai) — endpoints + prices proven in autoVSL's
+# scripts/script-swap.py (the pipeline behind the winning dub ads)
+LIPSYNC = {
+    "sync":       {"endpoint": "fal-ai/sync-lipsync/v2",     "cost_per_s": 0.05,
+                   "label": "sync.so v2"},
+    "pro":        {"endpoint": "fal-ai/sync-lipsync/v2/pro", "cost_per_s": 0.10,
+                   "label": "sync.so v2 pro"},
+    "sync3":      {"endpoint": "fal-ai/sync-lipsync/v3",     "cost_per_s": 0.1333,
+                   "label": "sync.so v3"},
+    "veed":       {"endpoint": "veed/lipsync",               "cost_per_s": 0.0067,
+                   "label": "VEED"},
+    "latentsync": {"endpoint": "fal-ai/latentsync",          "cost_per_s": 0.005,
+                   "label": "LatentSync"},
+}
+
 VOICES = {
     "auto":    "",
     "whisper": "in a hushed, intimate whisper",
@@ -258,6 +273,12 @@ def main() -> int:
     ap.add_argument("--voice-ref", dest="voice_ref", help="Voice Bank ref.wav to clone")
     ap.add_argument("--ds-py", dest="ds_py", help="dubbing venv python")
     ap.add_argument("--ds-app", dest="ds_app", help="dubbing-studio/app.py")
+    ap.add_argument("--lipsync", default="sync",
+                    choices=sorted(LIPSYNC) + ["gfpgan", "fast", "none"],
+                    help="with --voice-ref: regenerate the mouth to match the cloned "
+                         "voice. sync/pro/sync3/veed/latentsync = cloud (fal.ai, paid); "
+                         "gfpgan/fast = local Wav2Lip (free); none = keep Veo's mouth "
+                         "and just swap the audio")
     a = ap.parse_args()
 
     avatar = Path(a.image).resolve()
@@ -415,12 +436,14 @@ def main() -> int:
         log(f"\nstitched {n} segments → clip.mp4")
     dur = probe_dur(clip)
 
-    # 4 · optional: speak the FULL script in the Voice-Bank voice (XTTS, free)
+    # 4 · optional: speak the FULL script in the Voice-Bank voice (XTTS, free),
+    #     then regenerate the MOUTH to match it (Wav2Lip + GFPGAN, local GPU, free)
     if voice_ref and a.script.strip():
         log(f"\nre-voicing with your saved voice (XTTS clone from {voice_ref.parent.name}) ...")
         try:
             so = subprocess.run(
-                [a.ds_py, a.ds_app, "--cli", "--script", a.script.strip(), "--no-fit",
+                [a.ds_py, a.ds_app, "--cli", "--video", str(clip),
+                 "--script", a.script.strip(), "--no-fit",
                  "--device", "auto", "--language", "en", "--reference", str(voice_ref)],
                 capture_output=True, text=True, encoding="utf-8", errors="replace",
                 timeout=3600)
@@ -435,12 +458,68 @@ def main() -> int:
             if vo_sec > dur + 0.15 and dur > 0:
                 af = f"atempo={min(1.5, vo_sec / dur):.3f},apad"
                 log(f"    voice is {vo_sec:.1f}s for {dur:.1f}s of video — speeding it to fit")
-            voiced = out_dir / "_voiced.mp4"
-            ffmpeg(["-i", str(clip), "-i", str(wav), "-map", "0:v:0", "-map", "1:a:0",
-                    "-c:v", "copy", "-filter:a", af, "-c:a", "aac", "-b:a", "192k",
-                    "-t", f"{dur:.3f}", str(voiced)], "mux cloned voice")
+            # one voice track, fitted to the exact footage length — the lip-sync
+            # engine and the fallback mux both consume this
+            fitted = out_dir / "_voice.wav"
+            ffmpeg(["-i", str(wav), "-filter:a", af, "-t", f"{dur:.3f}", str(fitted)],
+                   "fit cloned voice")
+            voiced = None
+            tier = LIPSYNC.get(a.lipsync)
+            if tier:                                  # cloud lip-sync (fal.ai, paid)
+                ls_cost = round(dur * tier["cost_per_s"], 2)
+                log(f"    lip-syncing the mouth to the cloned voice on {tier['label']} "
+                    f"(fal.ai, ~${ls_cost:.2f}) ...")
+                try:
+                    args_ls = {"video_url": fal_client.upload_file(str(clip)),
+                               "audio_url": fal_client.upload_file(str(fitted))}
+                    if a.lipsync in ("sync", "pro", "sync3"):
+                        args_ls["sync_mode"] = "cut_off"      # sync.so-specific option
+                    res_ls = fal_client.subscribe(tier["endpoint"], arguments=args_ls,
+                                                  with_logs=False)
+                    v_ls = res_ls.get("video") or {}
+                    url_ls = v_ls.get("url") if isinstance(v_ls, dict) else v_ls
+                    if not url_ls:
+                        raise RuntimeError(f"no video in the response: {str(res_ls)[:160]}")
+                    cand = out_dir / "_synced.mp4"
+                    with httpx.Client(follow_redirects=True, timeout=900) as c:
+                        r = c.get(url_ls)
+                        r.raise_for_status()
+                        cand.write_bytes(r.content)
+                    if not cand.stat().st_size or probe_dur(cand) < 0.5:
+                        raise RuntimeError("truncated download")
+                    voiced = cand
+                    log("    OK — mouth regenerated to match the cloned voice")
+                except Exception as exc:                      # noqa: BLE001
+                    log(f"    cloud lip-sync failed ({str(exc)[:200]}) — keeping Veo's "
+                        "own mouth movement (the cloned voice is still applied)")
+            elif a.lipsync in ("gfpgan", "fast"):     # local Wav2Lip (free)
+                log("    lip-syncing the mouth to the cloned voice (Wav2Lip"
+                    + (" + GFPGAN" if a.lipsync == "gfpgan" else "")
+                    + ", local GPU, free) ...")
+                try:
+                    ls_py = Path(a.ds_app).resolve().parent / "lipsync.py"
+                    cand = out_dir / "_synced.mp4"
+                    ls = subprocess.run(
+                        [a.ds_py, str(ls_py), "--face", str(clip),
+                         "--audio", str(fitted), "--out", str(cand)]
+                        + (["--no-enhance"] if a.lipsync == "fast" else []),
+                        capture_output=True, text=True, encoding="utf-8",
+                        errors="replace", timeout=7200)
+                    if ls.returncode != 0 or not cand.is_file() or not cand.stat().st_size:
+                        raise RuntimeError((ls.stderr or ls.stdout or "no output")[-260:])
+                    voiced = cand
+                    log("    OK — mouth regenerated to match the cloned voice")
+                except Exception as exc:                      # noqa: BLE001
+                    log(f"    lip-sync failed ({str(exc)[:200]}) — keeping Veo's own "
+                        "mouth movement (the cloned voice is still applied)")
+            if voiced is None:
+                voiced = out_dir / "_voiced.mp4"
+                ffmpeg(["-i", str(clip), "-i", str(fitted), "-map", "0:v:0",
+                        "-map", "1:a:0", "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
+                        "-t", f"{dur:.3f}", str(voiced)], "mux cloned voice")
             clip.unlink(missing_ok=True)
             voiced.rename(clip)
+            fitted.unlink(missing_ok=True)
             dur = probe_dur(clip)
             log("    OK — the avatar now speaks in your saved voice (free, local)")
         except Exception as exc:                              # noqa: BLE001

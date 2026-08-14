@@ -175,6 +175,19 @@
       <div class="vs-hint" id="uvoicenote" style="margin-top:7px;opacity:.85">Voice-Bank voices are cloned from
         your earlier videos — free &amp; local. The avatar mouths the words on camera and your saved voice speaks
         them. <a href="/voices" style="color:var(--accent2)">clone a new voice →</a></div>
+      <div id="ulipsyncrow" style="display:none;margin-top:9px">
+        <label class="vs-hint">lip-sync the mouth to your voice
+          <select class="vs-sel" id="ulipsync" style="margin-left:5px">
+            <option value="sync" selected>🫦 sync.so v2 — the winning-ads engine · $0.05/s</option>
+            <option value="pro">💎 sync.so v2 Pro · $0.10/s</option>
+            <option value="sync3">🏆 sync.so v3 — top quality · $0.13/s</option>
+            <option value="veed">💸 VEED — budget · $0.007/s</option>
+            <option value="latentsync">🪙 LatentSync — cheapest · $0.005/s</option>
+            <option value="gfpgan">🆓 local Wav2Lip + GFPGAN — free, slow</option>
+            <option value="fast">⚡ local Wav2Lip only — free, softer mouth</option>
+            <option value="none">🚫 off — voice over Veo's own mouth</option>
+          </select></label>
+      </div>
       <div class="vs-hint" style="margin-top:10px">Background sound</div>
       <input class="vs-in" id="ubg" style="width:100%;margin-top:5px"
         placeholder="e.g. quiet café hum, soft lo-fi music, birds outside the car window">
@@ -395,23 +408,32 @@
     document.querySelectorAll("#ulen .chipbtn").forEach(b => b.classList.toggle("on", b === e.target));
     uEstimate(); } };
   $("#umodel").onchange = uEstimate;
+  // with a bank voice the cloned voice is lip-synced onto the footage —
+  // cloud tiers cost per second, local Wav2Lip and "none" are free
+  const LS_RATES = {sync: 0.05, pro: 0.10, sync3: 0.1333, veed: 0.0067,
+                    latentsync: 0.005, gfpgan: 0, fast: 0, none: 0};
   function uEstimate() {
     const m = uModel(), segs = uEffSeconds(), sec = segs.reduce((a, b) => a + b, 0);
     const words = $("#uscript").value.trim().split(/\s+/).filter(Boolean).length;
     const v = $("#uvoice").value;
-    const nativeSpeech = m.audio && v !== "none" && !v.startsWith("bank:");
+    const bank = v.startsWith("bank:");
+    $("#ulipsyncrow").style.display = bank ? "" : "none";
+    const nativeSpeech = m.audio && v !== "none" && !bank;
     const rate = (!nativeSpeech && m.cost_per_s_silent) ? m.cost_per_s_silent : (m.cost_per_s || 0.15);
-    const c = sec * rate + (UIMG.pr ? 0.039 : 0);
+    const lsRate = bank ? (LS_RATES[$("#ulipsync").value] || 0) : 0;
+    const c = sec * rate + sec * lsRate + (UIMG.pr ? 0.039 : 0);
     const silentNote = !m.audio && $("#uvoice").value !== "none"
       && !$("#uvoice").value.startsWith("bank:") ? " · ⚠ silent model — pick a Voice-Bank voice" : "";
     $("#uest").textContent = `estimated cost: ~$${c.toFixed(2)} · ${sec}s`
       + (segs.length > 1 ? ` in ${segs.length} chained segments` : "")
       + (uSeconds === "auto" && words ? ` — sized to your ${words} words` : "")
       + ` on ${(m.label || "").split(" — ")[0]}` + (UIMG.pr ? " · incl. product merge" : "")
+      + (lsRate ? ` · incl. $${(sec * lsRate).toFixed(2)} lip-sync` : "")
       + silentNote;
   }
   $("#uscript").addEventListener("input", uEstimate);
   $("#uvoice").addEventListener("change", uEstimate);
+  $("#ulipsync").addEventListener("change", uEstimate);
 
   // image slots: click / drag / Ctrl+V paste
   async function uUpload(slot, fileOrBlob) {
@@ -485,7 +507,7 @@
     const body = {image: UIMG.av, product: UIMG.pr || "", template: uTemplate,
       action: $("#uaction").value.trim(), script: $("#uscript").value.trim(),
       voice, voice_id: bankVoice, emotion: $("#uemotion").value, bg: $("#ubg").value.trim(),
-      model: $("#umodel").value, seconds: uSeconds};
+      model: $("#umodel").value, seconds: uSeconds, lipsync: $("#ulipsync").value};
     const hdr = {"Content-Type": "application/json"};
     uBusy = true; $("#ugo").disabled = true; $("#ugomsg").textContent = "";
     try {
