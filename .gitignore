@@ -115,3 +115,7 @@ video-studio/server.err.log
 .opencode/
 docs/plan
 opencode.json
+# Downloaded tools & runtime caches
+tools/XR-Animator/
+video-studio/weights/
+autoVSL/banks/backgrounds/

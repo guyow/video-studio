@@ -66,6 +66,7 @@ DUBSYNC_REPAIR_PY = APP_DIR / "engines" / "dubsync_repair.py"
 VISUAL_REPAIR_PY = APP_DIR / "engines" / "visual_repair.py"
 OBJECT_REPAIR_PY = APP_DIR / "engines" / "object_repair.py"
 FRAME_SWAP_PY = APP_DIR / "engines" / "frame_swap.py"
+SEGMENT_LIPSYNC_PY = APP_DIR / "engines" / "segment_lipsync.py"
 BACKGROUND_SWAP_PY = APP_DIR / "engines" / "background_swap.py"
 BACKGROUNDS_DIR = ROOT / "banks" / "backgrounds"      # reusable scene library (green screen → real room)
 # the ONE Desktop folder for finished deliverables (replaces the scattered
@@ -255,6 +256,10 @@ def estimate_dub_cost(engine: str, tts: str, tier: str, video: Path, stem: str,
         parts.append("lip-sync: Wav2Lip (local GPU, free)")
     elif lip == "none":
         parts.append("lip-sync: none (free)")
+    if lip in ("sync3", "pro", "standard", "hummingbird") and dur:
+        # the owner's $14.44-vs-$1.44 lesson, surfaced at decision time
+        cheap = round(dur * LIPSYNC_RATE_PER_SEC["latentsync"], 2)
+        parts.append(f"tip: latentsync would be ${cheap:.2f} for this video")
     return {"this_run": total, "chars": chars, "duration": round(dur, 1),
             "tts": tts, "tier": lip, "engine": engine,
             "clone": clone_cost, "summary": " · ".join(parts)}
@@ -274,6 +279,46 @@ def record_spend(stem: str, info: dict) -> dict:
         FAL_SPEND_FILE.parent.mkdir(parents=True, exist_ok=True)
         FAL_SPEND_FILE.write_text(json.dumps(d, indent=1), encoding="utf-8")
         return {"this_run": info["this_run"], "total": d["total"]}
+
+
+# a single confirm-dialog estimate should shout above this number (the owner's
+# $14 sync-v2 surprise is exactly what this catches)
+SPEND_WARN_USD = 5.0
+
+
+def spend_this_window() -> float:
+    """Ledgered fal spend inside the ceiling window (calendar month by default)."""
+    window = str(CONFIG.get("spend_ceiling_window", "month"))
+    lt = time.localtime()
+    if window == "day":
+        start = time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, 0, 0, 0, 0, 0, -1))
+    elif window == "week":
+        start = time.time() - 7 * 86400
+    else:  # month
+        start = time.mktime((lt.tm_year, lt.tm_mon, 1, 0, 0, 0, 0, 0, -1))
+    return sum(float(r.get("cost") or 0) for r in load_spend().get("runs", [])
+               if float(r.get("ts") or 0) >= start)
+
+
+def gate_estimate(est: dict) -> dict:
+    """Annotate a paid-run estimate for the confirm dialog: warn above $5, and
+    block when the optional config.json spend ceiling would be exceeded."""
+    est = dict(est)
+    total = float(est.get("this_run") or est.get("usd") or 0)
+    est["warn"] = total >= SPEND_WARN_USD
+    ceiling = CONFIG.get("spend_ceiling_usd")
+    if ceiling:
+        spent = spend_this_window()
+        window = CONFIG.get("spend_ceiling_window", "month")
+        est["window_spent"] = round(spent, 2)
+        est["ceiling"] = float(ceiling)
+        if spent + total > float(ceiling):
+            est["blocked"] = True
+            est["blocked_msg"] = (
+                f"Spend ceiling reached: ${spent:.2f} already spent this {window} and this run "
+                f"adds ~${total:.2f}, over the ${float(ceiling):.2f} limit. Raise "
+                "spend_ceiling_usd in video-studio/config.json to continue.")
+    return est
 
 
 def soft_delete(target: Path, label: str) -> str:
@@ -315,11 +360,67 @@ def job_env() -> dict:
     return env
 
 
-def run_job(job_id: str, cmd: list[str]) -> None:
+def classify_failure(tail: str, returncode: int) -> dict | None:
+    """Turn a failed job's log tail into a short human verdict.
+
+    Returns {"kind", "title", "fix"} or None when nothing matches. The raw log
+    stays untouched — this only powers the banner in the job drawer.
+    """
+    low = tail.lower()
+    has_fal = "fal" in low
+
+    def word(n: str) -> bool:
+        return re.search(rf"\b{n}\b", tail) is not None
+
+    if "exhausted balance" in low or "user is locked" in low:
+        return {"kind": "balance",
+                "title": "fal.ai balance is empty — nothing was charged for this run",
+                "fix": "Top up at fal.ai/dashboard/billing, or create your own key at fal.ai/dashboard/keys and replace FAL_KEY=... in autoVSL/.env"}
+    if has_fal and (word("401") or "unauthor" in low):
+        return {"kind": "auth",
+                "title": "fal.ai key rejected",
+                "fix": "Check FAL_KEY in autoVSL/.env"}
+    if has_fal and (word("402") or word("403") or "locked" in low or "balance" in low or "exhaust" in low):
+        return {"kind": "payment",
+                "title": "fal.ai refused the request (payment/permission)",
+                "fix": "Check your balance and key at fal.ai/dashboard — nothing further was charged"}
+    if word("429") or "rate limit" in low:
+        return {"kind": "rate_limit",
+                "title": "fal.ai rate limit hit",
+                "fix": "Wait a minute and re-run — finished stages are cached and won't re-bill"}
+    if "content policy" in low or "moderation" in low or "flagged" in low or ("safety" in low and has_fal):
+        return {"kind": "moderation",
+                "title": "The model's content filter rejected a prompt",
+                "fix": "Soften the scene description (people, bedrooms, brands) and re-run the failed shots"}
+    if "timeoutexpired" in low or "timed out" in low or "readtimeout" in low:
+        return {"kind": "timeout",
+                "title": "A step ran too long and was cut off",
+                "fix": "Re-run — finished stages are cached. If it keeps hanging, check fal.ai status"}
+    if "no video in response" in low or "no clips were generated" in low or "no output produced" in low:
+        return {"kind": "no_output",
+                "title": "The provider returned no usable output",
+                "fix": "Re-run the failed step; if it persists, try a different model tier"}
+    if "calledprocesserror" in low or "returned non-zero exit status" in low:
+        return {"kind": "subprocess",
+                "title": "A pipeline stage failed",
+                "fix": "See the last lines of the log for the stage's own error"}
+    # Fallback: surface the last line that isn't traceback noise.
+    for line in reversed(tail.splitlines()):
+        s = line.strip()
+        if not s or s.startswith("+"):
+            continue
+        if re.match(r"^(File |Traceback|  at )", s) or re.match(r"^[A-Za-z]:[\\/]", s):
+            continue
+        return {"kind": "error", "title": s[:200], "fix": "Full details in the raw log"}
+    return None
+
+
+def run_job(job_id: str, cmd: list[str], timeout_s: float | None = None) -> None:
     job = jobs[job_id]
     job["cmd"] = [str(c) for c in cmd]   # recorded so the job can be resumed
     gpu = job["gpu"] if "gpu" in job else needs_gpu(job["cmd"])
     got_gpu = False
+    watchdog = None
     try:
         if gpu:
             wait_for_gpu(job)    # yield to subtitle-studio / the old dashboard
@@ -331,10 +432,24 @@ def run_job(job_id: str, cmd: list[str]) -> None:
             text=True, encoding="utf-8", errors="replace", bufsize=1,
         )
         job["pid"] = proc.pid
+        if timeout_s:
+            # a hung engine (usually a dead fal queue item) used to stall the
+            # chain forever — kill the whole tree at the deadline instead
+            def _kill_on_deadline():
+                if proc.poll() is None:
+                    with jobs_lock:
+                        job["lines"].append(f"⏱ step timed out after {int(timeout_s)}s — killing it")
+                    subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                                   capture_output=True)
+            watchdog = threading.Timer(timeout_s, _kill_on_deadline)
+            watchdog.daemon = True
+            watchdog.start()
         for line in proc.stdout:
             with jobs_lock:
                 job["lines"].append(line.rstrip("\n"))
         proc.wait()
+        if watchdog:
+            watchdog.cancel()
         job["returncode"] = proc.returncode
         if job["status"] == "stopped":
             pass                       # user pressed Stop — keep that status, skip the failure paths
@@ -345,19 +460,20 @@ def run_job(job_id: str, cmd: list[str]) -> None:
         else:
             job["status"] = "failed"
             tail = "\n".join(job["lines"][-60:])
-            if "Exhausted balance" in tail or "User is locked" in tail:
+            err = classify_failure(tail, proc.returncode)
+            if err:
+                job["error"] = err
                 with jobs_lock:
                     job["lines"].append("")
-                    job["lines"].append(">>> fal.ai BALANCE IS EMPTY — nothing was charged for this run. <<<")
-                    job["lines"].append(">>> Fix: top up at fal.ai/dashboard/billing, or create YOUR OWN key at fal.ai/dashboard/keys and replace FAL_KEY=... in autoVSL/.env <<<")
-            elif "401" in tail and "fal" in tail.lower():
-                with jobs_lock:
-                    job["lines"].append(">>> fal.ai key rejected — check FAL_KEY in autoVSL/.env <<<")
+                    job["lines"].append(f">>> {err['title']} <<<")
+                    job["lines"].append(f">>> Fix: {err['fix']} <<<")
     except Exception as exc:  # surface launcher errors in the log panel
         with jobs_lock:
             job["lines"].append(f"[dashboard] failed to run: {exc}")
         if job["status"] != "stopped":
             job["status"] = "failed"
+            job["error"] = {"kind": "launcher", "title": f"Could not start the job: {exc}"[:200],
+                            "fix": "Check the engine path and venv in video-studio/config.json"}
         job["returncode"] = -1
     finally:
         if got_gpu:
@@ -454,6 +570,21 @@ def api_spend():
                     "runs": list(reversed(d.get("runs", [])))[:20]})
 
 
+@app.get("/api/prices")
+def api_prices():
+    """Single source of truth for the UI's price labels — the JS copies of these
+    tables kept drifting (dubbing.html was missing whole tiers)."""
+    return jsonify({
+        "tts_per_1k": TTS_RATE_PER_1K,
+        "lipsync_per_sec": LIPSYNC_RATE_PER_SEC,
+        "clone_fee": MINIMAX_CLONE_FEE,
+        "t2v": T2V_FAL_MODELS,
+        "warn_usd": SPEND_WARN_USD,
+        "ceiling_usd": CONFIG.get("spend_ceiling_usd"),
+        "ceiling_window": CONFIG.get("spend_ceiling_window", "month"),
+    })
+
+
 @app.post("/api/run")
 def api_run():
     body = request.get_json(force=True)
@@ -532,8 +663,11 @@ def api_run():
                 "veed", "standard", "pro", "hummingbird", "sync3") else "none"
             paid = lipsync in ("latentsync", "musetalk", "veed", "standard", "pro",
                                "hummingbird", "sync3")
-            if paid and not body.get("confirm_cost"):
-                abort(400, f"lip-sync '{lipsync}' runs on fal.ai and costs money — needs cost approval (confirm_cost)")
+            if paid:
+                est = gate_estimate(estimate_dub_cost("local", "local", lipsync, src, stem,
+                                                      load_spend().get("cloned_stems", {})))
+                if est.get("blocked") or not body.get("confirm_cost"):
+                    return jsonify({"needs_confirm": True, "estimate": est}), 402
             cmd = [str(venv_py), str(ENGINES / "local_dub.py"), str(src),
                    "--name", stem, "--lipsync", lipsync]
             lang = str(body.get("language") or "en")[:5]
@@ -571,14 +705,16 @@ def api_run():
                 abort(400, "This clip has no audio, and the cloud engine clones the on-screen "
                            "voice. To voice a silent clip, switch to the Local engine and pick a "
                            "saved voice from the Voice Bank.")
-            # cloud pipeline: always costs money
-            if not body.get("confirm_cost"):
-                abort(400, "FAL.AI dub spends money (voice-clone + TTS + lip-sync) — needs cost approval (confirm_cost)")
             tier = body.get("tier") if body.get("tier") in (
                 "pro", "standard", "veed", "latentsync", "musetalk",
                 "hummingbird", "sync3") else "pro"
             tts = body.get("tts") if body.get("tts") in (
                 "hd", "turbo", "hd25", "turbo25", "f5", "chatterbox") else "hd"
+            # cloud pipeline: always costs money — answer with the real number first
+            est = gate_estimate(estimate_dub_cost("fal", tts, tier, src, stem,
+                                                  load_spend().get("cloned_stems", {})))
+            if est.get("blocked") or not body.get("confirm_cost"):
+                return jsonify({"needs_confirm": True, "estimate": est}), 402
             cmd = [str(venv_py), str(ENGINES / "dub.py"), str(src),
                    "--name", stem, "--tier", tier, "--tts", tts]
             if body.get("captions", True):
@@ -673,6 +809,7 @@ def api_job(job_id):
             "returncode": job["returncode"], "lines": lines,
             "next_offset": offset + len(lines),
             "cost": job.get("cost"),
+            "error": job.get("error"),
         })
 
 
@@ -2498,19 +2635,91 @@ def api_dubs():
     return jsonify({"dubs": dubs})
 
 
+def run_paid_repair(job_id: str, cmd: list[str], stem: str, est: dict) -> None:
+    """Run a repair that spends fal money; ledger the engine's actual SPENT line
+    (even on failure — a dead composite can still have billed the fal call)."""
+    run_job(job_id, cmd)
+    job = jobs[job_id]
+    actual = _actual_spend(job)
+    usd = float(actual["usd"]) if actual and "usd" in actual else (
+        est["this_run"] if job["status"] == "done" else 0.0)
+    if usd <= 0:
+        return
+    try:
+        info = dict(est)
+        info["this_run"] = usd
+        if job["status"] != "done":
+            info["summary"] = f"{est.get('summary', '')} (failed run — actual spend)"
+        res = record_spend(stem, info)
+        with jobs_lock:
+            job["lines"].append("")
+            job["lines"].append(f"💰 This repair cost ~${res['this_run']:.2f} on fal.ai "
+                                f"({info['summary']})")
+        job["cost"] = {"this_run": res["this_run"], "total": res["total"],
+                       "summary": info["summary"]}
+    except Exception as exc:                          # noqa: BLE001
+        with jobs_lock:
+            job["lines"].append(f"(cost tracking skipped: {exc})")
+
+
 @app.post("/api/dubsync/repair")
 def api_dubsync_repair():
-    """Fix a finished dub without re-dubbing: remux | refit | renorm | relipsync.
-    Everything is local and free; output is a new versioned take (final.mp4 untouched)."""
+    """Fix a finished dub without re-dubbing: remux | refit | renorm | relipsync
+    | visual | object | swap (all local & free) | relipsync-segment (PAID: fal
+    lip-sync on just the marked ranges — cost-gated with the 402 pattern).
+    Output is always a new versioned take (final.mp4 untouched)."""
     body = request.get_json(force=True)
     stem = Path(body.get("stem") or "").name
     action = body.get("action")
-    if action not in ("remux", "refit", "renorm", "relipsync", "visual", "object", "swap"):
+    if action not in ("remux", "refit", "renorm", "relipsync", "visual", "object",
+                      "swap", "relipsync-segment"):
         abort(400, "bad action")
     work = SWAP_WORK / stem
     if not stem or not (work / "final.mp4").is_file():
         abort(404, "no such dub")
     venv_py = Path(CONFIG["venvs"]["cv"])
+    if action == "relipsync-segment":
+        # -- paid: fal lip-sync on the marked seconds only ----------------------
+        if not (work / "new-vo.mp3").is_file():
+            abort(400, "no VO in the work dir — this repair needs new-vo.mp3 (re-run the dub)")
+        tier = body.get("tier")
+        rate = LIPSYNC_RATE_PER_SEC.get(tier or "", 0.0)
+        if not tier or rate <= 0:
+            abort(400, "pick a paid fal lip-sync tier (latentsync, veed, standard, pro, …)")
+        ranges = body.get("ranges") or []
+        pad = max(0.0, min(2.0, float(body.get("pad") or 0.35)))
+        parts, secs = [], 0.0
+        min_bill = 15.0 if tier == "hummingbird" else 0.0
+        for rr in ranges:
+            try:
+                s0, s1 = float(rr["start"]), float(rr["end"])
+            except (KeyError, TypeError, ValueError):
+                abort(400, "each range needs numeric start/end seconds")
+            if s1 <= s0:
+                abort(400, f"range {s0:.2f}-{s1:.2f}: end must be after start")
+            parts.append(f"{s0:.3f}-{s1:.3f}")
+            secs += max((s1 - s0) + 2 * pad, min_bill)
+        if not parts:
+            abort(400, "mark at least one time range first")
+        est = gate_estimate({
+            "this_run": round(secs * rate, 3), "engine": "fal-segsync", "tier": tier,
+            "summary": f"re-lipsync {len(parts)} segment(s) / ~{secs:.1f}s on {tier} "
+                       f"≈ ${secs * rate:.2f} — instead of the whole video",
+        })
+        if est.get("blocked") or not body.get("confirm_cost"):
+            return jsonify({"needs_confirm": True, "estimate": est}), 402
+        cmd = [str(venv_py), str(SEGMENT_LIPSYNC_PY), "--work", str(work),
+               "--ranges", ",".join(parts), "--tier", tier, "--rate", str(rate),
+               "--min-bill", str(min_bill), "--pad", str(pad),
+               "--env-file", str(FAL_ENV_FILE)]
+        if body.get("fade"):
+            cmd += ["--fade", str(int(body["fade"]))]
+        job_id = jobs_create("dubsync-repair", stem,
+                             f"DubSync Repair (Re-lipsync marked ranges · {tier} $) — {stem}",
+                             gpu=False)               # fal does the work, not our GPU
+        threading.Thread(target=run_paid_repair, args=(job_id, cmd, stem, est),
+                         daemon=True).start()
+        return jsonify({"job_id": job_id, "estimate": est})
     if action == "swap":
         ranges = body.get("ranges") or []
         parts = []
@@ -3015,12 +3224,26 @@ def _background_target(stem: str, body: dict) -> tuple[str, Path]:
 
 
 def _background_opts(body: dict) -> list[str]:
+    if body.get("reverse"):
+        # person → green screen: alpha sources are flattened; opaque sources go
+        # through local AI matting (person_matte.py) — no scene needed
+        return ["--reverse",
+                "--green-color", str(body.get("green_color") or "0x00FF00")]
     bg = _background_path(body.get("background") or "")
     cmd = ["--background", str(bg),
            "--key-color", str(body.get("key_color") or "auto"),
            "--similarity", str(float(body.get("similarity") or 0.15)),
            "--blend", str(float(body.get("blend") or 0.05)),
+           "--fill-holes", str(int(body.get("fill_holes", 2))),
            "--bg-blur", str(float(body.get("bg_blur", 6)))]
+    if body.get("ai_key"):
+        # full AI key: the person matte IS the alpha, no chromakey at all —
+        # works even with bad green-screen lighting or no green screen
+        cmd.append("--ai-key")
+    elif body.get("protect_person", True):
+        # AI person mask forces the actor fully opaque — the key can only
+        # remove the screen, never the person
+        cmd.append("--protect-person")
     if body.get("no_despill"):
         cmd.append("--no-despill")
     return cmd
@@ -3043,8 +3266,11 @@ def api_background_preview():
            "--input", str(src)] + _background_opts(body) + \
           ["--preview", str(work / "bg-preview.png"),
            "--at", str(float(body.get("at") or 1.0))]
+    # reverse / AI-key / person-shield previews may load the matting model
+    ai = body.get("reverse") or body.get("ai_key") or body.get("protect_person", True)
     r = subprocess.run(cmd, cwd=str(ROOT), env=job_env(), capture_output=True,
-                       text=True, encoding="utf-8", errors="replace", timeout=180)
+                       text=True, encoding="utf-8", errors="replace",
+                       timeout=420 if ai else 180)
     if r.returncode != 0:
         abort(500, (r.stdout or "")[-400:] or "preview failed")
     key = ""
@@ -3068,16 +3294,71 @@ def api_background_replace():
         abort(400, "no stem")
     mode, target = _background_target(stem, body)
     py = str(Path(CONFIG["venvs"]["cv"]))
+    what = "Green screen (reverse)" if body.get("reverse") else "Background swap"
     if mode == "dub":
         cmd = [py, str(BACKGROUND_SWAP_PY), "--work", str(target)] + _background_opts(body)
-        label = f"Background swap (dubbed take) — {stem}"
+        if body.get("promote", True):
+            # replace what the user sees: new take becomes final.mp4, the
+            # previous final is archived as a promotable take in Fix & QA
+            cmd.append("--promote")
+        label = f"{what} (dubbed take) — {stem}"
     else:
         cmd = [py, str(BACKGROUND_SWAP_PY), "--input", str(target),
                "--replace", "--backup-dir", str(UPLOADS / ".originals")] + _background_opts(body)
-        label = f"Background swap (source footage) — {stem}"
-    job_id = jobs_create("background-swap", stem, label, gpu=False)
+        label = f"{what} (source footage) — {stem}"
+    # reverse, AI key and the person shield all run AI matting on the GPU
+    gpu = bool(body.get("reverse") or body.get("ai_key")
+               or body.get("protect_person", True))
+    job_id = jobs_create("background-swap", stem, label, gpu=gpu)
     threading.Thread(target=run_job, args=(job_id, cmd), daemon=True).start()
     return jsonify({"job_id": job_id, "mode": mode})
+
+
+@app.post("/api/background/save")
+def api_background_save():
+    """Save the current video (with its replaced background) to the Desktop
+    exports folder — the dubbed final when one exists, otherwise the source
+    footage that the swap replaced in place."""
+    body = request.get_json(force=True)
+    stem = Path(body.get("stem") or "").name
+    if not stem:
+        abort(400, "no stem")
+    mode, target = _background_target(stem, body)
+    src = target / "final.mp4" if mode == "dub" else target
+    if not src.is_file():
+        abort(404, "video not found")
+    EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
+    dest, n = EXPORTS_DIR / f"{stem}-background.mp4", 2
+    while dest.exists():                       # never clobber an earlier export
+        dest = EXPORTS_DIR / f"{stem}-background-{n}.mp4"
+        n += 1
+    shutil.copy2(src, dest)
+    return jsonify({"saved": dest.name, "dir": str(EXPORTS_DIR), "mode": mode})
+
+
+@app.post("/api/background/extract")
+def api_background_extract():
+    """Extract the person out of the current video (dubbed final if one exists,
+    otherwise the source footage) as a file with a REAL transparent background —
+    .webm (VP9+alpha, small, slow encode) or .mov (ProRes 4444, big, fast).
+    Lands in the Desktop exports folder next to the other deliverables."""
+    body = request.get_json(force=True)
+    stem = Path(body.get("stem") or "").name
+    if not stem:
+        abort(400, "no stem")
+    mode, target = _background_target(stem, body)
+    src = target / "final.mp4" if mode == "dub" else target
+    fmt = "mov" if body.get("format") == "mov" else "webm"
+    out_dir = Path(CONFIG.get("exports_dir") or (SWAP_WORK / stem))
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out = out_dir / f"{stem}-person.{fmt}"
+    cmd = [str(Path(CONFIG["venvs"]["cv"])),
+           str(BACKGROUND_SWAP_PY.with_name("person_matte.py")),
+           "--input", str(src), "--emit", "alpha", "--output", str(out)]
+    job_id = jobs_create("person-extract", stem,
+                         f"Extract person (transparent .{fmt}) — {stem}", gpu=True)
+    threading.Thread(target=run_job, args=(job_id, cmd), daemon=True).start()
+    return jsonify({"job_id": job_id, "mode": mode, "out": str(out)})
 
 
 # shared technical constraints — every background plate obeys these regardless of
@@ -3151,7 +3432,8 @@ def api_background_generate():
         prompt = _BG_SCENE_BASE + _BG_SCENE_FROM_SCRIPT + script[:1500]
 
     est = _img_estimate(model, 1, "1K")
-    if not body.get("confirm_cost"):
+    est = gate_estimate(est)
+    if est.get("blocked") or not body.get("confirm_cost"):
         return jsonify({"needs_confirm": True, "estimate": est}), 402
 
     work = IMG_OUT / f"bg-{stem}"
@@ -3573,7 +3855,8 @@ def api_duo_run():
         abort(400, "no duo-config yet — run Detect speakers first")
 
     est = _duo_estimate(stem, cfg, tier)
-    if not body.get("confirm_cost"):
+    est = gate_estimate(est)
+    if est.get("blocked") or not body.get("confirm_cost"):
         return jsonify({"needs_confirm": True, "estimate": est}), 402
 
     # one dub at a time — same GPU/cloud discipline as single-speaker dubs
@@ -3616,6 +3899,10 @@ def api_exports():
     if I2V_OUT.is_dir():
         for d in sorted(I2V_OUT.iterdir()):
             if d.is_dir() and d.name != "_uploads" and (d / "clip.mp4").is_file():
+                # the tagged version (on-screen story text) is the shippable one
+                if (d / "clip-tagged.mp4").is_file():
+                    items.append(_export_item(d / "clip-tagged.mp4", "i2v",
+                                              f"{d.name} (tagged)"))
                 items.append(_export_item(d / "clip.mp4", "i2v", f"{d.name} (image→video)"))
     if IMG_OUT.is_dir():                       # newest version of each edited image
         for d in sorted(IMG_OUT.iterdir()):
@@ -3625,6 +3912,18 @@ def api_exports():
                     if p.suffix.lower() in IMG_EXTS]
             if vers:
                 items.append(_export_item(vers[-1], "image", f"{d.name} ({vers[-1].stem})"))
+    recap = ROOT / "output" / "recaption"      # re-subtitled uploads
+    if recap.is_dir():
+        for d in sorted(recap.iterdir()):
+            if (d / "captioned.mp4").is_file():
+                items.append(_export_item(d / "captioned.mp4", "recaption",
+                                          f"{d.name} (new subtitles)"))
+    ugc = ROOT / "output" / "ugc"              # UGC previews / variants
+    if ugc.is_dir():
+        for d in sorted(ugc.iterdir()):
+            if d.is_dir():
+                for p in sorted(d.glob("*.mp4")):
+                    items.append(_export_item(p, "ugc", f"{d.name} — {p.stem} (UGC)"))
     items.sort(key=lambda x: x["mtime"], reverse=True)
     return jsonify({"items": items, "exports_dir": str(EXPORTS_DIR)})
 
@@ -3666,6 +3965,18 @@ def api_exports_send():
             delay = float(CONFIG.get("auto_cleanup", {}).get("delay_hours", 24))
             queued = cleanup.enqueue(stem, delay)
     return jsonify({"saved_to": str(dest), "cleanup": queued})
+
+
+@app.post("/api/exports/open")
+def api_exports_open():
+    """Open the Desktop exports folder in Explorer — matches how finals actually
+    get picked up (by hand) instead of pretending everyone uses the export flow."""
+    EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        os.startfile(str(EXPORTS_DIR))            # noqa: S606 — local desktop app
+    except OSError as exc:
+        abort(500, f"could not open the folder: {exc}")
+    return jsonify({"opened": str(EXPORTS_DIR)})
 
 
 # ------------------------------------------------ Voice Bank
@@ -3865,7 +4176,8 @@ def api_i2v_run():
         abort(400, "upload an image first")
 
     est = _i2v_estimate(model, seconds)
-    if not b.get("confirm_cost"):
+    est = gate_estimate(est)
+    if est.get("blocked") or not b.get("confirm_cost"):
         return jsonify({"needs_confirm": True, "estimate": est}), 402
 
     slug = f"{img.stem}-{time.strftime('%H%M%S')}"
@@ -4026,7 +4338,8 @@ def api_fit_run():
     seg = I2V_MODELS[model]["seg"]
     need = _fit_need(float(plan.get("gap") or 0), seg)
     est = _i2v_estimate(model, need)
-    if not b.get("confirm_cost"):
+    est = gate_estimate(est)
+    if est.get("blocked") or not b.get("confirm_cost"):
         return jsonify({"needs_confirm": True, "estimate": est, "plan": plan}), 402
     prompt = (b.get("prompt") or "").strip()
     cv_py = CONFIG["venvs"]["cv"]
@@ -4076,12 +4389,42 @@ def api_fit_join():
 T2V_ENGINE = APP_DIR / "engines" / "t2v_continue.py"
 
 
+def _actual_spend(job: dict) -> dict | None:
+    """Engines print a machine-readable `SPENT: {"usd":…}` line on exit (even on
+    failure) — the truth beats the pre-run estimate. Returns the parsed dict."""
+    with jobs_lock:
+        lines = list(job["lines"])
+    for line in reversed(lines):
+        if line.startswith("SPENT: "):
+            try:
+                return json.loads(line[len("SPENT: "):])
+            except (ValueError, TypeError):
+                return None
+    return None
+
+
 def run_t2v_job(job_id: str, cmd: list[str], slug: str, est: dict) -> None:
     run_job(job_id, cmd)
     job = jobs[job_id]
+    actual = _actual_spend(job)
     if job["status"] != "done":
+        # a failed run may still have billed finished shots — ledger the truth
+        if actual and actual.get("usd"):
+            try:
+                info = dict(est)
+                info["this_run"] = float(actual["usd"])
+                info["summary"] = f"{est.get('summary', '')} (failed run — actual spend)"
+                res = record_spend(slug, info)
+                with jobs_lock:
+                    job["lines"].append(f"💰 The failed run still spent ~${res['this_run']:.2f} "
+                                        f"on fal.ai (finished shots are cached and won't re-bill)")
+            except Exception:                     # noqa: BLE001
+                pass
         return
     try:
+        if actual and "usd" in actual:
+            est = dict(est)
+            est["this_run"] = float(actual["usd"])
         res = record_spend(slug, est)
         with jobs_lock:
             job["lines"].append("")
@@ -4118,7 +4461,8 @@ def api_t2v_continue():
     except (TypeError, ValueError):
         abort(400, "bad start/end times")
     est = _i2v_estimate(model, seconds)
-    if not b.get("confirm_cost"):
+    est = gate_estimate(est)
+    if est.get("blocked") or not b.get("confirm_cost"):
         return jsonify({"needs_confirm": True, "estimate": est}), 402
     slug = f"{src.stem}-cont-{time.strftime('%H%M%S')}"
     work = I2V_OUT / slug
@@ -4163,27 +4507,45 @@ def api_t2v_models():
 def run_chain_job(job_id: str, steps: list[tuple[str, list[str]]], est: dict | None = None,
                   slug: str = "") -> None:
     """Run several engine steps inside ONE job. run_job marks the job done after
-    each command, so intermediate successes are flipped back to running."""
+    each command, so intermediate successes are flipped back to running.
+    Steps are (label, cmd) or (label, cmd, timeout_s) — the timeout kills a hung
+    engine so one dead fal queue item can't stall the chain forever."""
     last = len(steps) - 1
-    for i, (label, cmd) in enumerate(steps):
+    done = True
+    for i, step in enumerate(steps):
+        label, cmd = step[0], step[1]
+        timeout_s = step[2] if len(step) > 2 else None
         with jobs_lock:
             jobs[job_id]["lines"].append("")
             jobs[job_id]["lines"].append(f"=== step {i + 1}/{len(steps)}: {label} ===")
-        run_job(job_id, cmd)
+        run_job(job_id, cmd, timeout_s)
         if jobs[job_id]["status"] != "done":
-            return                     # failed / stopped — leave the state as-is
+            done = False               # failed / stopped — leave the state as-is
+            break
         if i != last:
             with jobs_lock:
                 jobs[job_id]["status"] = "running"
                 jobs[job_id]["ended"] = None
     if est:
         try:
-            res = record_spend(slug, est)
+            # prefer the engine's actual SPENT line over the pre-run estimate,
+            # and ledger a failed chain too — it may have billed finished shots
+            actual = _actual_spend(jobs[job_id])
+            info = dict(est)
+            if actual and "usd" in actual:
+                info["this_run"] = float(actual["usd"])
+                if not done:
+                    info["summary"] = f"{est.get('summary', '')} (failed run — actual spend)"
+            elif not done:
+                return                 # no SPENT line from a failed run — nothing reliable to record
+            if not done and not info["this_run"]:
+                return                 # failed before any billing
+            res = record_spend(slug, info)
             with jobs_lock:
                 jobs[job_id]["lines"].append("")
-                jobs[job_id]["lines"].append(f"💰 ~${res['this_run']:.2f} on fal.ai ({est['summary']})")
+                jobs[job_id]["lines"].append(f"💰 ~${res['this_run']:.2f} on fal.ai ({info['summary']})")
             jobs[job_id]["cost"] = {"this_run": res["this_run"], "total": res["total"],
-                                    "summary": est["summary"]}
+                                    "summary": info["summary"]}
         except Exception as exc:                      # noqa: BLE001
             with jobs_lock:
                 jobs[job_id]["lines"].append(f"(cost tracking skipped: {exc})")
@@ -4207,6 +4569,20 @@ def api_brollvid_run():
     if motion == "fal-t2v" and t2v_model not in T2V_FAL_MODELS:
         abort(400, "unknown text-to-video model")
     shots = max(2, min(12, int(b.get("shots") or 6)))
+    # which Claude writes the shot list: sonnet (default) or opus — the
+    # Text → Commercial tab sends opus so the whole ad is Opus-directed.
+    script_model = b.get("script_model", "sonnet")
+    if script_model not in ("sonnet", "opus", "haiku"):
+        abort(400, "bad script model")
+    # optional saved Voice-Bank narrator (instead of cloning a reference video)
+    voice_ref = None
+    vid = Path(str(b.get("voice_id") or "")).name
+    if vid:
+        voice_ref = VOICES_DIR / vid / "ref.wav"
+        if not voice_ref.is_file():
+            abort(400, "that saved voice has no ref.wav — pick another on the Voices tab")
+    # kind=commercial → own slug family so the Commercial tab shows only its own work
+    is_commercial = b.get("kind") == "commercial"
 
     # optional real-world assets: the user's actual product (so the object on
     # screen is theirs, not something the model invented), look references, and
@@ -4291,26 +4667,30 @@ def api_brollvid_run():
                         f"{IMG_MODELS[still_model]['label'].split(' — ')[0]} ≈ ${stills_cost:.2f}"
                         f"\n= ~${total:.2f} total")
         est = {"this_run": total, "engine": "fal-t2v", "model": t2v_model, "summary": summary}
-    if est and not b.get("confirm_cost"):
+    if est:
+        est = gate_estimate(est)
+    if est and (est.get("blocked") or not b.get("confirm_cost")):
         return jsonify({"needs_confirm": True, "estimate": est}), 402
 
     stamp = time.strftime("%m%d-%H%M%S")
-    batch = f"script-{stamp}"
+    batch = f"{'commercial' if is_commercial else 'script'}-{stamp}"
     work = BROLL_OUT / batch
     work.mkdir(parents=True, exist_ok=True)
     (work / "script.txt").write_text(script + "\n", encoding="utf-8")
-    out_dir = I2V_OUT / f"brollvid-{stamp}"
+    out_dir = I2V_OUT / (f"commercial-{stamp}" if is_commercial else f"brollvid-{stamp}")
     out_dir.mkdir(parents=True, exist_ok=True)
     cv_py = _cv_py()
 
-    steps: list[tuple[str, list[str]]] = [
+    # each step carries a wall-clock budget (3rd tuple element) — a hung engine
+    # (usually a dead fal queue item) gets killed instead of stalling the chain
+    steps: list[tuple] = [
         # with a reference video this becomes a CLONE: Claude reads its keyframes,
         # learns the structure/pacing that made it work, and rebuilds it for this script.
         ("storyboard — " + ("model the reference video for your script" if ref
                             else "Claude turns the script into a shot list"),
          [cv_py, str(BROLLVID_ENGINE), "storyboard", "--script", str(work / "script.txt"),
           "--work", str(work), "--aspect", aspect, "--shots", str(shots),
-          "--claude", str(CLAUDE_EXE), "--model", "sonnet"]
+          "--claude", str(CLAUDE_EXE), "--model", script_model]
          + (["--brand"] if b.get("brand", True) else [])
          + (["--ugc"] if b.get("ugc", True) else [])
          + (["--preset", "ugc10"] if b.get("preset") == "ugc10" else [])
@@ -4319,7 +4699,8 @@ def api_brollvid_run():
          + [arg for p in product_imgs for arg in ("--product", str(p))]
          + [arg for p in inspiration_imgs for arg in ("--inspiration", str(p))]
          + (["--product-name", product_name] if product_name else [])
-         + (["--product-shots", str(product_shots)] if product_imgs else [])),
+         + (["--product-shots", str(product_shots)] if product_imgs else []),
+         600),
     ]
     if use_product:
         # paint the user's ACTUAL product into the stills for the beats that show
@@ -4331,7 +4712,8 @@ def api_brollvid_run():
               "--env-file", str(FAL_ENV_FILE)]
              + [arg for p in product_imgs for arg in ("--product", str(p))]
              + [arg for p in inspiration_imgs for arg in ("--inspiration", str(p))]
-             + (["--product-name", product_name] if product_name else [])))
+             + (["--product-name", product_name] if product_name else []),
+             1800))
     steps += [
         # fal text-to-video goes prompt -> clip with no ComfyUI in the loop;
         # the local engines still paint their still in ComfyUI first.
@@ -4341,26 +4723,33 @@ def api_brollvid_run():
          if motion == "fal-t2v" else
          [cv_py, str(BROLL_ENGINE), "generate", "--recipe", str(work / "recipe.json"),
           "--motion", motion, "--style", "auto", "--aspect", aspect, "--no-bank"]
-         + (["--fal-model", b.get("fal_model", "kling-2.1")] if motion == "fal" else [])),
+         + (["--fal-model", b.get("fal_model", "kling-2.1")] if motion == "fal" else []),
+         5400),
         ("assemble — stitch the shots and narrate the script",
          [cv_py, str(BROLLVID_ENGINE), "assemble", "--batch", str(work),
           "--out-dir", str(out_dir), "--ds-py", str(DUB_VENV_PY),
           "--ds-app", str(Path(CONFIG["dubbing_studio"]) / "app.py")]
          + (["--ref-video", str(ref)] if ref else [])
+         + (["--voice", str(voice_ref)] if voice_ref and not ref else [])
          + (["--banner", str(banner_imgs[0]), "--banner-mode", banner_mode,
-             "--banner-seconds", f"{banner_seconds:g}"] if banner_imgs else [])),
+             "--banner-seconds", f"{banner_seconds:g}"] if banner_imgs else []),
+         1800),
     ]
     if b.get("tags") and CLAUDE_EXE:
         # on-screen story text so the ad reads with the sound off
         steps += [
             ("story tags — write the on-screen text from the script",
              [cv_py, str(BROLLVID_ENGINE), "tags", "--recipe", str(work / "recipe.json"),
-              "--script", script[:4000], "--claude", str(CLAUDE_EXE), "--model", "sonnet"]),
+              "--script", script[:4000], "--claude", str(CLAUDE_EXE), "--model", "sonnet"],
+             600),
             ("burn tags onto the video",
              [cv_py, str(TAG_ENGINE), "--video", str(out_dir / "clip.mp4"),
-              "--recipe", str(work / "recipe.json"), "--out", str(out_dir / "clip-tagged.mp4")]),
+              "--recipe", str(work / "recipe.json"), "--out", str(out_dir / "clip-tagged.mp4")],
+             900),
         ]
-    job_id = jobs_create("brollvid", batch, f"Script → b-roll video — {batch} [{motion}]")
+    job_id = jobs_create("brollvid", batch,
+                         (f"Text → Commercial — {batch} [{t2v_model}]" if is_commercial
+                          else f"Script → b-roll video — {batch} [{motion}]"))
     threading.Thread(target=run_chain_job, args=(job_id, steps, est, batch), daemon=True).start()
     return jsonify({"job_id": job_id, "batch": batch, "slug": out_dir.name, "estimate": est})
 
@@ -4458,6 +4847,243 @@ def api_tags_burn():
         abort(502, f"burning tags failed: {(r.stderr or r.stdout or '')[-300:]}")
     return jsonify({"ok": True, "video": f"output/i2v/{out_dir.name}/clip-tagged.mp4",
                     "mtime": out.stat().st_mtime})
+
+
+# ── Text → Commercial AI: a product brief becomes a finished ad ─────────────
+# The script is written by Claude Opus (claude-opus-5 — the strongest widely
+# available Claude for creative work, via the subscription CLI, so it's free).
+# Rendering then reuses the proven brollvid chain (storyboard → fal text→video
+# → assemble + narration → story tags) with kind="commercial" + script_model
+# ="opus", so the whole ad is Opus-directed end to end.
+COMMERCIAL_PROMPT = """You are a world-class commercial director and direct-response \
+copywriter. Write the VOICEOVER SCRIPT for a {length_s}-second video commercial.
+
+THE PRODUCT:
+{product_block}
+
+THE COMMERCIAL:
+- Tone: {tone}.
+- Audience: {audience}.
+- Structure: a scroll-stopping hook in the first 2 seconds → the problem or desire → \
+introduce the product as the answer → 2-3 vivid, concrete benefits (show, don't list) → \
+close with the offer and one clear call to action{offer_line}
+- It must SOUND great read aloud: short sentences, rhythm, punch. No filler words, no clichés.
+- Write claims as personal experience or plain product facts — never medical or guaranteed-outcome claims.
+- LENGTH IS A HARD CONSTRAINT (the voiceover must fit the video): write {lo}-{hi} words \
+(target ~{target}). Count your words and land inside the range — never go over.
+{steer_block}
+Respond with ONLY the voiceover script text — no headings, no scene directions, no emojis, \
+no hashtags, no quotation marks, no preamble, no markdown."""
+
+
+@app.post("/api/commercial/script")
+def api_commercial_script():
+    """Product brief → commercial VO script (Claude Opus via the CLI — free)."""
+    b = request.get_json(force=True)
+    product = (b.get("product_name") or "").strip()[:200]
+    desc = (b.get("description") or "").strip()[:2000]
+    if len((product + " " + desc).split()) < 3:
+        abort(400, "describe the product first — what is it, what does it do?")
+    if not CLAUDE_EXE:
+        abort(500, "claude CLI not found — install Claude Code or add it to PATH")
+    length_s = max(10, min(90, int(b.get("length_s") or 30)))
+    audience = (b.get("audience") or "").strip()[:300] or "a broad social-media audience"
+    tone = (b.get("tone") or "").strip()[:120] or "confident, modern, energetic"
+    offer = (b.get("offer") or "").strip()[:300]
+    steer = (b.get("steer") or "").strip()[:600]
+    target = round(length_s * 2.35)          # comfortable VO pace ≈ 2.35 words/sec
+    lo, hi = round(target * 0.88), round(target * 1.02)
+    prompt = COMMERCIAL_PROMPT.format(
+        length_s=length_s, tone=tone, audience=audience, target=target, lo=lo, hi=hi,
+        product_block=(f"- Name: {product}\n" if product else "") + f"- What it is / does: {desc}",
+        offer_line=(f" — the offer is: {offer}." if offer else "."),
+        steer_block=(f"\nEXTRA DIRECTION FROM THE MARKETER: {steer}\n" if steer else ""))
+    env = job_env()
+    env.pop("CLAUDECODE", None)
+    try:
+        result = subprocess.run(
+            [CLAUDE_EXE, "-p", "--model", "opus",
+             "--disallowedTools", "Write,Edit,Bash,NotebookEdit,WebFetch,WebSearch"],
+            input=prompt, capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=240, cwd=str(ROOT), env=env)
+    except subprocess.TimeoutExpired:
+        abort(504, "Claude took too long — try again")
+    out = (result.stdout or "").strip()
+    if result.returncode != 0 or not out:
+        abort(502, f"claude CLI failed (rc={result.returncode}): {(result.stderr or '')[:300]}")
+    return jsonify({"script": out, "words": len(out.split()),
+                    "target_words": target, "length_s": length_s, "model": "claude-opus-5"})
+
+
+# ── UGC Factory: avatar photo → talking Veo 3 UGC clip ──────────────────────
+# One shot, no chain: the avatar image (optionally with the real product merged
+# in via nano-banana) goes through Veo 3 image→video with NATIVE speech — the
+# person on screen says the script, lip-synced, in the chosen voice + emotion,
+# framed by a scene template. Engine: app/engines/ugc_avatar.py.
+UGC_ENGINE = APP_DIR / "engines" / "ugc_avatar.py"
+# mirror of ugc_avatar.MODELS — every fal image→video model. audio=True models
+# SPEAK natively; silent ones need a Voice-Bank voice (free) or voice="none".
+UGC_MODELS = {
+    "veo3-fast": {"label": "Google Veo 3 Fast — 720P · speaks (recommended)",
+                  "audio": True, "durations": (4, 6, 8), "cost_per_s": 0.15},
+    "veo3":      {"label": "Google Veo 3 — 1080P · speaks (premium)",
+                  "audio": True, "durations": (4, 6, 8), "cost_per_s": 0.40},
+    "sora-2":    {"label": "Sora 2 — OpenAI realism · speaks",
+                  "audio": True, "durations": (4, 8, 12), "cost_per_s": 0.30},
+    "kling-2.6-pro": {"label": "Kling 2.6 Pro — native voice at half Veo's price · speaks",
+                      "audio": True, "durations": (5, 10),
+                      "cost_per_s": 0.14, "cost_per_s_silent": 0.07},
+    "kling-2.5-pro":    {"label": "Kling 2.5 Turbo Pro — great motion · silent",
+                         "audio": False, "durations": (5, 10), "cost_per_s": 0.07},
+    "kling-2.1-master": {"label": "Kling 2.1 Master — cinematic · silent",
+                         "audio": False, "durations": (5, 10), "cost_per_s": 0.09},
+    "seedance-pro": {"label": "Seedance 1.0 Pro — 1080P flexible · silent",
+                     "audio": False, "durations": tuple(range(2, 13)), "cost_per_s": 0.12},
+    "hailuo-02": {"label": "MiniMax Hailuo 02 — lively, cheap · silent",
+                  "audio": False, "durations": (6, 10), "cost_per_s": 0.05},
+    "wan-2.2":   {"label": "Wan 2.2 — budget · silent",
+                  "audio": False, "durations": (5,), "cost_per_s": 0.04},
+}
+UGC_TEMPLATES = ("selfie", "selling", "podcast", "car", "mirror", "stream", "static")
+UGC_VOICES = ("auto", "whisper", "rough", "harsh", "soft", "low", "high", "none")
+UGC_EMOTIONS = ("auto", "happy", "angry", "fearful", "surprised", "disgusted",
+                "excited", "calm", "playful", "serious")
+UGC_MERGE_COST = 0.039          # nano-banana edit, when a product photo is added
+UGC_WPS = 2.3                   # spoken pace used to size the clip to the words
+UGC_MAX_SECONDS = 120           # 15 chained Veo segments — long scripts just chain more
+
+
+def _ugc_segments(seconds: int, durations: tuple[int, ...]) -> list[int]:
+    """Mirror of the engine's plan: longest segments + one allowed tail."""
+    durs = sorted(durations)
+    seg_max = durs[-1]
+    segs, left = [], max(durs[0], min(UGC_MAX_SECONDS, seconds))
+    while left > 0:
+        if left >= seg_max:
+            segs.append(seg_max)
+            left -= seg_max
+        else:
+            segs.append(next((s for s in durs if s >= left), seg_max))
+            left = 0
+    return segs
+
+
+@app.get("/api/ugc/options")
+def api_ugc_options():
+    return jsonify({
+        "models": [{"key": k, **v} for k, v in UGC_MODELS.items()],
+        "templates": list(UGC_TEMPLATES), "voices": list(UGC_VOICES),
+        "emotions": list(UGC_EMOTIONS), "merge_cost": UGC_MERGE_COST,
+    })
+
+
+@app.post("/api/ugc/run")
+def api_ugc_run():
+    b = request.get_json(force=True)
+    model = b.get("model", "veo3-fast")
+    if model not in UGC_MODELS:
+        abort(400, "unknown model")
+    template = b.get("template", "selfie")
+    if template not in UGC_TEMPLATES:
+        abort(400, "unknown template")
+    voice = b.get("voice", "auto")
+    if voice not in UGC_VOICES:
+        abort(400, "unknown voice type")
+    emotion = b.get("emotion", "auto")
+    if emotion not in UGC_EMOTIONS:
+        abort(400, "unknown emotion")
+    script = (b.get("script") or "").strip()[:900]
+    action = (b.get("action") or "").strip()[:900]
+    bg = (b.get("bg") or "").strip()[:300]
+    if voice != "none" and not script:
+        abort(400, "type the audio text — what should the avatar say? (or set voice to 'no sound')")
+    if voice == "none" and not (script or action):
+        abort(400, "describe the action — with no sound the character still needs something to do")
+    # voice from a previous video: a saved Voice-Bank clone re-voices the clip
+    # locally (XTTS, free) after Veo films the avatar mouthing the words
+    voice_ref = None
+    vid = Path(str(b.get("voice_id") or "")).name
+    if vid:
+        if voice == "none":
+            abort(400, "a saved voice needs speech — set a voice type other than 'no sound'")
+        if not script:
+            abort(400, "a saved voice needs the audio text — type what they should say")
+        voice_ref = VOICES_DIR / vid / "ref.wav"
+        if not voice_ref.is_file():
+            abort(400, "that saved voice has no ref.wav — pick another on the Voices tab")
+
+    def _img(key: str, required: bool) -> Path | None:
+        rel = (b.get(key) or "").replace("\\", "/")
+        if not rel:
+            if required:
+                abort(400, "upload (or paste) the avatar image first")
+            return None
+        p = (ROOT / rel).resolve()
+        if not str(p).startswith(str(I2V_UPLOADS.resolve())) or not p.is_file():
+            abort(400, f"{key}: upload that image again — it isn't on disk")
+        return p
+
+    avatar = _img("image", required=True)
+    product = _img("product", required=False)
+
+    # duration follows the words: 'auto' sizes the clip to the script (~2.3
+    # words/sec); anything past Veo's 8s cap is covered by chained segments.
+    m = UGC_MODELS[model]
+    # a silent model can't speak the script by itself — it needs a Voice-Bank
+    # voice (free XTTS over the footage) or voice="none"
+    if voice != "none" and script and not m["audio"] and not voice_ref:
+        abort(400, f"{m['label'].split(' — ')[0]} films silent video — pick a Voice-Bank "
+                   "voice from the voice list (free), set voice to 'no sound', or switch "
+                   "to a speaking model (Veo 3 / Sora 2)")
+
+    raw_sec = str(b.get("seconds") or "auto").strip().lower()
+    n_words = len(script.split())
+    if raw_sec == "auto":
+        seconds = max(2, min(UGC_MAX_SECONDS, math.ceil(n_words / UGC_WPS))) if n_words \
+            else max(m["durations"])
+    else:
+        try:
+            seconds = max(2, min(UGC_MAX_SECONDS, int(raw_sec)))
+        except ValueError:
+            abort(400, "seconds must be 'auto' or a number of seconds (2-120)")
+    segs = _ugc_segments(seconds, m["durations"])
+    eff_seconds = sum(segs)
+    # some models (Kling 2.6) bill less with their native audio off — which is
+    # the case when a Voice-Bank voice re-voices the clip, or voice is "none"
+    native_speech = m["audio"] and voice != "none" and not voice_ref
+    rate = (m.get("cost_per_s_silent") if (not native_speech and m.get("cost_per_s_silent"))
+            else m["cost_per_s"])
+    total = round(eff_seconds * rate + (UGC_MERGE_COST if product else 0), 2)
+    summary = (f"{eff_seconds}s talking UGC ({len(segs)} segment{'s' if len(segs) > 1 else ''}"
+               + (f", sized to your {n_words} words" if raw_sec == "auto" and n_words else "")
+               + f") on {m['label'].split(' — ')[0]} ≈ ${total:.2f}"
+               + (f" (incl. ${UGC_MERGE_COST} product merge)" if product else ""))
+    est = {"this_run": total, "engine": "fal-ugc", "model": model, "seconds": eff_seconds,
+           "segments": len(segs), "summary": summary}
+    if not b.get("confirm_cost"):
+        return jsonify({"needs_confirm": True, "estimate": est}), 402
+
+    slug = f"ugc-{time.strftime('%m%d-%H%M%S')}"
+    out = I2V_OUT / slug
+    out.mkdir(parents=True, exist_ok=True)
+    cmd = [_cv_py(), str(UGC_ENGINE), "--image", str(avatar),
+           "--template", template, "--action", action, "--script", script,
+           "--voice", voice, "--emotion", emotion, "--bg", bg,
+           "--model", model, "--seconds", str(seconds),
+           "--out", str(out), "--name", slug, "--env-file", str(FAL_ENV_FILE)]
+    if product:
+        cmd += ["--product", str(product)]
+    if voice_ref:
+        cmd += ["--voice-ref", str(voice_ref), "--ds-py", str(DUB_VENV_PY),
+                "--ds-app", str(Path(CONFIG["dubbing_studio"]) / "app.py")]
+    job_id = jobs_create("ugc", slug, f"UGC Factory — {slug} [{template}/{model}]")
+    threading.Thread(target=run_i2v_job, args=(job_id, cmd, slug, est), daemon=True).start()
+    return jsonify({"job_id": job_id, "slug": slug, "estimate": est})
+
+
+@app.get("/commercial")
+def page_commercial():
+    return send_from_directory(STATIC, "commercial.html")
 
 
 @app.get("/image-to-video")
@@ -5371,8 +5997,8 @@ def api_broll_generate():
         model = b.get("fal_model", "kling-2.1")
         if model not in I2V_MODELS:
             abort(400, "unknown fal model")
-        est = _broll_fal_estimate(recipe, ids, model)
-        if not b.get("confirm_cost"):
+        est = gate_estimate(_broll_fal_estimate(recipe, ids, model))
+        if est.get("blocked") or not b.get("confirm_cost"):
             return jsonify({"needs_confirm": True, "estimate": est}), 402
 
     cmd = [_cv_py(), str(BROLL_ENGINE), "generate", "--recipe", str(d / "recipe.json"),
@@ -5943,7 +6569,8 @@ def api_img_run():
         refs.append(p)
 
     est = _img_estimate(model, num, resolution)
-    if not b.get("confirm_cost"):
+    est = gate_estimate(est)
+    if est.get("blocked") or not b.get("confirm_cost"):
         return jsonify({"needs_confirm": True, "estimate": est}), 402
 
     prompt = _img_compose(mode, text, b.get("region"), bool(refs))
@@ -6387,7 +7014,8 @@ def api_img_fill():
         abort(400, "make a mask first — draw a box, paint it, or describe it")
 
     est = _fill_estimate(model, src)
-    if not b.get("confirm_cost"):
+    est = gate_estimate(est)
+    if est.get("blocked") or not b.get("confirm_cost"):
         return jsonify({"needs_confirm": True, "estimate": est}), 402
 
     cmd = [str(Path(CONFIG["venvs"]["cv"])), str(MASKEDIT_ENGINE),
@@ -6484,6 +7112,7 @@ api_sequence.init(
     claude_exe=CLAUDE_EXE or "",
     record_spend=record_spend,
     whisper_py=str(TRANSCRIBE_VENV_PY),      # faster-whisper venv for transcripts
+    gate_estimate=gate_estimate,             # $5 warning + optional spend ceiling
 )
 app.register_blueprint(api_sequence.bp)
 
@@ -6539,6 +7168,31 @@ app.register_blueprint(api_poster.bp)
 @app.get("/poster")
 def poster_page():
     return send_from_directory(STATIC, "poster.html")
+# ---------------------------------------------------------------- motion capture
+# Browser-side mocap: MediaPipe tracks the actor (uploaded video or live
+# webcam), Kalidokit rigs a VRM avatar, the composite is recorded in-browser.
+# The server only stores recordings and runs the ffmpeg finalize — free, local,
+# no GPU job. Own blueprint, same reason as the others.
+import mimetypes  # noqa: E402
+
+mimetypes.add_type("application/wasm", ".wasm")  # MediaPipe's instantiateStreaming needs it
+
+import api_mocap  # noqa: E402
+
+api_mocap.init(
+    ROOT, APP_DIR / "engines" / "mocap_finalize.py", jobs_create, run_job,
+    sys.executable, UPLOADS, STATIC,
+    exports_dir=lambda: EXPORTS_DIR,   # settings can retarget it at runtime
+    soft_delete=soft_delete,
+    ff_tool=ff_tool, fal_env=FAL_ENV_FILE, record_spend=record_spend,
+    comfy_url=COMFY_HOST,
+)
+app.register_blueprint(api_mocap.bp)
+
+
+@app.get("/motion-capture")
+def motion_capture_page():
+    return send_from_directory(STATIC, "motion-capture.html")
 
 
 if __name__ == "__main__":

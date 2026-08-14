@@ -397,6 +397,17 @@ async function saveScript(){
   }catch(e){ toast('Error: '+e.message); }
 }
 
+// price labels — fallback values, refreshed from /api/prices (one source of truth;
+// the old inline copies were missing sync3/hummingbird and rendered "undefined")
+const LIP_PRICE={latentsync:'~$0.20 / 40s',musetalk:'~$0.20 / 40s',veed:'~$0.40 / min',
+                 hummingbird:'~$2.10 / min',standard:'~$3 / min',pro:'~$6 / min',sync3:'~$8 / min'};
+fetch('/api/prices').then(r=>r.json()).then(p=>{
+  for(const [tier,perSec] of Object.entries(p.lipsync_per_sec||{})){
+    if(perSec>0) LIP_PRICE[tier]=`~$${(perSec*60).toFixed(2)} / min`;
+  }
+  if(typeof updateCostNote==='function') updateCostNote();
+}).catch(()=>{});
+
 let engine='local';
 function setEngine(e){
   engine=e;
@@ -415,13 +426,13 @@ function plan(){
     if(lip==='none') return {paid:false, lines:['Voice clone + speech: local XTTS (free)','Lip-sync: none (free)'], summary:'100% local — nothing is charged.'};
     if(lip==='wav2lip-hd') return {paid:false, lines:['Voice clone + speech: local XTTS (free)','Lip-sync: Wav2Lip + GFPGAN HD on your GPU (free)'], summary:'100% local & HD — voice + sharp lip-sync on your GPU, nothing is charged.'};
     if(lip==='wav2lip') return {paid:false, lines:['Voice clone + speech: local XTTS (free)','Lip-sync: Wav2Lip on your GPU (free)'], summary:'100% local — voice + lip-sync on your GPU, nothing is charged.'};
-    const cost={latentsync:'~$0.20 / 40s',musetalk:'~$0.20 / 40s',veed:'~$0.40 / min',standard:'~$3 / min',pro:'premium'}[lip];
+    const cost=LIP_PRICE[lip]||'paid';
     return {paid:true, lines:['Voice clone + speech: local XTTS (free)',`Lip-sync: ${lip} on fal.ai (${cost}) — PAID`],
             summary:`Voice is free/local; only the ${lip} lip-sync is charged on fal.ai.`};
   }
   const tts=$('#tts').value, tier=$('#tier').value;
   const clone = tts==='f5' ? 'zero-shot (no clone fee)' : '+$1.50 one-time clone';
-  const sc={latentsync:'~$0.20 / 40s',musetalk:'~$0.20 / 40s',veed:'~$0.40 / min',standard:'~$3 / min',pro:'premium'}[tier];
+  const sc=LIP_PRICE[tier]||'paid';
   return {paid:true, lines:[`Voice: MiniMax/${tts} on fal.ai (${clone}) — PAID`,`Lip-sync: ${tier} on fal.ai (${sc}) — PAID`],
           summary:'Full cloud pipeline — voice and lip-sync are both charged on fal.ai.'};
 }

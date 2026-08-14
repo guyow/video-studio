@@ -28,6 +28,7 @@
           </div>
           <div class="vs-row">
             <button class="vs-btn primary" id="del-send">📤 Send to Desktop</button>
+            <button class="vs-btn" id="del-open" title="open the Desktop exports folder">📁 Open folder</button>
             <span class="vs-hint" id="del-msg"></span>
           </div>
           <div id="del-queue" class="vs-hint" style="margin-top:8px"></div>
@@ -69,21 +70,42 @@
         el.querySelector("#del-dir").textContent = s.exports_dir;
       } catch (e) { /* defaults fine */ }
 
-      // deliverable choices
-      let chosen = null;
-      const renderChoices = () => {
+      // deliverable choices — everything /api/exports knows about THIS video,
+      // not just the two script-swap finals (tagged b-roll, recaptions, …)
+      let chosen = null;   // {path} or {kind:"captioned"}
+      let opts = [];
+      const KIND_ICON = {"dub-captioned": "🔥", dub: "🎬", i2v: "🎞", recaption: "💬",
+                         captioned: "💬", edit: "✂️", ugc: "🧪", vsl: "📼"};
+      const renderChoices = async () => {
         const box = el.querySelector("#del-choices");
-        const opts = [];
-        if (v.captioned) opts.push({label: "🔥 Captioned final (recommended for ads)", key: "captioned"});
-        if (v.dub) opts.push({label: "🎬 Final (no captions)", key: "final"});
+        opts = [];
+        try {
+          const d = await VS.api("/api/exports");
+          opts = (d.items || [])
+            .filter(it => (it.path && it.path.includes(`/${v.stem}/`)) ||
+                          (!it.path && it.kind === "captioned" && it.stem === v.stem))
+            .map(it => ({
+              label: `${KIND_ICON[it.kind] || "📦"} ${it.label}`,
+              key: it.path || `kind:${it.kind}`,
+              path: it.path, kind: it.kind,
+            }));
+          // captioned final first — it's the one that ships as an ad
+          opts.sort((a, b) => (a.kind === "dub-captioned" ? -1 : 1) - (b.kind === "dub-captioned" ? -1 : 1));
+        } catch (e) { /* fall back below */ }
+        if (!opts.length) {
+          if (v.captioned) opts.push({label: "🔥 Captioned final (recommended for ads)", key: "captioned-fb",
+            path: `output/script-swap/${v.stem}/final-captioned.mp4`, kind: "dub-captioned"});
+          if (v.dub) opts.push({label: "🎬 Final (no captions)", key: "final-fb",
+            path: `output/script-swap/${v.stem}/final.mp4`, kind: "dub"});
+        }
         if (!opts.length) {
           box.innerHTML = '<span class="vs-hint">nothing to deliver yet — dub first</span>';
           return;
         }
-        chosen = chosen || opts[0].key;
+        if (!chosen || !opts.some(o => o.key === chosen)) chosen = opts[0].key;
         box.innerHTML = opts.map(o =>
-          `<label class="vs-radio" style="flex:1"><input type="radio" name="del-what" value="${o.key}"
-            ${chosen === o.key ? "checked" : ""}><span>${o.label}</span></label>`).join("");
+          `<label class="vs-radio" style="flex:1;min-width:220px"><input type="radio" name="del-what" value="${VS.esc(o.key)}"
+            ${chosen === o.key ? "checked" : ""}><span>${VS.esc(o.label)}</span></label>`).join("");
         VS.$$('input[name="del-what"]', box).forEach(i => i.onchange = () => { chosen = i.value; });
       };
       renderChoices();
@@ -107,29 +129,26 @@
       showQueue();
 
       el.querySelector("#del-send").onclick = async () => {
-        if (!chosen) return;
+        const o = opts.find(x => x.key === chosen);
+        if (!o) return;
         const msg = el.querySelector("#del-msg");
         msg.textContent = "sending…";
         const auto = el.querySelector("#del-clean").checked;
         try {
-          let r;
-          if (chosen === "captioned") {
-            try {
-              r = await VS.post("/api/exports/send",
-                {path: `output/script-swap/${v.stem}/final-captioned.mp4`, stem: v.stem, auto_cleanup: auto});
-            } catch (e) {
-              r = await VS.post("/api/exports/send",
-                {kind: "captioned", stem: v.stem, auto_cleanup: auto});
-            }
-          } else {
-            r = await VS.post("/api/exports/send",
-              {path: `output/script-swap/${v.stem}/final.mp4`, stem: v.stem, auto_cleanup: auto});
-          }
+          const body = o.path
+            ? {path: o.path, stem: v.stem, auto_cleanup: auto}
+            : {kind: "captioned", stem: v.stem, auto_cleanup: auto};
+          const r = await VS.post("/api/exports/send", body);
           msg.textContent = "✅ saved to " + r.saved_to;
           VS.toast("📤 Delivered to Desktop" + (auto ? " — workspace auto-cleans later (reversible)" : ""));
           VS.refreshLibrary();
           showQueue();
         } catch (e) { msg.textContent = ""; VS.toast("Export failed: " + e.message); }
+      };
+
+      el.querySelector("#del-open").onclick = async () => {
+        try { await VS.post("/api/exports/open"); }
+        catch (e) { VS.toast("Couldn't open the folder: " + e.message); }
       };
 
       // ── Clone Winner ──

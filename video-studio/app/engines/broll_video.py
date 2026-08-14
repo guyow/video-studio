@@ -63,8 +63,10 @@ UGC_NEGATIVE = ("cinematic, film still, studio lighting, softbox, rim light, bok
 # Scene 6 is deliberately un-staged: AI models love turning product moments into
 # commercials, so she eats it while doing something else.
 UGC_SCENES = [
-    "Lying in bed under a duvet scrolling her phone, dull expression, morning light through curtains, blinks slowly",
-    "Leaning close to a messy bathroom mirror, toothbrush in hand, sighs, water spots on mirror",
+    # NB: bed / bathroom framings kept tripping Veo & Sora person-safety filters —
+    # these two beats now play in living-room / kitchen settings instead.
+    "Sitting on the edge of a couch wrapped in a blanket scrolling her phone, dull expression, morning light through curtains, blinks slowly",
+    "Leaning on a cluttered kitchen counter with a glass of water, sighs, tired eyes, dishes stacked behind her",
     "Sitting on the floor surrounded by a real messy laundry pile, hand on forehead, clothes actually wrinkled and tangled",
     "In kitchen mid-task, closes eyes and pinches bridge of nose, dishes stacked in sink behind her",
     "At laptop gripping a coffee mug, jaw tight, rubbing one eye, papers and charger cable on table",

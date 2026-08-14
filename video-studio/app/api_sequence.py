@@ -43,6 +43,7 @@ _jobs_create = None
 _run_job = None
 _ff = None
 _record_spend = None
+_gate_estimate = lambda e: e   # server injects the $5-warn / spend-ceiling annotator
 
 MEDIA_EXTS = seq.VIDEO_EXTS | seq.AUDIO_EXTS
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp"}
@@ -51,9 +52,10 @@ SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,60}$")
 
 def init(root: Path, render_py: Path, jobs_create, run_job, ff_tool, python_exe=None,
          gen_py: Path = None, cv_py: str = "", fal_env: Path = None,
-         claude_exe: str = "", record_spend=None, whisper_py: str = ""):
+         claude_exe: str = "", record_spend=None, whisper_py: str = "",
+         gate_estimate=None):
     global ROOT, RENDER_PY, GEN_PY, CV_PY, FAL_ENV, CLAUDE, WHISPER_PY
-    global _jobs_create, _run_job, _ff, PY, _record_spend
+    global _jobs_create, _run_job, _ff, PY, _record_spend, _gate_estimate
     ROOT, RENDER_PY = Path(root), Path(render_py)
     _jobs_create, _run_job, _ff = jobs_create, run_job, ff_tool
     PY = python_exe or sys.executable
@@ -63,6 +65,8 @@ def init(root: Path, render_py: Path, jobs_create, run_job, ff_tool, python_exe=
     CLAUDE = claude_exe or ""
     _record_spend = record_spend
     WHISPER_PY = whisper_py or ""
+    if gate_estimate:
+        _gate_estimate = gate_estimate
 
 
 # ---------------------------------------------------------------- helpers
@@ -585,8 +589,8 @@ def generate(slug):
         seconds = float(b.get("seconds") or 5)
     seconds = max(1.0, min(seconds, float(m["max_sec"])))
 
-    est = ai_models.estimate(model_key, seconds, resolution)
-    if not b.get("confirm_cost"):
+    est = _gate_estimate(ai_models.estimate(model_key, seconds, resolution))
+    if est.get("blocked") or not b.get("confirm_cost"):
         return jsonify({"needs_confirm": True, "estimate": est}), 402
 
     work = ROOT / "output" / "ai-clips"
@@ -1139,8 +1143,8 @@ def faceswap(slug):
 
     seconds = min(seq.clip_dur(clip), 120.0)
     resolution = b.get("resolution") or "720p"
-    est = _fs_estimate(engine, seconds, resolution)
-    if not b.get("confirm_cost"):
+    est = _gate_estimate(_fs_estimate(engine, seconds, resolution))
+    if est.get("blocked") or not b.get("confirm_cost"):
         return jsonify({"needs_confirm": True, "estimate": est}), 402
 
     work = ROOT / "output" / "ai-clips"
@@ -1209,9 +1213,9 @@ def generate_avatar():
     prompt = (b.get("prompt") or "").strip()
     if not prompt:
         abort(400, "describe the face you want")
-    est = {"usd": 0.04, "summary": f"Nano Banana avatar · 1 image ≈ $0.04",
-           "model": "nano-banana", "verified": True}
-    if not b.get("confirm_cost"):
+    est = _gate_estimate({"usd": 0.04, "summary": f"Nano Banana avatar · 1 image ≈ $0.04",
+                          "model": "nano-banana", "verified": True})
+    if est.get("blocked") or not b.get("confirm_cost"):
         return jsonify({"needs_confirm": True, "estimate": est}), 402
 
     aid = f"av{int(time.time()) % 10 ** 8:08d}"

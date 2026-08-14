@@ -360,3 +360,8 @@ Per `install.bat` and `manifest.json`:
 - **Untracked:** `comfyui/ComfyUI/`, `comfyui/api_workflows/`
 - **Recent direction:** adding ComfyUI sandbox + 4 fal.ai custom nodes + 3 production workflow JSONs + 2 new Flask routes (`api_sequence.py`, `api_batches.py`) + new `batches.html` tab
 - **Open work:** provision comfyui venv (gated on user go-ahead), wire workflows into routes (verify done in merge), drop model files
+## Imported Claude Cowork project instructions
+
+working with 2 ai web edditing 1:https://elevenlabs.io/app/home
+2:https://app.enhancor.ai/editor
+project to take Existing videos with real testimonies of people and change them to my brand liitt.co meants taking the video clip make new sound clip with watever mutch the clip and change the name of the brand from goldy to liitt with lipsting as well

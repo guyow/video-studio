@@ -21,8 +21,11 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import random
+import re
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -128,6 +131,100 @@ def pick_duration(model: dict, want: float):
     return str(int(chosen)), float(chosen)
 
 
+def classify_exc(msg: str) -> str:
+    """Sort a fal exception into a retry policy bucket."""
+    low = msg.lower()
+    if any(w in low for w in ("content policy", "moderation", "flagged", "safety",
+                              "sensitive", "prohibited", "policy violation")):
+        return "moderation"
+    if any(w in low for w in ("422", "validation", "unprocessable", "extra",
+                              "not permitted", "unexpected")):
+        return "schema"
+    if any(w in low for w in ("429", "rate limit", "500", "502", "503", "504",
+                              "timeout", "timed out", "connection", "temporarily",
+                              "internal server", "bad gateway", "unavailable")):
+        return "transient"
+    return "other"
+
+
+def sanitize_prompt(prompt: str) -> str:
+    """Moderation fallback: neutralize the detailed person description and the
+    bed/bathroom framings that trip Veo/Sora person-safety filters."""
+    p = prompt
+    try:
+        from broll_video import UGC_CHARACTER
+        p = p.replace(UGC_CHARACTER, "A woman in her late 30s speaking casually at home.")
+    except ImportError:
+        pass
+    for bad, good in (("lying in bed under a duvet", "sitting on a couch under a blanket"),
+                      ("under a duvet", "under a blanket"),
+                      ("in bed ", "on the couch "),
+                      ("bathroom mirror", "hallway mirror"),
+                      ("messy bathroom", "hallway"),
+                      ("toothbrush in hand", "coffee mug in hand")):
+        p = re.sub(re.escape(bad), good, p, flags=re.I)
+    return p
+
+
+def subscribe_deadline(fal_client, endpoint: str, args_: dict, deadline_s: float):
+    """fal_client.subscribe with a wall-clock cap — a hung queue item used to
+    block the whole chain forever (subscribe has no timeout of its own)."""
+    box: dict = {}
+
+    def _call():
+        try:
+            box["res"] = fal_client.subscribe(endpoint, arguments=args_, with_logs=False)
+        except Exception as exc:                  # noqa: BLE001
+            box["exc"] = exc
+
+    t = threading.Thread(target=_call, daemon=True)
+    t.start()
+    t.join(deadline_s)
+    if t.is_alive():
+        raise TimeoutError(f"fal.ai gave no result within {deadline_s:.0f}s — queue item hung")
+    if "exc" in box:
+        raise box["exc"]
+    return box["res"]
+
+
+def call_shot(fal_client, endpoint: str, args_: dict, minimal: dict, deadline_s: float):
+    """One shot's fal call with a per-failure-kind retry policy.
+
+    schema (422)   -> one retry with the bare-minimum arguments (extras stripped)
+    transient      -> up to 3 retries, backoff 15/45/120s + jitter
+    moderation     -> no retry here (caller retries once with a sanitized prompt)
+    timeout        -> no retry (the deadline already bounds the chain)
+    other          -> one retry
+    Returns (result | None, fail_kind | None, detail).
+    """
+    schema_left, other_left = 1, 1
+    backoffs = [15, 45, 120]
+    cur = dict(args_)
+    while True:
+        try:
+            return subscribe_deadline(fal_client, endpoint, cur, deadline_s), None, ""
+        except Exception as exc:                  # noqa: BLE001
+            msg = str(exc)
+            kind = "timeout" if isinstance(exc, TimeoutError) else classify_exc(msg)
+            if kind == "moderation" or kind == "timeout":
+                return None, kind, msg
+            if kind == "schema" and schema_left:
+                schema_left -= 1
+                log(f"    schema rejected the extras ({msg[:100]}) — retrying minimal ...")
+                cur = dict(minimal)
+                continue
+            if kind == "transient" and backoffs:
+                wait = backoffs.pop(0) + random.uniform(0, 5)
+                log(f"    transient fal error ({msg[:100]}) — retrying in {wait:.0f}s ...")
+                time.sleep(wait)
+                continue
+            if kind == "other" and other_left:
+                other_left -= 1
+                log(f"    error ({msg[:100]}) — one retry ...")
+                continue
+            return None, kind, msg
+
+
 def estimate(model_key: str, shots: list[dict]) -> dict:
     m = MODELS[model_key]
     total = 0.0
@@ -150,6 +247,11 @@ def main() -> int:
     ap.add_argument("--shots", default="", help="comma shot ids (default all)")
     ap.add_argument("--env-file", dest="env_file")
     ap.add_argument("--estimate-only", action="store_true")
+    ap.add_argument("--min-success", type=float, default=0.75,
+                    help="fail (exit 3) instead of assembling when fewer than this "
+                         "fraction of shots rendered (default 0.75)")
+    ap.add_argument("--shot-timeout", type=float, default=900,
+                    help="wall-clock cap per shot in seconds (default 900)")
     a = ap.parse_args()
 
     recipe_path = Path(a.recipe).resolve()
@@ -181,7 +283,7 @@ def main() -> int:
         fal_client.upload(b"ok", "text/plain")
     except Exception as exc:                      # noqa: BLE001
         msg = str(exc).lower()
-        if any(w in msg for w in ("403", "locked", "balance", "exhaust", "unauthor")):
+        if any(w in msg for w in ("401", "402", "403", "locked", "balance", "exhaust", "unauthor")):
             die(f"fal.ai account problem (check balance / FAL_KEY): {exc}")
 
     work = recipe_path.parent
@@ -190,88 +292,110 @@ def main() -> int:
     log(f"Text -> Video on fal.ai · {model['label']}")
     log(f"{len(shots)} shot(s) · {aspect} · {est['summary']}")
 
-    made, failed, spent = [], [], 0.0
-    for i, s in enumerate(shots, 1):
-        sid = s.get("id") or f"s{i}"
-        dur_val, real = pick_duration(model, float(s.get("duration_s") or 4))
-        prompt = (s.get("prompt") or "").strip()
-        log(f"\n[{i}/{len(shots)}] {sid} — {(s.get('title') or prompt)[:58]}")
+    made, failed, failures, spent = [], [], [], 0.0
+    try:
+        for i, s in enumerate(shots, 1):
+            sid = s.get("id") or f"s{i}"
+            dur_val, real = pick_duration(model, float(s.get("duration_s") or 4))
+            prompt = (s.get("prompt") or "").strip()
+            log(f"\n[{i}/{len(shots)}] {sid} — {(s.get('title') or prompt)[:58]}")
 
-        # a shot with a `still` holds the user's REAL product: animate that exact
-        # frame instead of letting the model invent the object from words.
-        still = Path(s["still"]) if s.get("still") else None
-        still_url = None
-        if still and still.is_file() and model.get("i2v"):
-            try:
-                still_url = fal_client.upload_file(str(still))
-            except Exception as exc:              # noqa: BLE001
-                log(f"    (could not upload {still.name}: {str(exc)[:120]} — text-to-video instead)")
-        elif still and still.is_file():
-            log(f"    ({a.model} has no image-to-video endpoint — text-to-video instead)")
+            # a finished clip from an earlier run is free — only failed shots re-bill
+            out = clips_dir / f"{sid}.mp4"
+            if out.is_file() and probe_dur(out) > 0.5:
+                log(f"    cached from a previous run ({probe_dur(out):.1f}s) — $0")
+                made.append({"shot_id": sid, "file": str(out), "duration_s": probe_dur(out)})
+                continue
 
-        endpoint = model["i2v"] if still_url else model["endpoint"]
-        args_ = {"prompt": prompt, "duration": dur_val}
-        if not still_url:
-            # image-to-video takes its aspect from the still itself; passing one
-            # is a validation error on several of these endpoints.
-            args_["aspect_ratio"] = aspect
-        else:
-            args_["image_url"] = still_url
-        if model.get("resolution"):
-            args_["resolution"] = model["resolution"]
-        if model.get("audio"):
-            args_["generate_audio"] = False        # narration is added at assembly
-        if a.model.startswith("kling"):
+            # a shot with a `still` holds the user's REAL product: animate that exact
+            # frame instead of letting the model invent the object from words.
+            still = Path(s["still"]) if s.get("still") else None
+            still_url = None
+            if still and still.is_file() and model.get("i2v"):
+                try:
+                    still_url = fal_client.upload_file(str(still))
+                except Exception as exc:              # noqa: BLE001
+                    log(f"    (could not upload {still.name}: {str(exc)[:120]} — text-to-video instead)")
+            elif still and still.is_file():
+                log(f"    ({a.model} has no image-to-video endpoint — text-to-video instead)")
+
+            endpoint = model["i2v"] if still_url else model["endpoint"]
+            args_ = {"prompt": prompt, "duration": dur_val}
+            minimal = {"prompt": prompt, "duration": dur_val}
+            if not still_url:
+                # image-to-video takes its aspect from the still itself; passing one
+                # is a validation error on several of these endpoints.
+                args_["aspect_ratio"] = aspect
+                minimal["aspect_ratio"] = aspect
+            else:
+                args_["image_url"] = still_url
+                minimal["image_url"] = still_url
+            if model.get("resolution"):
+                args_["resolution"] = model["resolution"]
+            if model.get("audio"):
+                args_["generate_audio"] = False        # narration is added at assembly
+            # send the anti-AI-gloss negative everywhere it might help; endpoints
+            # that reject it get the minimal-args retry automatically
             args_["negative_prompt"] = (s.get("negative") or NEG)[:900]
-        log(f"    {real:.0f}s on {endpoint}" + ("  · your product still" if still_url else ""))
-        try:
-            res = fal_client.subscribe(endpoint, arguments=args_, with_logs=False)
-        except Exception as exc:                  # noqa: BLE001
-            # these endpoints differ in which optional params they accept; a
-            # schema rejection is worth one retry on the bare minimum before
-            # writing the shot off.
-            msg = str(exc)
-            retry = still_url and any(w in msg.lower() for w in ("422", "validation", "unprocessable",
-                                                                "extra", "not permitted", "unexpected"))
-            if not retry:
-                log(f"    FAILED: {msg[:200]}")
-                failed.append(sid)
-                continue
-            log(f"    schema rejected the extras ({msg[:100]}) — retrying minimal ...")
-            try:
-                res = fal_client.subscribe(endpoint, arguments={
-                    "prompt": prompt, "image_url": still_url, "duration": dur_val},
-                    with_logs=False)
-            except Exception as exc2:             # noqa: BLE001
-                log(f"    FAILED: {str(exc2)[:200]}")
-                failed.append(sid)
-                continue
-        v = res.get("video") or {}
-        url = v.get("url") if isinstance(v, dict) else v
-        if not url:
-            log(f"    FAILED: no video in response: {str(res)[:180]}")
-            failed.append(sid)
-            continue
-        out = clips_dir / f"{sid}.mp4"
-        with httpx.Client(follow_redirects=True, timeout=900) as c:
-            r = c.get(url)
-            r.raise_for_status()
-            out.write_bytes(r.content)
-        spent += real * model["cost_per_s"]
-        log(f"    OK {out.name} ({probe_dur(out):.1f}s) ~${real * model['cost_per_s']:.2f}")
-        made.append({"shot_id": sid, "file": str(out), "duration_s": probe_dur(out)})
+            log(f"    {real:.0f}s on {endpoint}" + ("  · your product still" if still_url else ""))
 
-    (work / "generated.json").write_text(json.dumps({
-        "batch": work.name, "generated": made, "failed": failed,
-        "motion_engine": f"fal-t2v:{a.model}", "style_mode": "text-to-video",
-        "when": time.strftime("%Y-%m-%d %H:%M:%S"),
-    }, indent=1), encoding="utf-8")
+            res, kind, detail = call_shot(fal_client, endpoint, args_, minimal, a.shot_timeout)
+            if res is None and kind == "moderation":
+                clean = sanitize_prompt(prompt)
+                if clean != prompt:
+                    log("    content filter rejected the prompt — retrying with a softened scene ...")
+                    args2 = dict(minimal)
+                    args2["prompt"] = clean
+                    res, kind, detail = call_shot(fal_client, endpoint, args2, args2, a.shot_timeout)
+            if res is None:
+                log(f"    FAILED ({kind}): {detail[:200]}")
+                failed.append(sid)
+                failures.append({"shot": sid, "kind": kind, "detail": detail[:200]})
+                continue
 
-    log("")
+            v = res.get("video") or {}
+            url = v.get("url") if isinstance(v, dict) else v
+            if not url:
+                log(f"    FAILED: no video in response: {str(res)[:180]}")
+                failed.append(sid)
+                failures.append({"shot": sid, "kind": "no_output", "detail": str(res)[:180]})
+                continue
+            spent += real * model["cost_per_s"]   # billed once fal rendered it
+            with httpx.Client(follow_redirects=True, timeout=900) as c:
+                r = c.get(url)
+                r.raise_for_status()
+                tmp = out.with_suffix(".part.mp4")
+                tmp.write_bytes(r.content)
+                tmp.replace(out)
+            log(f"    OK {out.name} ({probe_dur(out):.1f}s) ~${real * model['cost_per_s']:.2f}")
+            made.append({"shot_id": sid, "file": str(out), "duration_s": probe_dur(out)})
+    finally:
+        # actual money spent — machine-readable so the server ledgers the truth
+        # even when the run failed halfway (it used to record $0 or the estimate)
+        log("")
+        log("SPENT: " + json.dumps({"usd": round(spent, 2), "made": len(made),
+                                    "failed": len(failed)}))
+        (work / "generated.json").write_text(json.dumps({
+            "batch": work.name, "generated": made, "failed": failed,
+            "failures": failures, "spent_usd": round(spent, 2),
+            "motion_engine": f"fal-t2v:{a.model}", "style_mode": "text-to-video",
+            "when": time.strftime("%Y-%m-%d %H:%M:%S"),
+        }, indent=1), encoding="utf-8")
+
     log(f"Done: {len(made)} clip(s) made, {len(failed)} failed"
         f"{' (' + ', '.join(failed) + ')' if failed else ''} — ~${spent:.2f} on fal.ai")
+    total = len(made) + len(failed)
     if not made:
         die("no clips were generated")
+    if total and len(made) / total < a.min_success:
+        kinds = ", ".join(sorted({f['kind'] for f in failures})) or "unknown"
+        print(f"ERROR: only {len(made)}/{total} shots generated ({kinds}) — not assembling a "
+              f"partial video. Finished clips are cached; re-run to retry just the failed shots.",
+              flush=True)
+        sys.exit(3)
+    if failed:
+        log(f"⚠ PARTIAL: {len(failed)} shot(s) missing — assembling with {len(made)}/{total}. "
+            "Re-run to fill the gaps (finished clips are cached).")
     return 0
 
 

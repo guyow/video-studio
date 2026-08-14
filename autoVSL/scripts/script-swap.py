@@ -116,16 +116,23 @@ def subscribe(endpoint: str, arguments: dict) -> dict:
     import fal_client
 
     print(f"  calling {endpoint} …", flush=True)
-    return fal_client.subscribe(endpoint, arguments=arguments, with_logs=True)
+    try:
+        return fal_client.subscribe(endpoint, arguments=arguments, with_logs=True)
+    except Exception as e:  # one clean line instead of a stacked traceback
+        raise SystemExit(f"fal.ai call failed ({endpoint}): {str(e)[:300]}") from None
 
 
 def download(url: str, dest: Path) -> None:
     import httpx
 
+    # write to a temp name then rename, so a killed run can never leave a
+    # plausible-looking half-file that later runs treat as a cached result
+    tmp = dest.with_suffix(dest.suffix + ".part")
     with httpx.Client(follow_redirects=True, timeout=300) as client:
         resp = client.get(url)
         resp.raise_for_status()
-        dest.write_bytes(resp.content)
+        tmp.write_bytes(resp.content)
+    tmp.replace(dest)
 
 
 def stage_transcribe(video: Path, work: Path) -> str:
@@ -226,12 +233,36 @@ def stage_speak(work: Path, voice_id: str | None, tts: str = "hd",
     return out
 
 
+def _valid_render(out: Path, vo: Path, video: Path | None = None) -> bool:
+    """A cached lipsync render is only trusted if it's a readable video of a
+    sane length — a killed run used to leave a partial file here that later
+    runs served as 'cached', silently shipping a broken video."""
+    if not out.exists() or out.stat().st_size == 0:
+        return False
+    try:
+        dur = audio_duration(out)          # ffprobe works on video too
+    except Exception:
+        return False                       # unreadable = truncated download
+    if dur <= 0.5:
+        return False
+    try:
+        expect = audio_duration(vo)
+        if video is not None and video.is_file():
+            expect = min(expect, audio_duration(video))   # some tiers end at the video, not the VO
+    except Exception:
+        return True                        # can't compare — trust the probe
+    return dur >= expect - 2.0             # clearly shorter than expected = truncated
+
+
 def stage_lipsync(video: Path, vo: Path, work: Path, name: str, tier: str) -> Path:
     READY_DIR.mkdir(parents=True, exist_ok=True)
     out = READY_DIR / f"{name}-ready.mp4"
     if out.exists():
-        print(f"lipsync: cached ({out})")
-        return out
+        if _valid_render(out, vo, video):
+            print(f"lipsync: cached ({out})")
+            return out
+        print(f"lipsync: cached file is stale/partial — deleting and regenerating ({out})")
+        out.unlink()
 
     video_url = upload(video)
     audio_url = upload(vo)
@@ -268,6 +299,15 @@ def main() -> int:
     if not os.environ.get("FAL_KEY"):
         print("Set FAL_KEY in .env", file=sys.stderr)
         return 1
+
+    # every stage here can spend — probe the account (free) before any paid call.
+    # fal_guard lives in dashboard/ (same venv); skip silently if unavailable.
+    try:
+        sys.path.insert(0, str(ROOT / "dashboard"))
+        from fal_guard import preflight_fal
+        preflight_fal(f"script-swap {args.stage}")
+    except ImportError:
+        pass
 
     video = Path(args.video).expanduser() if args.video else None
     name = args.name or (video.stem if video else None)

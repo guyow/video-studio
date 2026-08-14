@@ -64,22 +64,67 @@
 
           <h3 style="margin-top:14px">Key tuning</h3>
           <div class="vs-row">
+            <label class="vs-hint">engine
+              <select class="vs-in" id="bg-engine" style="width:auto">
+                <option value="chroma">green-screen key + 🛡 AI shield</option>
+                <option value="ai">🤖 full AI key (no green screen needed)</option>
+              </select>
+            </label>
+          </div>
+          <div class="vs-row">
             <label class="vs-hint">strength <input type="range" id="bg-sim" min="0.05" max="0.30" step="0.01" value="0.15" style="vertical-align:middle">
               <span id="bg-sim-val">0.15</span></label>
+            <label class="vs-hint">fill holes <input type="range" id="bg-holes" min="0" max="6" step="1" value="2" style="vertical-align:middle">
+              <span id="bg-holes-val">2</span></label>
             <label class="vs-hint">scene blur <input type="range" id="bg-blur" min="0" max="16" step="1" value="6" style="vertical-align:middle">
               <span id="bg-blur-val">6</span></label>
-            <label class="vs-hint">key <input class="vs-in" id="bg-key" value="auto" style="width:90px" title='"auto" samples the frame corners, or a hex like 0x1FBF3A'></label>
+            <label class="vs-hint">key <input class="vs-in" id="bg-key" value="auto" style="width:90px" title='"auto" samples the frame borders, or a hex like 0x1FBF3A'></label>
+            <label class="vs-hint" title="local AI finds the person and forces them 100% solid — the key can only remove the screen, never the person">
+              <input type="checkbox" id="bg-protect" checked> 🛡 don't touch the person (AI shield)</label>
           </div>
           <div class="vs-hint">green fringe left? nudge strength up (max ~0.25 — higher starts eating
-            whites like shirts and teeth) · holes in the actor? nudge it down</div>
+            whites like shirts and teeth) · with the 🛡 shield ON the person can never turn
+            see-through, so strength only affects the screen edges · 🤖 full AI key ignores the
+            sliders completely: the AI decides person vs background — use it when the green screen
+            is badly lit, or when there is no green screen at all</div>
 
           <div class="vs-row" style="margin-top:10px">
             <button class="vs-btn" id="bg-preview">👁 Preview this frame</button>
             <span style="flex:1"></span>
             <button class="vs-btn" id="bg-restore" style="display:none" title="put the backed-up original footage back (undoes the background swap)">↩ Restore original</button>
+            <button class="vs-btn" id="bg-save" title="copy this video, with its replaced background, into the Desktop exports folder">💾 Save video</button>
             <button class="vs-btn primary" id="bg-run" disabled>🌄 Replace background</button>
           </div>
           <div id="bg-preview-out" style="margin-top:10px"></div>
+        </div>
+
+        <div class="vs-panel">
+          <h3>🟩 Reverse — put a GREEN SCREEN behind the person <span class="r vs-free">local · free</span></h3>
+          <div class="vs-hint">The opposite direction: the person stays, the background becomes clean
+            solid green so the clip can be keyed anywhere later. Videos that already have a
+            transparent background are flattened instantly; normal footage goes through local AI
+            (RobustVideoMatting) that removes the real background — temporally smooth, soft natural
+            hair edges, no flicker. No scene needed.</div>
+          <div class="vs-row" style="margin-top:8px">
+            <label class="vs-hint">green <input class="vs-in" id="bg-green" value="0x00FF00" style="width:100px" title="the screen colour, 0xRRGGBB"></label>
+            <button class="vs-btn" id="bg-rev-preview">👁 Preview this frame</button>
+            <span style="flex:1"></span>
+            <button class="vs-btn primary" id="bg-rev-run">🟩 Make green screen</button>
+          </div>
+          <div id="bg-rev-preview-out" style="margin-top:10px"></div>
+
+          <h3 style="margin-top:14px">👤 Extract the person</h3>
+          <div class="vs-hint">Pulls the person out with a REAL transparent background — drop the file
+            on top of anything in any editor. Works on this video as it is now (after a background
+            replace it extracts from the replaced video).</div>
+          <div class="vs-row" style="margin-top:8px">
+            <select class="vs-in" id="bg-ext-fmt" style="width:auto">
+              <option value="webm">transparent .webm (small, slower render)</option>
+              <option value="mov">ProRes .mov (big file, fast render)</option>
+            </select>
+            <button class="vs-btn primary" id="bg-extract">👤 Extract person</button>
+            <span class="vs-hint">lands in the Desktop exports folder</span>
+          </div>
         </div>`;
 
       const vid = el.querySelector("#bg-vid");
@@ -88,13 +133,27 @@
         background: selected,
         key_color: el.querySelector("#bg-key").value.trim() || "auto",
         similarity: parseFloat(el.querySelector("#bg-sim").value),
+        fill_holes: parseInt(el.querySelector("#bg-holes").value, 10),
         bg_blur: parseFloat(el.querySelector("#bg-blur").value),
+        protect_person: el.querySelector("#bg-protect").checked,
+        ai_key: el.querySelector("#bg-engine").value === "ai",
+      });
+      const revParams = () => ({
+        stem: v.stem,
+        reverse: true,
+        green_color: el.querySelector("#bg-green").value.trim() || "0x00FF00",
       });
 
-      ["sim", "blur"].forEach(k => {
+      ["sim", "holes", "blur"].forEach(k => {
         el.querySelector(`#bg-${k}`).oninput = e =>
           el.querySelector(`#bg-${k}-val`).textContent = e.target.value;
       });
+
+      el.querySelector("#bg-engine").onchange = e => {
+        const ai = e.target.value === "ai";   // AI key decides everything itself
+        ["bg-sim", "bg-holes", "bg-key", "bg-protect"].forEach(id =>
+          el.querySelector("#" + id).disabled = ai);
+      };
 
       const loadLib = async () => {
         const box = el.querySelector("#bg-lib");
@@ -218,7 +277,52 @@
           VS.drawer.watch(r.job_id);
           VS.toast(r.mode === "source"
             ? "🌄 Rendering — the source video gets the new background (original backed up)"
-            : "🌄 Rendering — the result lands in Takes (Fix step), promote it there");
+            : "🌄 Rendering — the dubbed video will carry the new background (old version archived in Takes)");
+        } catch (e) { VS.toast("Error: " + e.message); }
+      };
+
+      el.querySelector("#bg-rev-preview").onclick = async () => {
+        const out = el.querySelector("#bg-rev-preview-out");
+        const btn = el.querySelector("#bg-rev-preview");
+        btn.disabled = true;
+        out.innerHTML = '<span class="vs-hint">⏳ matting one frame… (the first ever run downloads the AI model, ~15 MB)</span>';
+        try {
+          const r = await VS.post("/api/background/preview",
+            Object.assign(revParams(), {at: vid.currentTime || 1.0}));
+          out.innerHTML = `<img src="${r.img}" style="max-width:100%;border-radius:8px">
+            <div class="vs-hint">happy? hit Make green screen</div>`;
+        } catch (e) {
+          out.innerHTML = `<span class="vs-err">preview failed: ${VS.esc(e.message)}</span>`;
+        }
+        btn.disabled = false;
+      };
+
+      el.querySelector("#bg-rev-run").onclick = async () => {
+        try {
+          const r = await VS.post("/api/background/replace", revParams());
+          VS.drawer.watch(r.job_id);
+          VS.toast(r.mode === "source"
+            ? "🟩 Rendering — the source video becomes green-screen footage (original backed up)"
+            : "🟩 Rendering — the green-screen take lands in Fix & QA, promote it there");
+        } catch (e) { VS.toast("Error: " + e.message); }
+      };
+
+      el.querySelector("#bg-save").onclick = async () => {
+        const btn = el.querySelector("#bg-save");
+        btn.disabled = true;
+        try {
+          const r = await VS.post("/api/background/save", {stem: v.stem});
+          VS.toast(`💾 Saved as ${r.saved} in ${r.dir}`);
+        } catch (e) { VS.toast("Save failed: " + e.message); }
+        btn.disabled = false;
+      };
+
+      el.querySelector("#bg-extract").onclick = async () => {
+        try {
+          const r = await VS.post("/api/background/extract",
+            {stem: v.stem, format: el.querySelector("#bg-ext-fmt").value});
+          VS.drawer.watch(r.job_id);
+          VS.toast("👤 Extracting the person — the transparent file lands in the Desktop exports folder");
         } catch (e) { VS.toast("Error: " + e.message); }
       };
 
@@ -233,10 +337,13 @@
       VS.on("drawer-finished", ctx._bgdf = j => {
         if (j.slug === v.stem && j.action === "background-swap") {
           VS.toast(v.dub
-            ? "🌄 Background done — promote the bg-take in Fix & QA"
-            : "🌄 Background done — the video now carries the new scene; continue to Dub");
+            ? "🌄 Background done — the dubbed video now carries the new scene; hit 💾 Save video to send it to Desktop"
+            : "🌄 Background done — hit 💾 Save video to send it to Desktop, or continue to Dub");
           VS.refreshLibrary();
           if (ctx.loadTakes) ctx.loadTakes();
+        }
+        if (j.slug === v.stem && j.action === "person-extract") {
+          VS.toast("👤 Person extracted — the transparent file is in the Desktop exports folder");
         }
         if (j.slug === v.stem && j.action === "background-scene") {
           VS.toast("✨ Scene ready — it's selected, hit Preview to see the actor in it");
