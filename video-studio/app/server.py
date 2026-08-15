@@ -1921,7 +1921,13 @@ def media(rel):
         abort(403)
     if not target.is_file():
         abort(404)
-    return send_file(target, conditional=True)  # conditional=True → Range support for <video>
+    # conditional=True → Range support for <video>; no-store guarantees
+    # the browser always revalidates after regenerate (raw-01.png gets
+    # overwritten in place, URL identical — without no-store, the
+    # browser may serve the stale cached image).
+    resp = send_file(target, conditional=True)
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
 
 
 # ---------------------------------------------------------------- quality control

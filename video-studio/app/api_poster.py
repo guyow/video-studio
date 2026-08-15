@@ -33,6 +33,17 @@ import image_edit  # noqa: E402  (MODELS + cost_per_image, import-safe)
 
 bp = Blueprint("poster", __name__)
 
+
+@bp.after_request
+def _no_cache(resp):
+    """All /api/poster/* responses must be fresh — listing and preview URLs
+    return paths to on-disk files that get overwritten in place when the user
+    regenerates. Without no-store the browser serves the stale cached
+    listing / image even though the file content changed."""
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
+
+
 # injected by init() so this module never imports server.py (which imports it)
 ROOT: Path = Path(".")
 CV_PY: str = ""

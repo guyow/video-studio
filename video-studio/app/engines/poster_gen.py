@@ -140,13 +140,23 @@ def stage_gen(args, plan: dict) -> list[str]:
     if not images:
         raise SystemExit(f"fal.ai returned no images: {str(res)[:400]}")
 
+    # ACCUMULATE: figure out the starting index from existing raws so this
+    # generate's images don't overwrite previous ones. User can compare
+    # multiple aspects / seeds side-by-side in the gallery.
+    existing_nums = []
+    for f in workdir.glob("raw-*.png"):
+        m = RAW_RE.match(f.name)
+        if m and f.stat().st_size > 0:
+            existing_nums.append(int(m.group(1)))
+    offset = max(existing_nums) if existing_nums else 0
+
     raws = []
     with httpx.Client(follow_redirects=True, timeout=300) as c:
         for i, img in enumerate(images, 1):
             url = img.get("url") if isinstance(img, dict) else img
             if not url:
                 continue
-            dest = workdir / f"raw-{i:02d}.png"
+            dest = workdir / f"raw-{offset + i:02d}.png"
             r = c.get(url)
             r.raise_for_status()
             dest.write_bytes(r.content)
@@ -271,12 +281,19 @@ def main() -> int:
 
     if args.stage in ("gen", "all"):
         raws = stage_gen(args, plan)
-        manifest["raws"] = raws
+        # ACCUMULATE: re-glob after generate so manifest["raws"] is the
+        # union of pre-existing + new (none overwritten anymore).
+        manifest["raws"] = sorted(
+            p.name for p in workdir.glob("raw-*.png")
+            if p.stat().st_size > 0
+        )
 
     if args.stage in ("composite", "all"):
         finals = stage_composite(args, plan, raws if args.stage == "all" else [])
 
-    manifest["raws"] = raws
+    manifest["raws"] = sorted(
+        p.name for p in workdir.glob("raw-*.png") if p.stat().st_size > 0
+    )
     manifest["finals"] = finals
     manifest["total_cost"] = manifest.get("gen_cost", gen_cost)
     manifest_path = write_manifest(workdir, manifest)

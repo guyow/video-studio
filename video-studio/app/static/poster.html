@@ -456,9 +456,17 @@
   }
 
   // ── gallery + item ──────────────────────────────────────────────────
+  // Cache-bust token: bumped on every reload so the browser refetches
+  // images after a regenerate (raw-01.png gets overwritten in place but
+  // its URL is identical — without a buster the browser would serve the
+  // stale cached image).
+  let _cacheBust = Date.now();
+  const bustNow = () => `?_=${Date.now()}`;
+
   async function reload() {
     if (!S.slug) return;
-    const d = await VS.api(`/api/poster/item/${S.slug}`);
+    _cacheBust = Date.now();
+    const d = await VS.api(`/api/poster/item/${S.slug}?_=${_cacheBust}`);
     renderGallery(d);
   }
 
@@ -467,12 +475,13 @@
     const editable = $("#editable").checked;
     const raws = (d.raws || []);
     const finals = (d.finals || []);
+    const bust = `?_=${_cacheBust}`;
     const cards = [];
     if (editable && raws.length) {
       cards.push(`<div style="grid-column:1/-1" class="vs-hint">Raws — pick one to composite or edit its layout:</div>`);
       raws.forEach(r => cards.push(`
         <div class="gcard">
-          <img src="${r.url}" data-url="${r.url}" data-name="${r.name}" alt="">
+          <img src="${r.url}${bust}" data-url="${r.url}" data-name="${r.name}" alt="">
           <div class="meta"><span>${VS.esc(r.name)}</span>
             <button class="edit" data-edit="${VS.esc(r.name)}">✏️ layout</button>
             <button class="use" data-raw="${VS.esc(r.name)}">🧩 use this one</button></div>
@@ -482,7 +491,7 @@
       cards.push(`<div style="grid-column:1/-1" class="vs-hint">Finals:</div>`);
       finals.forEach(f => cards.push(`
         <div class="gcard">
-          <img src="${f.url}" data-url="${f.url}" data-name="${f.name}" alt="">
+          <img src="${f.url}${bust}" data-url="${f.url}" data-name="${f.name}" alt="">
           <div class="meta"><span>${VS.esc(f.name)}</span></div>
         </div>`));
     }
@@ -498,7 +507,7 @@
     const edit = e.target.closest("[data-edit]");
     if (edit) { openEditor(edit.dataset.edit); return; }
     const img = e.target.closest("img[data-url]");
-    if (img) openLB(img.dataset.url, img.dataset.name);
+    if (img) openLB(img.dataset.url + bustNow(), img.dataset.name);
   };
 
   // ── lightbox ────────────────────────────────────────────────────────
@@ -825,6 +834,7 @@
 
   async function doPreview() {
     if (EDIT.dirty) await saveLayout();
+    if (S.slug && S.plan) await saveCopy();
     try {
       $("#pedit-status").textContent = "previewing…";
       const r = await VS.post("/api/poster/preview", {
