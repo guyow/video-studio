@@ -70,6 +70,28 @@ def write_manifest(workdir: Path, m: dict) -> Path:
     return p
 
 
+def load_overrides(workdir: Path, explicit: str = "") -> dict | None:
+    """Return the parsed layout-overrides dict, or None if missing/malformed.
+
+    Path resolution: explicit (when supplied) wins, else <workdir>/layout-overrides.json.
+    Malformed JSON → log a WARNING and degrade to template (return None), never crash.
+    """
+    path = Path(explicit) if explicit else (workdir / "layout-overrides.json")
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as e:
+        log(f"WARNING: layout-overrides.json at {path} could not be parsed: {e} — "
+            f"falling back to template")
+        return None
+    if not isinstance(data, dict):
+        log(f"WARNING: layout-overrides.json at {path} is not an object — "
+            f"falling back to template")
+        return None
+    return data
+
+
 def stage_gen(args, plan: dict) -> list[str]:
     load_env(Path(args.env_file) if args.env_file else None)
     if not os.environ.get("FAL_KEY"):
@@ -164,6 +186,9 @@ def stage_composite(args, plan: dict, raws: list[str]) -> list[str]:
     workdir = Path(args.workdir)
     canvas = ASPECT_MAP[args.aspect]["canvas"]
     chosen_layout = resolve_chosen_layout(plan, Path(args.layout_json))
+    overrides = load_overrides(workdir, args.overrides)
+    if overrides:
+        log(f"  applying layout-overrides ({len(overrides.get('zones') or {})} zone(s))")
 
     if args.composite_raw:
         raw_names = [args.composite_raw]
@@ -190,6 +215,7 @@ def stage_composite(args, plan: dict, raws: list[str]) -> list[str]:
             canvas_preset=canvas,
             brand_dir=str(args.brand_dir),
             scrim=bool(args.scrim),
+            overrides=overrides,
         )
         dest = workdir / f"final-{idx:02d}.jpg"
         out.save(dest, "JPEG", quality=95, optimize=True)
@@ -215,6 +241,7 @@ def main() -> int:
     ap.add_argument("--composite-raw", default="")
     ap.add_argument("--layout-json", required=True)
     ap.add_argument("--brand-dir", required=True)
+    ap.add_argument("--overrides", default="")
     ap.add_argument("--env-file", default="")
     args = ap.parse_args()
 

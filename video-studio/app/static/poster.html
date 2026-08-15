@@ -44,7 +44,7 @@
     border-radius:7px; padding:3px 8px; font-size:11px; cursor:pointer; }
   .gcard button:hover { border-color:var(--accent); }
   .vs-hint { color:var(--dim); font-size:12px; }
-  #lb { position:fixed; inset:0; z-index:90; display:flex; align-items:center; justify-content:center;
+  #lb { position:fixed; inset:0; z-index:100; display:flex; align-items:center; justify-content:center;
     background:rgba(4,6,10,.86); backdrop-filter:blur(3px); }
   #lb .box { background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:12px;
     max-width:92vw; max-height:92vh; display:flex; flex-direction:column; gap:10px; }
@@ -52,6 +52,43 @@
     background:repeating-conic-gradient(#12161f 0% 25%, #0d1017 0% 50%) 50%/22px 22px; }
   #lb .bar { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
   #lb .bar .nm { font-size:12px; color:var(--dim); margin-right:auto; }
+  #pedit { position:fixed; inset:0; z-index:95; display:flex; align-items:center; justify-content:center;
+    background:rgba(4,6,10,.92); backdrop-filter:blur(4px); }
+  #pedit .box { background:var(--panel); border:1px solid var(--line); border-radius:14px;
+    padding:12px; max-width:96vw; max-height:96vh; display:flex; flex-direction:column; gap:10px;
+    width:min(92vw, 1240px); height:min(86vh, 840px); }
+  #pedit .header { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  #pedit .header .nm { font-size:13px; color:var(--dim); margin-right:auto; }
+  #pedit .body { display:grid; grid-template-columns:1fr 290px; gap:12px; flex:1; min-height:0; }
+  #pedit .stage-wrap { background:#0a0d14; border-radius:10px; display:flex; align-items:center;
+    justify-content:center; padding:6px; overflow:auto; min-height:0; }
+  #pedit-stage { position:relative;
+    background:repeating-conic-gradient(#12161f 0% 25%,#0d1017 0% 50%) 50%/22px 22px;
+    border-radius:6px; box-shadow:0 6px 30px rgba(0,0,0,.6); overflow:hidden; }
+  #pedit-stage img { display:block; border-radius:6px; pointer-events:none; -webkit-user-drag:none;
+    width:100%; height:100%; object-fit:cover; }
+  .pzone { position:absolute; border:2px dashed var(--accent2); background:rgba(124,92,255,.10);
+    cursor:move; user-select:none; -webkit-user-select:none; touch-action:none;
+    box-sizing:border-box; }
+  .pzone .lbl { position:absolute; top:-20px; left:0; font-size:11px; color:var(--accent2);
+    background:var(--panel); padding:2px 6px; border-radius:4px; pointer-events:none;
+    border:1px solid var(--line); }
+  .pzone.selected { border-color:var(--ok); background:rgba(80,200,120,.14); }
+  .pzone.selected .lbl { color:var(--ok); border-color:var(--ok); }
+  .pzone.hidden-zone { opacity:.32; border-color:var(--dim); border-style:dotted; }
+  .pzone.hidden-zone .lbl { color:var(--dim); border-color:var(--dim); }
+  .pzone.hidden-zone.selected { opacity:.7; border-color:var(--warn); border-style:dashed; }
+  .pzone.hidden-zone.selected .lbl { color:var(--warn); border-color:var(--warn); }
+  .pzone .handle { position:absolute; right:-2px; bottom:-2px; width:18px; height:18px;
+    background:var(--accent2); border:1px solid var(--bg); cursor:nwse-resize; border-radius:3px; }
+  .pzone.selected .handle { background:var(--ok); }
+  .pzone.dragging { opacity:.85; }
+  #pedit .panel { background:var(--panel2); border:1px solid var(--line); border-radius:10px;
+    padding:12px; display:flex; flex-direction:column; gap:9px; overflow:auto; }
+  #pedit .panel h3 { font-size:13px; color:var(--text); margin:0; }
+  #pedit .panel input[type=color] { width:48px; height:32px; padding:0; border:1px solid var(--line);
+    border-radius:6px; background:transparent; cursor:pointer; }
+  #pedit-status { font-size:11.5px; color:var(--dim); margin-top:auto; }
   #joblog { background:#080b11; border:1px solid var(--line); border-radius:9px; padding:8px 10px;
     font:12px/1.5 ui-monospace,Consolas,monospace; color:#9fb0c8; max-height:180px; overflow:auto;
     white-space:pre-wrap; display:none; margin-top:8px; }
@@ -96,8 +133,7 @@
         <label class="fld">Headline</label><textarea id="c-headline"></textarea>
         <label class="fld">Subtitle</label><textarea id="c-subtitle"></textarea>
         <label class="fld">Body</label><textarea id="c-body"></textarea>
-        <div class="vs-hint" style="margin-top:6px">Edits here are cosmetic — the compositor uses the
-          plan's copy. Regenerate the plan to change wording.</div>
+        <div class="vs-hint" style="margin-top:6px">Edits here are saved automatically and applied when you composite.</div>
       </div>
 
       <h3 style="margin-top:18px">4 · Generate</h3>
@@ -111,7 +147,7 @@
         </select>
         <label class="lbl">Seed</label><input type="number" id="seed" value="0" min="0"></div>
       <label class="chk"><input type="checkbox" id="scrim"> Soft scrim under text (legibility on busy scenes)</label>
-      <label class="chk"><input type="checkbox" id="editable"> Editable mode — pick a raw, then composite</label>
+      <label class="chk"><input type="checkbox" id="editable" checked> Editable mode — pick a raw, then composite</label>
       <div class="est" id="est">estimated cost: —</div>
       <div class="row">
         <button class="vs-btn primary" id="btn-generate">✨ Generate the poster</button>
@@ -134,6 +170,60 @@
       <span class="nm" id="lbname"></span>
       <a class="vs-btn primary" id="lbsave" download>⬇ Save</a>
       <button class="vs-btn" id="lbclose">✕ Close</button>
+    </div>
+  </div>
+</div>
+
+<div id="pedit" style="display:none">
+  <div class="box">
+    <div class="header">
+      <span class="nm">Layout editor — <span id="pedit-slug"></span></span>
+      <button class="vs-btn ghost" id="pedit-reset" title="Reset to template defaults">↻ Reset</button>
+      <button class="vs-btn ghost" id="pedit-preview">👁 Preview</button>
+      <button class="vs-btn primary" id="pedit-finalize">🧩 Finalize</button>
+      <button class="vs-btn" id="pedit-close">✕ Close</button>
+    </div>
+    <div class="body">
+      <div class="stage-wrap">
+        <div id="pedit-stage">
+          <img id="pedit-img" alt="">
+          <div class="pzone" data-zone="headline"><span class="lbl">Headline</span><i class="handle"></i></div>
+          <div class="pzone" data-zone="subheadline"><span class="lbl">Subtitle</span><i class="handle"></i></div>
+          <div class="pzone" data-zone="body"><span class="lbl">Body</span><i class="handle"></i></div>
+          <div class="pzone" data-zone="logo"><span class="lbl">Logo</span><i class="handle"></i></div>
+        </div>
+      </div>
+      <div class="panel">
+        <h3 id="panel-title">Select a zone</h3>
+        <div class="row" id="panel-hide-row" style="display:none">
+          <button class="vs-btn" id="panel-hide" style="width:100%">✕ Hide zone</button>
+        </div>
+        <div class="row" id="panel-color-row" style="display:none">
+          <label class="lbl">Color</label>
+          <input type="color" id="panel-color" value="#FFFFFF">
+        </div>
+        <div class="row" id="panel-align-row" style="display:none">
+          <label class="lbl">Align</label>
+          <select id="panel-align">
+            <option value="left">left</option>
+            <option value="center">center</option>
+            <option value="right">right</option>
+          </select>
+        </div>
+        <div class="row" id="panel-height-row" style="display:none">
+          <label class="lbl">Height</label>
+          <input type="range" id="panel-height" min="40" max="400" value="150">
+          <span id="panel-height-val" style="min-width:48px">150 px</span>
+        </div>
+        <div class="row">
+          <label class="lbl">Logo preset</label>
+          <select id="panel-logo-preset"></select>
+        </div>
+        <label class="chk">
+          <input type="checkbox" id="panel-manual"> Manual mode (disable collision avoidance)
+        </label>
+        <div id="pedit-status">Drag any zone to edit. Changes save automatically.</div>
+      </div>
     </div>
   </div>
 </div>
@@ -315,9 +405,20 @@
     return status;
   }
 
+  async function saveCopy() {
+    if (!S.slug || !S.plan) return;
+    await VS.post("/api/poster/copy", {
+      slug: S.slug,
+      headline: $("#c-headline").value,
+      subtitle: $("#c-subtitle").value,
+      body: $("#c-body").value,
+    });
+  }
+
   async function generate() {
     if (!S.slug) { VS.toast("upload a product photo first"); return; }
     if (!S.plan) { VS.toast("write the plan first (step 3)"); return; }
+    await saveCopy();
     const body = {
       slug: S.slug, gen_model: $("#genmodel").value, aspect: $("#aspect").value,
       num: +$("#num").value, seed: +$("#seed").value || 0,
@@ -343,6 +444,7 @@
 
   async function composite(raw) {
     if (!S.slug || !S.plan) { VS.toast("run the planner first"); return; }
+    await saveCopy();
     S.busy = true;
     startJobLog("🧩 compositing… (free, local Pillow)");
     try {
@@ -367,11 +469,12 @@
     const finals = (d.finals || []);
     const cards = [];
     if (editable && raws.length) {
-      cards.push(`<div style="grid-column:1/-1" class="vs-hint">Raws — pick one to composite:</div>`);
+      cards.push(`<div style="grid-column:1/-1" class="vs-hint">Raws — pick one to composite or edit its layout:</div>`);
       raws.forEach(r => cards.push(`
         <div class="gcard">
           <img src="${r.url}" data-url="${r.url}" data-name="${r.name}" alt="">
           <div class="meta"><span>${VS.esc(r.name)}</span>
+            <button class="edit" data-edit="${VS.esc(r.name)}">✏️ layout</button>
             <button class="use" data-raw="${VS.esc(r.name)}">🧩 use this one</button></div>
         </div>`));
     }
@@ -392,6 +495,8 @@
   $("#gallery").onclick = e => {
     const use = e.target.closest("[data-raw]");
     if (use) { composite(use.dataset.raw); return; }
+    const edit = e.target.closest("[data-edit]");
+    if (edit) { openEditor(edit.dataset.edit); return; }
     const img = e.target.closest("img[data-url]");
     if (img) openLB(img.dataset.url, img.dataset.name);
   };
@@ -411,6 +516,361 @@
   $("#lb").onclick = e => { if (e.target.id === "lb") closeLB(); };
   document.addEventListener("keydown", e => {
     if (e.key === "Escape" && $("#lb").style.display !== "none") closeLB();
+  });
+
+  // ── layout editor ────────────────────────────────────────────────
+  const ASPECT_DIM = { ig_feed: { w: 1080, h: 1350 }, tiktok: { w: 1080, h: 1920 } };
+  const EDIT_ZONES = ["headline", "subheadline", "body", "logo"];
+  let LAYOUT = null;             // server-supplied defaults + overrides
+  const EDIT = {
+    raw: null, aspect: "ig_feed",
+    zones: {}, logo_h: null, selected: null,
+    saveTimer: null, dirty: false,
+  };
+
+  function clampBox(box) {
+    let [x0, y0, x1, y1] = box.map(Number);
+    x0 = Math.max(0, Math.min(1, x0));
+    y0 = Math.max(0, Math.min(1, y0));
+    x1 = Math.max(0, Math.min(1, x1));
+    y1 = Math.max(0, Math.min(1, y1));
+    if (x1 <= x0) x1 = Math.min(1, x0 + 0.02);
+    if (y1 <= y0) y1 = Math.min(1, y0 + 0.02);
+    return [x0, y0, x1, y1];
+  }
+
+  function sizeEditorOverlay() {
+    const dim = ASPECT_DIM[EDIT.aspect] || ASPECT_DIM.ig_feed;
+    const stage = $("#pedit-stage");
+    const wrap = stage.parentElement;
+    const wrapW = Math.max(200, wrap.clientWidth);
+    const wrapH = Math.max(200, wrap.clientHeight);
+    const scale = Math.min(wrapW / dim.w, wrapH / dim.h, 2);
+    const dispW = Math.max(320, Math.floor(dim.w * scale));
+    const dispH = Math.max(320, Math.floor(dim.h * scale));
+    stage.style.width = dispW + "px";
+    stage.style.height = dispH + "px";
+    const img = $("#pedit-img");
+    img.style.width = dispW + "px";
+    img.style.height = dispH + "px";
+  }
+
+  function positionZones() {
+    const stage = $("#pedit-stage");
+    const sw = stage.offsetWidth, sh = stage.offsetHeight;
+    for (const z of EDIT_ZONES) {
+      const el = document.querySelector(`.pzone[data-zone="${z}"]`);
+      const zdata = EDIT.zones[z];
+      if (!zdata || !zdata.box) { el.style.display = "none"; continue; }
+      el.style.display = "";
+      const [x0, y0, x1, y1] = zdata.box;
+      el.style.left = (x0 * sw) + "px";
+      el.style.top = (y0 * sh) + "px";
+      el.style.width = Math.max(8, (x1 - x0) * sw) + "px";
+      el.style.height = Math.max(8, (y1 - y0) * sh) + "px";
+      const lbl = el.querySelector(".lbl");
+      if (lbl) lbl.textContent = zdata.hidden ? `👁 hidden · ${z}` : z;
+      el.classList.toggle("hidden-zone", !!zdata.hidden);
+    }
+  }
+
+  function selectZone(name) {
+    EDIT.selected = name;
+    for (const z of EDIT_ZONES) {
+      document.querySelector(`.pzone[data-zone="${z}"]`)
+        .classList.toggle("selected", z === name);
+    }
+    const title = $("#panel-title");
+    if (!name) { title.textContent = "Select a zone"; }
+    else { title.textContent = "Zone: " + name; }
+    const z = (EDIT.zones[name]) || {};
+    const showText = (name && name !== "logo");
+    $("#panel-hide-row").style.display = name ? "" : "none";
+    $("#panel-color-row").style.display = showText ? "" : "none";
+    $("#panel-align-row").style.display = showText ? "" : "none";
+    $("#panel-height-row").style.display = (name === "logo") ? "" : "none";
+    const hideBtn = $("#panel-hide");
+    if (z.hidden) {
+      hideBtn.textContent = "↺ Show zone";
+      hideBtn.classList.add("primary");
+    } else {
+      hideBtn.textContent = "✕ Hide zone";
+      hideBtn.classList.remove("primary");
+    }
+    if (showText) {
+      $("#panel-color").value = z.color || "#FFFFFF";
+      $("#panel-align").value = z.align || "left";
+    }
+    if (name === "logo") {
+      const h = EDIT.logo_h || 150;
+      $("#panel-height").value = h;
+      $("#panel-height-val").textContent = h + " px";
+    }
+  }
+
+  function toggleHidden() {
+    if (!EDIT.selected) return;
+    const z = EDIT.zones[EDIT.selected];
+    if (!z || !z.box) return;
+    z.hidden = !z.hidden;
+    positionZones();
+    selectZone(EDIT.selected);
+    makeDirty();
+  }
+
+  function makeDirty() { EDIT.dirty = true; scheduleSave(); }
+
+  function scheduleSave() {
+    if (EDIT.saveTimer) clearTimeout(EDIT.saveTimer);
+    EDIT.saveTimer = setTimeout(saveLayout, 600);
+  }
+
+  async function saveLayout() {
+    if (!S.slug) return;
+    if (EDIT.saveTimer) { clearTimeout(EDIT.saveTimer); EDIT.saveTimer = null; }
+    const zones = {};
+    for (const [k, z] of Object.entries(EDIT.zones)) {
+      if (!z || !z.box) continue;
+      const entry = { box: clampBox(z.box) };
+      if (z.align) entry.align = z.align;
+      if (z.color) entry.color = z.color;
+      if (z.hidden) entry.hidden = true;
+      zones[k] = entry;
+    }
+    if (EDIT.zones.logo && EDIT.zones.logo.box) {
+      zones.logo = zones.logo || { box: clampBox(EDIT.zones.logo.box) };
+      zones.logo.height_px = EDIT.logo_h || 150;
+      if (EDIT.zones.logo.hidden) zones.logo.hidden = true;
+    }
+    const overrides = {
+      _version: 1,
+      logo_position: $("#panel-logo-preset").value || (LAYOUT && LAYOUT.logo_position),
+      collision_avoid: !$("#panel-manual").checked,
+      zones,
+    };
+    try {
+      const r = await VS.post("/api/poster/layout",
+                               {slug: S.slug, overrides});
+      $("#pedit-status").textContent =
+        "✓ saved · " + new Date().toLocaleTimeString();
+      EDIT.dirty = false;
+    } catch (e) {
+      $("#pedit-status").textContent = "save failed: " + e.message;
+    }
+  }
+
+  async function openEditor(raw) {
+    if (!S.slug) { VS.toast("upload a product photo first"); return; }
+    if (!S.plan) { VS.toast("run the planner first"); return; }
+    EDIT.raw = raw;
+    EDIT.dirty = false;
+    try {
+      const item = await VS.api(`/api/poster/item/${S.slug}`);
+      EDIT.aspect = (item.manifest && item.manifest.aspect) || "ig_feed";
+      // sync the left-panel aspect dropdown so Finalize composites match
+      const asp = $("#aspect");
+      if (asp && asp.value !== EDIT.aspect) asp.value = EDIT.aspect;
+      const d = await VS.api(`/api/poster/layout/${S.slug}`);
+      LAYOUT = d;
+    } catch (e) { VS.toast("could not load layout: " + e.message); return; }
+
+    EDIT.zones = {};
+    for (const [k, v] of Object.entries((LAYOUT.zone_defaults || {}))) {
+      EDIT.zones[k] = { box: v.box.slice(), align: v.align };
+    }
+    if (!EDIT.zones.logo) {
+      const lb = LAYOUT.logo_box_default || [0.04, 0.02, 0.30, 0.13];
+      EDIT.zones.logo = { box: lb.slice() };
+    }
+    EDIT.collision_avoid = true;
+    EDIT.logo_h = 150;
+
+    if (LAYOUT.overrides) {
+      if (typeof LAYOUT.overrides.collision_avoid === "boolean") {
+        EDIT.collision_avoid = LAYOUT.overrides.collision_avoid;
+      }
+      if (LAYOUT.overrides.zones) {
+        for (const [k, ovr] of Object.entries(LAYOUT.overrides.zones)) {
+          EDIT.zones[k] = EDIT.zones[k] || { box: null };
+          if (ovr.box) EDIT.zones[k].box = ovr.box.slice();
+          if (ovr.align) EDIT.zones[k].align = ovr.align;
+          if (ovr.color) EDIT.zones[k].color = ovr.color;
+          if (ovr.hidden === true) EDIT.zones[k].hidden = true;
+        }
+        if (LAYOUT.overrides.zones.logo
+            && typeof LAYOUT.overrides.zones.logo.height_px === "number") {
+          EDIT.logo_h = LAYOUT.overrides.zones.logo.height_px;
+        }
+      }
+    }
+
+    sizeEditorOverlay();
+    const sel = $("#panel-logo-preset");
+    sel.innerHTML = (LAYOUT.logo_positions || []).map(
+      p => `<option value="${p}">${p}</option>`).join("");
+    sel.value = LAYOUT.overrides && LAYOUT.overrides.logo_position
+      ? LAYOUT.overrides.logo_position : LAYOUT.logo_position;
+    $("#panel-manual").checked = !EDIT.collision_avoid;
+    $("#panel-height").value = EDIT.logo_h;
+    $("#panel-height-val").textContent = EDIT.logo_h + " px";
+
+    const rawUrl = `/media/output/generated-brand-poster/${S.slug}/${raw}`;
+    $("#pedit-img").src = rawUrl;
+    $("#pedit-slug").textContent = `${S.slug} · ${raw}`;
+    $("#pedit").style.display = "flex";
+    // Defer sizing until the browser has finished laying out the modal —
+    // wrap.clientWidth/Height are 0 if measured before layout settles.
+    requestAnimationFrame(() => {
+      sizeEditorOverlay();
+      positionZones();
+      selectZone(null);
+      $("#pedit-status").textContent =
+        "Drag any zone to edit. Changes save automatically.";
+    });
+  }
+
+  function attachZoneDrag() {
+    for (const z of EDIT_ZONES) {
+      const el = document.querySelector(`.pzone[data-zone="${z}"]`);
+      const handle = el.querySelector(".handle");
+
+      el.addEventListener("pointerdown", e => {
+        if (e.target === handle) return;
+        e.preventDefault();
+        selectZone(z);
+        try { el.setPointerCapture(e.pointerId); } catch (err) {}
+        el.classList.add("dragging");
+        const stage = $("#pedit-stage");
+        const sw = stage.offsetWidth, sh = stage.offsetHeight;
+        const startX = e.clientX, startY = e.clientY;
+        const orig = (EDIT.zones[z] && EDIT.zones[z].box)
+          ? EDIT.zones[z].box.slice() : [0, 0, 0, 0];
+        const move = ev => {
+          const dx = (ev.clientX - startX) / sw;
+          const dy = (ev.clientY - startY) / sh;
+          EDIT.zones[z].box = clampBox(
+            [orig[0] + dx, orig[1] + dy, orig[2] + dx, orig[3] + dy]);
+          positionZones();
+        };
+        const up = ev => {
+          el.classList.remove("dragging");
+          try { el.releasePointerCapture(e.pointerId); } catch (err) {}
+          window.removeEventListener("pointermove", move);
+          window.removeEventListener("pointerup", up);
+          makeDirty();
+        };
+        window.addEventListener("pointermove", move);
+        window.addEventListener("pointerup", up);
+      });
+
+      handle.addEventListener("pointerdown", e => {
+        e.preventDefault(); e.stopPropagation();
+        selectZone(z);
+        try { handle.setPointerCapture(e.pointerId); } catch (err) {}
+        const stage = $("#pedit-stage");
+        const sw = stage.offsetWidth, sh = stage.offsetHeight;
+        const startX = e.clientX, startY = e.clientY;
+        const orig = (EDIT.zones[z] && EDIT.zones[z].box)
+          ? EDIT.zones[z].box.slice() : [0, 0, 0, 0];
+        const move = ev => {
+          const dx = (ev.clientX - startX) / sw;
+          const dy = (ev.clientY - startY) / sh;
+          EDIT.zones[z].box = clampBox(
+            [orig[0], orig[1], orig[2] + dx, orig[3] + dy]);
+          positionZones();
+        };
+        const up = ev => {
+          try { handle.releasePointerCapture(e.pointerId); } catch (err) {}
+          window.removeEventListener("pointermove", move);
+          window.removeEventListener("pointerup", up);
+          makeDirty();
+        };
+        window.addEventListener("pointermove", move);
+        window.addEventListener("pointerup", up);
+      });
+
+      el.addEventListener("click", e => {
+        if (e.target === handle) return;
+        e.stopPropagation();
+        selectZone(z);
+      });
+    }
+  }
+
+  function attachPanelInputs() {
+    $("#panel-color").addEventListener("input", e => {
+      if (!EDIT.selected || EDIT.selected === "logo") return;
+      EDIT.zones[EDIT.selected] = EDIT.zones[EDIT.selected] || { box: null };
+      EDIT.zones[EDIT.selected].color = e.target.value;
+      makeDirty();
+    });
+    $("#panel-align").addEventListener("change", e => {
+      if (!EDIT.selected || EDIT.selected === "logo") return;
+      EDIT.zones[EDIT.selected] = EDIT.zones[EDIT.selected] || { box: null };
+      EDIT.zones[EDIT.selected].align = e.target.value;
+      makeDirty();
+    });
+    $("#panel-height").addEventListener("input", e => {
+      EDIT.logo_h = +e.target.value;
+      $("#panel-height-val").textContent = EDIT.logo_h + " px";
+      makeDirty();
+    });
+    $("#panel-logo-preset").addEventListener("change", e => {
+      if (LAYOUT) LAYOUT.logo_position = e.target.value;
+      makeDirty();
+    });
+    $("#panel-manual").addEventListener("change", () => makeDirty());
+    $("#panel-hide").addEventListener("click", toggleHidden);
+  }
+
+  async function doPreview() {
+    if (EDIT.dirty) await saveLayout();
+    try {
+      $("#pedit-status").textContent = "previewing…";
+      const r = await VS.post("/api/poster/preview", {
+        slug: S.slug, raw: EDIT.raw, aspect: EDIT.aspect, scrim: false,
+      });
+      $("#pedit-status").textContent = "✓ preview ready";
+      openLB(r.url + "?v=" + r.hash, "preview-" + r.hash + ".png");
+    } catch (e) {
+      $("#pedit-status").textContent = "preview failed: " + e.message;
+    }
+  }
+
+  async function doFinalize() {
+    if (EDIT.dirty) await saveLayout();
+    const rawName = EDIT.raw;
+    closeEditor();
+    if (rawName) await composite(rawName);
+    EDIT.raw = null;
+  }
+
+  async function resetLayout() {
+    if (!confirm("Reset layout to template defaults? This deletes your custom positions.")) return;
+    try {
+      await VS.post("/api/poster/layout", {slug: S.slug, overrides: {}});
+      VS.toast("✓ reset to template defaults");
+      await openEditor(EDIT.raw);
+    } catch (e) { VS.toast("reset failed: " + e.message); }
+  }
+
+  function closeEditor() { $("#pedit").style.display = "none"; }
+
+  attachZoneDrag();
+  attachPanelInputs();
+  $("#pedit-close").onclick = closeEditor;
+  $("#pedit-preview").onclick = doPreview;
+  $("#pedit-finalize").onclick = doFinalize;
+  $("#pedit-reset").onclick = resetLayout;
+  document.addEventListener("keydown", e => {
+    if (e.key === "Escape" && $("#pedit").style.display !== "none") closeEditor();
+  });
+  window.addEventListener("resize", () => {
+    if ($("#pedit").style.display !== "none") {
+      requestAnimationFrame(() => {
+        sizeEditorOverlay(); positionZones();
+      });
+    }
   });
 
   refreshEst();

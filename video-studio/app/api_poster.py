@@ -393,6 +393,55 @@ def composite():
     return jsonify({"job_id": job_id})
 
 
+@bp.post("/api/poster/copy")
+def copy():
+    b = request.get_json(force=True) or {}
+    slug = b.get("slug") or ""
+    workdir = _workdir(slug)
+    plan_path = workdir / "plan.json"
+    if not plan_path.is_file():
+        abort(400, "run the planner first")
+
+    plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    elements = []
+    for line in (plan.get("copy_elements") or "").splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            obj = json.loads(line)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if isinstance(obj, dict):
+            elements.append(obj)
+
+    defaults = {
+        "HEADLINE": {"font_family": "Bricolage Grotesque", "font_weight": "bold", "color": "#C9C3DA"},
+        "SUBTITLE": {"font_family": "Hanken Grotesk", "font_weight": "medium", "color": "#FFC233"},
+        "BODY": {"font_family": "Newsreader", "font_weight": "regular", "color": "#8E899F"},
+    }
+
+    for key, default in defaults.items():
+        value = (b.get(key.lower()) or "").strip()
+        el = next((e for e in elements if e.get("type") == key), None)
+        if value:
+            if el is None:
+                elements.append({"type": key, "text": value, **default})
+            else:
+                el["text"] = value
+        elif el is not None:
+            elements.remove(el)
+
+    if "copy_elements_original" not in plan:
+        plan["copy_elements_original"] = plan.get("copy_elements") or ""
+
+    plan["copy_elements"] = "\n".join(json.dumps(e, ensure_ascii=False) for e in elements)
+    plan_path.write_text(json.dumps(plan, indent=1, ensure_ascii=False), encoding="utf-8")
+    (workdir / "copy-elements.jsonl").write_text(plan["copy_elements"], encoding="utf-8")
+
+    return jsonify({"ok": True, "copy_elements": plan["copy_elements"]})
+
+
 @bp.get("/api/poster/item/<slug>")
 def item(slug):
     workdir = _workdir(slug)
@@ -425,3 +474,329 @@ def item(slug):
                     "raws": listing("raw-*.png"),
                     "finals": listing("final-*.jpg"),
                     "manifest": manifest})
+
+
+# ---------------------------------------------------------------- layout editor
+
+LAYOUT_ALLOWED_ZONES = {"headline", "subheadline", "body", "logo"}
+LAYOUT_ALIGN_VALUES = {"left", "center", "right"}
+LAYOUT_HEX_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")
+
+
+def _layout_compositor_module():
+    """FIX-1: lazily import layout_compositor so PIL only loads when needed.
+
+    Returns the imported module. Aborts 503 if the file is missing.
+    """
+    if not (COMPOSITOR_DIR / "layout_compositor.py").is_file():
+        abort(503, f"compositor module missing at {COMPOSITOR_DIR}")
+    sys.path.insert(0, str(COMPOSITOR_DIR))
+    try:
+        import layout_compositor  # noqa: E402
+    except Exception as e:
+        abort(503, f"could not import layout_compositor: {e}")
+    return layout_compositor
+
+
+def _layout_logo_positions(layout_data: dict) -> list[str]:
+    keys = [k for k in (layout_data.get("logo_positions") or {}).keys()
+            if not k.startswith("_")]
+    return sorted(keys)
+
+
+def _resolve_layout_defaults(workdir: Path, layout_data: dict) -> dict:
+    """Return resolved (template_id, logo_position, template_zones, presets).
+
+    Mirrors poster_gen.resolve_chosen_layout: if plan.json has no valid
+    [CHOSEN LAYOUT], fall back to the first template + logo_position_default.
+    """
+    templates = layout_data.get("templates") or {}
+    logo_positions = _layout_logo_positions(layout_data)
+
+    plan = {}
+    p = workdir / "plan.json"
+    if p.is_file():
+        try:
+            plan = json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            plan = {}
+    lc = _layout_compositor_module()
+    chosen = plan.get("chosen_layout") or ""
+    template_id, logo_position = lc.parse_chosen_layout(chosen)
+
+    if template_id is None or template_id not in templates:
+        template_id = next(iter(templates), None)
+        if template_id is None:
+            abort(502, "layout JSON has no templates")
+        template = templates[template_id]
+        logo_position = template.get("logo_position_default", "top_center")
+    else:
+        template = templates[template_id]
+        if logo_position is None:
+            logo_position = template.get("logo_position_default", "top_center")
+
+    return {
+        "template_id": template_id,
+        "logo_position": logo_position,
+        "logo_positions": logo_positions,
+        "template": template,
+    }
+
+
+def _validate_box(box) -> str | None:
+    if not isinstance(box, list) or len(box) != 4:
+        return "box must be a list of 4 numbers [x0,y0,x1,y1]"
+    try:
+        floats = [float(v) for v in box]
+    except (TypeError, ValueError):
+        return "box values must be numeric"
+    if not all(0.0 <= v <= 1.0 for v in floats):
+        return "box values must be in [0, 1]"
+    if not (floats[0] < floats[2] and floats[1] < floats[3]):
+        return "box must satisfy x0<x1 and y0<y1"
+    return None
+
+
+def _validate_zone(key: str, zd) -> str | None:
+    if not isinstance(zd, dict):
+        return f"zones.{key} must be an object"
+    if "box" in zd:
+        err = _validate_box(zd["box"])
+        if err:
+            return f"zones.{key}.{err}"
+    if "align" in zd:
+        if zd["align"] not in LAYOUT_ALIGN_VALUES:
+            return (f"zones.{key}.align must be one of "
+                    f"{sorted(LAYOUT_ALIGN_VALUES)}")
+    if "color" in zd:
+        if (not isinstance(zd["color"], str)
+                or not LAYOUT_HEX_RE.match(zd["color"])):
+            return f"zones.{key}.color must be a #RRGGBB hex string"
+    if "height_px" in zd:
+        hpx = zd["height_px"]
+        if (not isinstance(hpx, int) or isinstance(hpx, bool)
+                or not (40 <= hpx <= 400)):
+            return f"zones.{key}.height_px must be an int in 40..400"
+    if "hidden" in zd:
+        if not isinstance(zd["hidden"], bool):
+            return f"zones.{key}.hidden must be a bool (true or false)"
+    return None
+
+
+def _validate_overrides(overrides, logo_positions_keys: list[str]) -> str | None:
+    if not isinstance(overrides, dict):
+        return "overrides must be an object"
+    if "_version" in overrides and overrides["_version"] != 1:
+        return "_version must be 1"
+    if "logo_position" in overrides:
+        lp = overrides["logo_position"]
+        if (not isinstance(lp, str) or lp not in logo_positions_keys):
+            return (f"logo_position must be one of "
+                    f"{sorted(logo_positions_keys)}")
+    if "collision_avoid" in overrides:
+        if not isinstance(overrides["collision_avoid"], bool):
+            return "collision_avoid must be a bool"
+    zones = overrides.get("zones") or {}
+    if not isinstance(zones, dict):
+        return "zones must be an object"
+    for key, zd in zones.items():
+        if key not in LAYOUT_ALLOWED_ZONES:
+            return (f"unknown zone {key!r}; allowed: "
+                    f"{sorted(LAYOUT_ALLOWED_ZONES)}")
+        err = _validate_zone(key, zd)
+        if err:
+            return err
+    return None
+
+
+def _atomic_write_json(path: Path, data: dict) -> None:
+    """FIX-6: write via temp file + os.replace so a crash mid-write can't
+    leave a half-written layout-overrides.json on disk."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(data, indent=1, ensure_ascii=False),
+                   encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def _load_overrides_file(workdir: Path) -> dict | None:
+    """Load <workdir>/layout-overrides.json. Malformed → None, never crash."""
+    path = workdir / "layout-overrides.json"
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _zone_defaults_from_template(template: dict) -> dict:
+    """Pull box + align defaults out of the template for each allowed zone.
+
+    Skips the body zone when the template says body:NO. Never includes the
+    product zone (not draggable). Logo box comes from the template's resolved
+    logo_position preset (not a fixed template default).
+    """
+    out = {}
+    for key in ("headline", "subheadline", "body"):
+        spec = template.get(key) or {}
+        if key == "body" and not spec.get("supported", True):
+            continue
+        box = spec.get("box")
+        if isinstance(box, list) and len(box) == 4:
+            out[key] = {"box": list(box),
+                        "align": spec.get("align", "left")}
+    return out
+
+
+def _logo_box_default(layout_data: dict, logo_position: str) -> list | None:
+    """Resolve the relative [x0,y0,x1,y1] box for the current logo preset."""
+    lp = (layout_data.get("logo_positions") or {}).get(logo_position)
+    if isinstance(lp, list) and len(lp) == 4:
+        return list(lp)
+    return None
+
+
+@bp.get("/api/poster/layout/<slug>")
+def get_layout(slug):
+    workdir = _workdir(slug)
+    if not LAYOUT_JSON.is_file():
+        abort(503, f"layout JSON missing at {LAYOUT_JSON}")
+    try:
+        layout_data = json.loads(LAYOUT_JSON.read_text(encoding="utf-8"))
+    except Exception as e:
+        abort(503, f"could not parse layout JSON: {e}")
+
+    resolved = _resolve_layout_defaults(workdir, layout_data)
+    return jsonify({
+        "slug": slug,
+        "template_id": resolved["template_id"],
+        "logo_position": resolved["logo_position"],
+        "logo_positions": resolved["logo_positions"],
+        "zone_defaults": _zone_defaults_from_template(resolved["template"]),
+        "logo_box_default": _logo_box_default(layout_data, resolved["logo_position"]),
+        "overrides": _load_overrides_file(workdir),
+    })
+
+
+@bp.post("/api/poster/layout")
+def post_layout():
+    b = request.get_json(force=True) or {}
+    slug = b.get("slug") or ""
+    workdir = _workdir(slug)
+    overrides = b.get("overrides") or {}
+
+    if not LAYOUT_JSON.is_file():
+        abort(503, f"layout JSON missing at {LAYOUT_JSON}")
+    try:
+        layout_data = json.loads(LAYOUT_JSON.read_text(encoding="utf-8"))
+    except Exception as e:
+        abort(503, f"could not parse layout JSON: {e}")
+    logo_positions_keys = _layout_logo_positions(layout_data)
+
+    err = _validate_overrides(overrides, logo_positions_keys)
+    if err:
+        abort(400, err)
+
+    # Reset = empty zones object → delete the file (absence rule returns
+    # everything to the template).
+    zones = overrides.get("zones") or {}
+    has_any_field = any(
+        k in overrides for k in ("logo_position", "collision_avoid", "_version")
+    ) or bool(zones)
+    if not has_any_field:
+        path = workdir / "layout-overrides.json"
+        try:
+            path.unlink(missing_ok=True)
+        except OSError as e:
+            abort(500, f"could not delete overrides: {e}")
+        return jsonify({"ok": True, "reset": True})
+
+    payload = dict(overrides)
+    payload.setdefault("_version", 1)
+    if "zones" not in payload:
+        payload["zones"] = {}
+
+    try:
+        _atomic_write_json(workdir / "layout-overrides.json", payload)
+    except OSError as e:
+        abort(500, f"could not write overrides: {e}")
+    return jsonify({"ok": True, "overrides": payload})
+
+
+@bp.post("/api/poster/preview")
+def preview():
+    b = request.get_json(force=True) or {}
+    slug = b.get("slug") or ""
+    workdir = _workdir(slug)
+    raw = (b.get("raw") or "").strip()
+    if not RAW_RE.match(raw) or Path(raw).name != raw:
+        abort(400, "pick a raw image to preview")
+    aspect = b.get("aspect") or "ig_feed"
+    if aspect not in ("ig_feed", "tiktok"):
+        abort(400, "bad aspect")
+    scrim = bool(b.get("scrim"))
+
+    raw_path = workdir / raw
+    if not raw_path.is_file() or raw_path.stat().st_size <= 0:
+        abort(404, f"raw missing or empty: {raw}")
+    plan_path = workdir / "plan.json"
+    if not plan_path.is_file():
+        abort(400, "run the planner first")
+
+    try:
+        plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    except Exception as e:
+        abort(500, f"could not parse plan.json: {e}")
+
+    overrides = _load_overrides_file(workdir)
+
+    if not LAYOUT_JSON.is_file():
+        abort(503, f"layout JSON missing at {LAYOUT_JSON}")
+    try:
+        layout_data = json.loads(LAYOUT_JSON.read_text(encoding="utf-8"))
+    except Exception as e:
+        abort(503, f"could not parse layout JSON: {e}")
+    resolved = _resolve_layout_defaults(workdir, layout_data)
+    chosen_layout = (f"[CHOSEN LAYOUT]\n{resolved['template_id']} "
+                     f"| logo_position: {resolved['logo_position']}")
+    canvas_preset = "ig_feed" if aspect == "ig_feed" else "tiktok"
+
+    lc = _layout_compositor_module()  # FIX-1 lazy import
+
+    from PIL import Image
+
+    bg = Image.open(raw_path).convert("RGB")
+    out = lc.render_layout(
+        bg_image=bg,
+        chosen_layout=chosen_layout,
+        copy_elements=plan.get("copy_elements") or "",
+        layout_json_path=str(LAYOUT_JSON),
+        canvas_preset=canvas_preset,
+        brand_dir=str(BRAND_DIR),
+        scrim=False,                 # editor draws its own outlines
+        overrides=overrides,
+    )
+
+    # Downscale to ≤540px on the long edge for fast reload.
+    W, H = out.size
+    long_edge = max(W, H)
+    if long_edge > 540:
+        scale = 540 / long_edge
+        out = out.resize((max(1, int(W * scale)), max(1, int(H * scale))),
+                         Image.LANCZOS)
+
+    import hashlib
+    h = hashlib.sha1(
+        f"{slug}|{raw}|{aspect}|{int(bool(scrim))}|"
+        f"{json.dumps(overrides or {}, sort_keys=True, ensure_ascii=False)}"
+        .encode("utf-8")
+    ).hexdigest()[:12]
+    dest = workdir / f"preview-{h}.png"
+    out.save(dest, "PNG", optimize=True)
+
+    return jsonify({
+        "url": f"/media/output/generated-brand-poster/{slug}/{dest.name}",
+        "hash": h,
+    })

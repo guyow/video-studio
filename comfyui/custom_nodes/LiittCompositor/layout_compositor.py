@@ -401,19 +401,46 @@ def _fit_logo(
     min_h: int = LOGOMARK_MIN_HEIGHT,
     max_h: int = LOGOMARK_MAX_HEIGHT,
     canvas_size=None,
+    *,
+    free: bool = False,
+    free_h: int | None = None,
 ):
     """Resize logo to fit inside box_px while preserving aspect ratio.
 
-    If the requested box is shorter than min_h, scale it outward preserving
-    the box center. If the box is taller than max_h, scale it inward preserving
-    the box center. When canvas_size=(W, H) is supplied the final box is
-    clamped to the canvas so a top logo can never render off-canvas.
-    Returns (resized_rgba, (paste_x, paste_y)).
+    Legacy mode (free=False):
+      Scale around the box center to enforce min/max height and clamp to the
+      canvas (when canvas_size is supplied). The wordmark always renders
+      centered inside its box.
+
+    Free / anchor mode (free=True) — used when the user has dragged the logo
+      into a custom position via the layout editor (FIX-2). Top-left anchor,
+      NO center-based rescale, NO min/max height clamp, NO canvas clamp (the
+      frontend already clamps). When free_h is given it is the EXACT rendered
+      height in pixels (width proportional); else the logo scales to fit
+      inside the box. Returns (resized_rgba, (paste_x, paste_y)).
     """
     x0, y0, x1, y1 = box_px
     box_w = x1 - x0
     box_h = y1 - y0
     iw, ih = img.size
+
+    if free:
+        if iw <= 0 or ih <= 0:
+            return img, (x0, y0)
+        if free_h is not None and int(free_h) > 0:
+            new_h = int(free_h)
+            scale = new_h / ih
+            new_w = max(1, int(iw * scale))
+        else:
+            scale = min(
+                box_w / iw if box_w > 0 else 1.0,
+                box_h / ih if box_h > 0 else 1.0,
+            )
+            new_w = max(1, int(iw * scale))
+            new_h = max(1, int(ih * scale))
+        resized = img.resize((new_w, new_h), Image.LANCZOS)
+        return resized, (x0, y0)
+
     if box_h < min_h and box_h > 0:
         scale = min_h / box_h
         cx = (x0 + x1) / 2
@@ -635,6 +662,8 @@ def render_layout(
     canvas_preset: str = "ig_feed",
     brand_dir=None,
     scrim: bool = False,
+    *,
+    overrides: dict | None = None,
 ) -> Image.Image:
     """Composite one deliverable. Returns RGB PIL Image.
 
@@ -646,6 +675,24 @@ def render_layout(
         canvas_preset: "ig_feed" (1080x1350) or "tiktok" (1080x1920).
         brand_dir: path to brand/ root (fonts/, brand-kit/, etc.).
         scrim: when True, paint a light scrim under text/logo zones (default OFF).
+        overrides (keyword-only): per-slug layout overrides written by the drag
+            editor. Schema:
+              {
+                "_version": 1,
+                "logo_position": "top_left",        # optional, must be a known preset
+                "collision_avoid": False,           # optional bool; default True
+                "zones": {
+                  "headline":    {"box":[x0,y0,x1,y1], "align":"left",   "color":"#FFFFFF"},
+                  "subheadline": {"box":[...],        "align":"center", "color":"#FFC233"},
+                  "body":        {"box":[...],        "align":"left",   "color":"#8E899F"},
+                  "logo":        {"box":[...],        "height_px": 150}
+                }
+              }
+            Absence rule: any field/zone not present in overrides falls back to
+            the template / auto-fit behavior. `zones.logo.box` WINS over
+            `logo_position` (free drag mode). Per-zone `color` WINS over the
+            color baked into copy_elements. A body override on a body:NO
+            template is still skipped (template gate preserved).
 
     Raises:
         CompositorError: missing layout JSON, no chosen_layout, invalid preset,
@@ -688,6 +735,82 @@ def render_layout(
     body_box = _box_px(body_zone_spec.get("box"), W, H) if body_supported else None
     logo_box = _box_px(templates.logo_box(logo_position), W, H)
 
+    # --- defaults for align + per-zone color overrides (precedence #3)
+    headline_align = headline_zone.get("align", "left")
+    subhead_align = subhead_zone.get("align", "left")
+    body_align = body_zone_spec.get("align", "left")
+    headline_color_override = None
+    subhead_color_override = None
+    body_color_override = None
+
+    # --- free-drag flags for the wordmark (FIX-2)
+    logo_free = False
+    logo_h_override: int | None = None
+    collision_avoid = True  # FIX-3: default ON (legacy behavior)
+    # --- per-zone hidden flags (user can remove any zone from the composite)
+    logo_hidden = False
+    headline_hidden = False
+    subhead_hidden = False
+    body_hidden = False
+
+    # --- apply overrides (absence rule: missing fields → fall back to template)
+    if isinstance(overrides, dict) and overrides:
+        if isinstance(overrides.get("collision_avoid"), bool):
+            collision_avoid = overrides["collision_avoid"]
+
+        ovr_lp = overrides.get("logo_position")
+        if isinstance(ovr_lp, str) and ovr_lp in templates.logo_positions:
+            logo_position = ovr_lp
+            logo_box = _box_px(templates.logo_box(logo_position), W, H)
+
+        zones = overrides.get("zones") or {}
+        if isinstance(zones, dict):
+            logo_zone = zones.get("logo") or {}
+            if isinstance(logo_zone, dict):
+                if isinstance(logo_zone.get("box"), list) and len(logo_zone["box"]) == 4:
+                    logo_box = _box_px(logo_zone["box"], W, H)
+                    logo_free = True
+                hpx = logo_zone.get("height_px")
+                if isinstance(hpx, int) and 40 <= hpx <= 400:
+                    logo_h_override = hpx
+                if logo_zone.get("hidden") is True:
+                    logo_hidden = True
+
+            h_z = zones.get("headline") or {}
+            if isinstance(h_z, dict):
+                if isinstance(h_z.get("box"), list) and len(h_z["box"]) == 4:
+                    headline_box = _box_px(h_z["box"], W, H)
+                if h_z.get("align") in ("left", "center", "right"):
+                    headline_align = h_z["align"]
+                if isinstance(h_z.get("color"), str):
+                    headline_color_override = h_z["color"]
+                if h_z.get("hidden") is True:
+                    headline_hidden = True
+
+            s_z = zones.get("subheadline") or {}
+            if isinstance(s_z, dict):
+                if isinstance(s_z.get("box"), list) and len(s_z["box"]) == 4:
+                    subhead_box = _box_px(s_z["box"], W, H)
+                if s_z.get("align") in ("left", "center", "right"):
+                    subhead_align = s_z["align"]
+                if isinstance(s_z.get("color"), str):
+                    subhead_color_override = s_z["color"]
+                if s_z.get("hidden") is True:
+                    subhead_hidden = True
+
+            # body override ONLY honored when the template supports it
+            if body_supported:
+                b_z = zones.get("body") or {}
+                if isinstance(b_z, dict):
+                    if isinstance(b_z.get("box"), list) and len(b_z["box"]) == 4:
+                        body_box = _box_px(b_z["box"], W, H)
+                    if b_z.get("align") in ("left", "center", "right"):
+                        body_align = b_z["align"]
+                    if isinstance(b_z.get("color"), str):
+                        body_color_override = b_z["color"]
+                    if b_z.get("hidden") is True:
+                        body_hidden = True
+
     # --- load + fit the wordmark FIRST so overlap avoidance uses the ACTUAL
     # rendered rectangle. `_fit_logo` resizes the box around its center (min/max
     # height scaling) and clamps it to the canvas, so the pasted wordmark can
@@ -697,12 +820,19 @@ def render_layout(
     wm_resized = None
     paste_xy = None
     logo_rect = None
-    if wordmark_p.is_file():
+    if logo_hidden:
+        print("[LiittCompositor] logo zone hidden by override — skipping wordmark")
+    elif wordmark_p.is_file():
         try:
             wm = Image.open(wordmark_p).convert("RGBA")
-            wm_resized, paste_xy = _fit_logo(
-                wm, logo_box, min_h=LOGOMARK_MIN_HEIGHT, canvas_size=(W, H)
-            )
+            if logo_free:
+                wm_resized, paste_xy = _fit_logo(
+                    wm, logo_box, free=True, free_h=logo_h_override
+                )
+            else:
+                wm_resized, paste_xy = _fit_logo(
+                    wm, logo_box, min_h=LOGOMARK_MIN_HEIGHT, canvas_size=(W, H)
+                )
             logo_rect = (
                 paste_xy[0],
                 paste_xy[1],
@@ -717,9 +847,12 @@ def render_layout(
             f"skipping logo"
         )
 
-    # --- keep the wordmark clear of text (top logo vs headline, bottom vs body)
+    # --- keep the wordmark clear of text (top logo vs headline, bottom vs body).
+    # FIX-3: only run when the user hasn't explicitly disabled collision avoid
+    # (manual drag mode). Wordmark pastes LAST (see below) so the logo always
+    # wins z-order — correct for manual mode where the user has placed it.
     logo_is_top = logo_position.startswith("top_")
-    if logo_rect is not None:
+    if logo_rect is not None and collision_avoid:
         headline_box, subhead_box, body_box = _avoid_logo_overlap(
             logo_rect, logo_is_top, headline_box, subhead_box, body_box, H
         )
@@ -741,10 +874,11 @@ def render_layout(
     headline_final_size = 0
 
     # --- headline (binary descent fit)
-    if headline_el:
+    if headline_el and not headline_hidden:
         text = headline_el.get("text", "")
         color = _hex_rgb(
-            headline_el.get("color"), default=_hex_rgb(FALLBACK_HEADLINE_HEX)
+            headline_color_override or headline_el.get("color"),
+            default=_hex_rgb(FALLBACK_HEADLINE_HEX),
         )
         family = headline_el.get("font_family", "Bricolage Grotesque")
         weight = headline_el.get("font_weight", "bold")
@@ -761,85 +895,99 @@ def render_layout(
                 min_px=min_px,
                 weight=weight,
             )
-            align = headline_zone.get("align", "left")
+            align = headline_align
             line_ops = _emit_lines(
                 lines, font, color, headline_box, align, tracking=0.0, lh=1.06
             )
             all_ops.extend(line_ops)
         except CompositorError as e:
             print(f"[LiittCompositor] WARNING: headline render skipped: {e}")
-
-        # --- subtitle
-        if subtitle_el and headline_final_size > 0:
-            sub_text = subtitle_el.get("text", "")
-            sub_color = _hex_rgb(
-                subtitle_el.get("color"),
-                default=_hex_rgb(FALLBACK_SUBTITLE_HEX),
-            )
-            sub_family = subtitle_el.get("font_family", "Hanken Grotesk")
-            sub_weight = subtitle_el.get("font_weight", "medium")
-            sub_size = max(28, min(56, int(0.45 * headline_final_size)))
-            try:
-                sub_font, sub_lines, _ = _fit_subhead(
-                    text=sub_text,
-                    font_path=brand.font_path(sub_family, sub_weight),
-                    max_w=subhead_box[2] - subhead_box[0],
-                    max_h=subhead_box[3] - subhead_box[1],
-                    start_px=sub_size,
-                    min_px=18,
-                    tracking=2.0,
-                    weight=sub_weight,
-                )
-                sub_align = subhead_zone.get("align", "left")
-                sub_line_ops = _emit_lines(
-                    sub_lines,
-                    sub_font,
-                    sub_color,
-                    subhead_box,
-                    sub_align,
-                    tracking=2.0,
-                    lh=1.06,
-                )
-                all_ops.extend(sub_line_ops)
-            except CompositorError as e:
-                print(f"[LiittCompositor] WARNING: subtitle render skipped: {e}")
-
-        # --- body (only if template supports it)
-        if body_el and body_supported and body_box and headline_final_size > 0:
-            body_text = body_el.get("text", "")
-            body_color = _hex_rgb(
-                body_el.get("color"), default=_hex_rgb(FALLBACK_BODY_HEX)
-            )
-            if _is_dark(canvas) and body_color == _hex_rgb(FALLBACK_BODY_HEX):
-                body_color = _hex_rgb(FALLBACK_BODY_BRIGHT_HEX)
-            body_family = body_el.get("font_family", "Newsreader")
-            body_weight = body_el.get("font_weight", "medium")
-            body_size = max(16, min(38, int(0.48 * headline_final_size)))
-            try:
-                body_font = _load_font(
-                    brand.font_path(body_family, body_weight), body_size, body_weight
-                )
-                body_lines = _wrap_text(body_text, body_font, body_box[2] - body_box[0])
-                body_align = body_zone_spec.get("align", "left")
-                body_line_ops = _emit_lines(
-                    body_lines,
-                    body_font,
-                    body_color,
-                    body_box,
-                    body_align,
-                    tracking=0.0,
-                    lh=1.18,
-                )
-                all_ops.extend(body_line_ops)
-            except CompositorError as e:
-                print(f"[LiittCompositor] WARNING: body render skipped: {e}")
-        elif body_el and not body_supported:
-            print(
-                f"[LiittCompositor] WARNING: BODY element supplied but "
-                f"template {template_id!r} has body:NO — skipping body"
-            )
+    elif headline_el and headline_hidden:
+        print("[LiittCompositor] headline zone hidden by override — skipping render")
     else:
         print("[LiittCompositor] WARNING: no HEADLINE element in copy_elements")
+
+    # Subhead + body gates: independent of headline render so hiding the headline
+    # does NOT cascade-hide subhead/body. Each zone has its own visible flag.
+    # We still need a minimum headline size for subhead/body font sizing when the
+    # headline is shown — fall back to a sensible default if headline hidden.
+    sub_size_anchor = max(28, headline_final_size if headline_final_size > 0 else 60)
+
+    # --- subtitle
+    if subtitle_el and not subhead_hidden and (headline_final_size > 0 or headline_hidden):
+        sub_text = subtitle_el.get("text", "")
+        sub_color = _hex_rgb(
+            subhead_color_override or subtitle_el.get("color"),
+            default=_hex_rgb(FALLBACK_SUBTITLE_HEX),
+        )
+        sub_family = subtitle_el.get("font_family", "Hanken Grotesk")
+        sub_weight = subtitle_el.get("font_weight", "medium")
+        sub_size = max(28, min(56, int(0.45 * sub_size_anchor)))
+        try:
+            sub_font, sub_lines, _ = _fit_subhead(
+                text=sub_text,
+                font_path=brand.font_path(sub_family, sub_weight),
+                max_w=subhead_box[2] - subhead_box[0],
+                max_h=subhead_box[3] - subhead_box[1],
+                start_px=sub_size,
+                min_px=18,
+                tracking=2.0,
+                weight=sub_weight,
+            )
+            sub_align = subhead_align
+            sub_line_ops = _emit_lines(
+                sub_lines,
+                sub_font,
+                sub_color,
+                subhead_box,
+                sub_align,
+                tracking=2.0,
+                lh=1.06,
+            )
+            all_ops.extend(sub_line_ops)
+        except CompositorError as e:
+            print(f"[LiittCompositor] WARNING: subtitle render skipped: {e}")
+    elif subtitle_el and subhead_hidden:
+        print("[LiittCompositor] subheadline zone hidden by override — skipping render")
+
+    # --- body (only if template supports it)
+    if body_el and body_supported and body_box and not body_hidden \
+            and (headline_final_size > 0 or headline_hidden):
+        body_text = body_el.get("text", "")
+        body_color = _hex_rgb(
+            body_color_override or body_el.get("color"),
+            default=_hex_rgb(FALLBACK_BODY_HEX),
+        )
+        if _is_dark(canvas) and body_color == _hex_rgb(FALLBACK_BODY_HEX):
+            body_color = _hex_rgb(FALLBACK_BODY_BRIGHT_HEX)
+        body_family = body_el.get("font_family", "Newsreader")
+        body_weight = body_el.get("font_weight", "medium")
+        body_size = max(16, min(38, int(0.48 * sub_size_anchor)))
+        try:
+            body_font = _load_font(
+                brand.font_path(body_family, body_weight), body_size, body_weight
+            )
+            body_lines = _wrap_text(body_text, body_font, body_box[2] - body_box[0])
+            body_align_local = body_align
+            body_line_ops = _emit_lines(
+                body_lines,
+                body_font,
+                body_color,
+                body_box,
+                body_align_local,
+                tracking=0.0,
+                lh=1.18,
+            )
+            all_ops.extend(body_line_ops)
+        except CompositorError as e:
+            print(f"[LiittCompositor] WARNING: body render skipped: {e}")
+    elif body_el and body_hidden:
+        print("[LiittCompositor] body zone hidden by override — skipping render")
+    elif body_el and not body_supported:
+        print(
+            f"[LiittCompositor] WARNING: BODY element supplied but "
+            f"template {template_id!r} has body:NO — skipping body"
+        )
 
     # --- text render with shadow
     canvas = _render_with_shadow(canvas, all_ops)
