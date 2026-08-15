@@ -492,6 +492,9 @@ def item(slug):
 LAYOUT_ALLOWED_ZONES = {"headline", "subheadline", "body", "logo"}
 LAYOUT_ALIGN_VALUES = {"left", "center", "right"}
 LAYOUT_HEX_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")
+LAYOUT_WEIGHT_VALUES = {"light", "regular", "medium", "semibold", "bold", "extrabold"}
+LAYOUT_FONT_SIZE_MIN = 8
+LAYOUT_FONT_SIZE_MAX = 300
 
 
 def _layout_compositor_module():
@@ -583,6 +586,21 @@ def _validate_zone(key: str, zd) -> str | None:
         if (not isinstance(zd["color"], str)
                 or not LAYOUT_HEX_RE.match(zd["color"])):
             return f"zones.{key}.color must be a #RRGGBB hex string"
+    if "font_weight" in zd:
+        if key == "logo":
+            return f"zones.{key}.font_weight is not supported on the logo zone"
+        if zd["font_weight"] not in LAYOUT_WEIGHT_VALUES:
+            return (f"zones.{key}.font_weight must be one of "
+                    f"{sorted(LAYOUT_WEIGHT_VALUES)}")
+    if "font_size" in zd:
+        if key == "logo":
+            return (f"zones.{key}.font_size is not supported on the logo "
+                    f"zone (use height_px)")
+        fs = zd["font_size"]
+        if (not isinstance(fs, int) or isinstance(fs, bool)
+                or not (LAYOUT_FONT_SIZE_MIN <= fs <= LAYOUT_FONT_SIZE_MAX)):
+            return (f"zones.{key}.font_size must be an int in "
+                    f"{LAYOUT_FONT_SIZE_MIN}..{LAYOUT_FONT_SIZE_MAX}")
     if "height_px" in zd:
         hpx = zd["height_px"]
         if (not isinstance(hpx, int) or isinstance(hpx, bool)

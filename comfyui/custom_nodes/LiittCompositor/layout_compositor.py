@@ -682,9 +682,12 @@ def render_layout(
                 "logo_position": "top_left",        # optional, must be a known preset
                 "collision_avoid": False,           # optional bool; default True
                 "zones": {
-                  "headline":    {"box":[x0,y0,x1,y1], "align":"left",   "color":"#FFFFFF"},
-                  "subheadline": {"box":[...],        "align":"center", "color":"#FFC233"},
-                  "body":        {"box":[...],        "align":"left",   "color":"#8E899F"},
+                  "headline":    {"box":[x0,y0,x1,y1], "align":"left",   "color":"#FFFFFF",
+                                   "font_weight":"bold", "font_size":72},
+                  "subheadline": {"box":[...],        "align":"center", "color":"#FFC233",
+                                   "font_weight":"medium", "font_size":32},
+                  "body":        {"box":[...],        "align":"left",   "color":"#8E899F",
+                                   "font_weight":"regular", "font_size":20},
                   "logo":        {"box":[...],        "height_px": 150}
                 }
               }
@@ -692,7 +695,16 @@ def render_layout(
             the template / auto-fit behavior. `zones.logo.box` WINS over
             `logo_position` (free drag mode). Per-zone `color` WINS over the
             color baked into copy_elements. A body override on a body:NO
-            template is still skipped (template gate preserved).
+            template is still skipped (template gate preserved). Per-zone
+            `font_weight` WINS over the weight baked into copy_elements (one of
+            light/regular/medium/semibold/bold/extrabold — falls back to
+            "regular" if the family has no matching static file). Per-zone
+            `font_size` (px) WINS over the auto-fit starting size for
+            headline/subheadline and the anchor-scaled size for body — it is
+            still treated as a ceiling: headline/subheadline continue to
+            shrink-to-fit the box if the requested size doesn't fit, so an
+            oversized override can never overflow its zone. Not supported on
+            the logo zone (use `height_px` there instead).
 
     Raises:
         CompositorError: missing layout JSON, no chosen_layout, invalid preset,
@@ -742,6 +754,12 @@ def render_layout(
     headline_color_override = None
     subhead_color_override = None
     body_color_override = None
+    headline_weight_override = None
+    subhead_weight_override = None
+    body_weight_override = None
+    headline_size_override = None
+    subhead_size_override = None
+    body_size_override = None
 
     # --- free-drag flags for the wordmark (FIX-2)
     logo_free = False
@@ -784,6 +802,11 @@ def render_layout(
                     headline_align = h_z["align"]
                 if isinstance(h_z.get("color"), str):
                     headline_color_override = h_z["color"]
+                if isinstance(h_z.get("font_weight"), str):
+                    headline_weight_override = h_z["font_weight"]
+                fs = h_z.get("font_size")
+                if isinstance(fs, (int, float)) and not isinstance(fs, bool):
+                    headline_size_override = int(fs)
                 if h_z.get("hidden") is True:
                     headline_hidden = True
 
@@ -795,6 +818,11 @@ def render_layout(
                     subhead_align = s_z["align"]
                 if isinstance(s_z.get("color"), str):
                     subhead_color_override = s_z["color"]
+                if isinstance(s_z.get("font_weight"), str):
+                    subhead_weight_override = s_z["font_weight"]
+                fs = s_z.get("font_size")
+                if isinstance(fs, (int, float)) and not isinstance(fs, bool):
+                    subhead_size_override = int(fs)
                 if s_z.get("hidden") is True:
                     subhead_hidden = True
 
@@ -808,6 +836,11 @@ def render_layout(
                         body_align = b_z["align"]
                     if isinstance(b_z.get("color"), str):
                         body_color_override = b_z["color"]
+                    if isinstance(b_z.get("font_weight"), str):
+                        body_weight_override = b_z["font_weight"]
+                    fs = b_z.get("font_size")
+                    if isinstance(fs, (int, float)) and not isinstance(fs, bool):
+                        body_size_override = int(fs)
                     if b_z.get("hidden") is True:
                         body_hidden = True
 
@@ -881,10 +914,19 @@ def render_layout(
             default=_hex_rgb(FALLBACK_HEADLINE_HEX),
         )
         family = headline_el.get("font_family", "Bricolage Grotesque")
-        weight = headline_el.get("font_weight", "bold")
+        weight = headline_weight_override or headline_el.get("font_weight", "bold")
         box_h = headline_box[3] - headline_box[1]
-        start_px = min(120, max(40, int(0.8 * box_h)))
         min_px = 32 if canvas_preset == "ig_feed" else 36
+        if headline_size_override:
+            # User-chosen size is a ceiling, not a fixed value — _fit_headline
+            # still shrinks it down if the box is too small, so an oversized
+            # override can never overflow the zone. Lower the floor too, so a
+            # deliberately small override isn't silently bumped back up to the
+            # template's default minimum.
+            start_px = headline_size_override
+            min_px = min(min_px, headline_size_override)
+        else:
+            start_px = min(120, max(40, int(0.8 * box_h)))
         try:
             font, lines, headline_final_size = _fit_headline(
                 text=text,
@@ -921,8 +963,13 @@ def render_layout(
             default=_hex_rgb(FALLBACK_SUBTITLE_HEX),
         )
         sub_family = subtitle_el.get("font_family", "Hanken Grotesk")
-        sub_weight = subtitle_el.get("font_weight", "medium")
-        sub_size = max(28, min(56, int(0.45 * sub_size_anchor)))
+        sub_weight = subhead_weight_override or subtitle_el.get("font_weight", "medium")
+        sub_min_px = 18
+        if subhead_size_override:
+            sub_size = subhead_size_override
+            sub_min_px = min(sub_min_px, subhead_size_override)
+        else:
+            sub_size = max(28, min(56, int(0.45 * sub_size_anchor)))
         try:
             sub_font, sub_lines, _ = _fit_subhead(
                 text=sub_text,
@@ -930,7 +977,7 @@ def render_layout(
                 max_w=subhead_box[2] - subhead_box[0],
                 max_h=subhead_box[3] - subhead_box[1],
                 start_px=sub_size,
-                min_px=18,
+                min_px=sub_min_px,
                 tracking=2.0,
                 weight=sub_weight,
             )
@@ -961,8 +1008,8 @@ def render_layout(
         if _is_dark(canvas) and body_color == _hex_rgb(FALLBACK_BODY_HEX):
             body_color = _hex_rgb(FALLBACK_BODY_BRIGHT_HEX)
         body_family = body_el.get("font_family", "Newsreader")
-        body_weight = body_el.get("font_weight", "medium")
-        body_size = max(16, min(38, int(0.48 * sub_size_anchor)))
+        body_weight = body_weight_override or body_el.get("font_weight", "medium")
+        body_size = body_size_override or max(16, min(38, int(0.48 * sub_size_anchor)))
         try:
             body_font = _load_font(
                 brand.font_path(body_family, body_weight), body_size, body_weight

@@ -210,6 +210,24 @@
             <option value="right">right</option>
           </select>
         </div>
+        <div class="row" id="panel-weight-row" style="display:none">
+          <label class="lbl">Weight</label>
+          <select id="panel-weight">
+            <option value="">template default</option>
+            <option value="light">light</option>
+            <option value="regular">regular</option>
+            <option value="medium">medium</option>
+            <option value="semibold">semibold</option>
+            <option value="bold">bold</option>
+            <option value="extrabold">extrabold</option>
+          </select>
+        </div>
+        <div class="row" id="panel-size-row" style="display:none">
+          <label class="lbl">Font size</label>
+          <input type="range" id="panel-fontsize" min="10" max="160" value="60">
+          <span id="panel-fontsize-val" style="min-width:48px">auto</span>
+          <button class="vs-btn ghost" id="panel-fontsize-reset" title="Reset to auto-fit">↻ auto</button>
+        </div>
         <div class="row" id="panel-height-row" style="display:none">
           <label class="lbl">Height</label>
           <input type="range" id="panel-height" min="40" max="400" value="150">
@@ -530,6 +548,11 @@
   // ── layout editor ────────────────────────────────────────────────
   const ASPECT_DIM = { ig_feed: { w: 1080, h: 1350 }, tiktok: { w: 1080, h: 1920 } };
   const EDIT_ZONES = ["headline", "subheadline", "body", "logo"];
+  // Mirrors the compositor's own auto-fit ranges (font_sizing in the layout
+  // JSON) — the slider stays roughly on-scale per zone. The renderer still
+  // shrinks-to-fit if a chosen size doesn't fit the box, so going a bit past
+  // these bounds is safe; they're just sane slider limits, not hard caps.
+  const FONT_SIZE_RANGE = { headline: [20, 160], subheadline: [14, 90], body: [10, 60] };
   let LAYOUT = null;             // server-supplied defaults + overrides
   const EDIT = {
     raw: null, aspect: "ig_feed",
@@ -597,6 +620,8 @@
     $("#panel-hide-row").style.display = name ? "" : "none";
     $("#panel-color-row").style.display = showText ? "" : "none";
     $("#panel-align-row").style.display = showText ? "" : "none";
+    $("#panel-weight-row").style.display = showText ? "" : "none";
+    $("#panel-size-row").style.display = showText ? "" : "none";
     $("#panel-height-row").style.display = (name === "logo") ? "" : "none";
     const hideBtn = $("#panel-hide");
     if (z.hidden) {
@@ -609,6 +634,17 @@
     if (showText) {
       $("#panel-color").value = z.color || "#FFFFFF";
       $("#panel-align").value = z.align || "left";
+      $("#panel-weight").value = z.font_weight || "";
+      const range = FONT_SIZE_RANGE[name] || [10, 160];
+      const fsInput = $("#panel-fontsize");
+      fsInput.min = range[0]; fsInput.max = range[1];
+      if (z.font_size) {
+        fsInput.value = z.font_size;
+        $("#panel-fontsize-val").textContent = z.font_size + " px";
+      } else {
+        fsInput.value = Math.round((range[0] + range[1]) / 2);
+        $("#panel-fontsize-val").textContent = "auto";
+      }
     }
     if (name === "logo") {
       const h = EDIT.logo_h || 150;
@@ -643,6 +679,8 @@
       const entry = { box: clampBox(z.box) };
       if (z.align) entry.align = z.align;
       if (z.color) entry.color = z.color;
+      if (k !== "logo" && z.font_weight) entry.font_weight = z.font_weight;
+      if (k !== "logo" && z.font_size) entry.font_size = Math.round(z.font_size);
       if (z.hidden) entry.hidden = true;
       zones[k] = entry;
     }
@@ -704,6 +742,8 @@
           if (ovr.box) EDIT.zones[k].box = ovr.box.slice();
           if (ovr.align) EDIT.zones[k].align = ovr.align;
           if (ovr.color) EDIT.zones[k].color = ovr.color;
+          if (ovr.font_weight) EDIT.zones[k].font_weight = ovr.font_weight;
+          if (typeof ovr.font_size === "number") EDIT.zones[k].font_size = ovr.font_size;
           if (ovr.hidden === true) EDIT.zones[k].hidden = true;
         }
         if (LAYOUT.overrides.zones.logo
@@ -817,6 +857,28 @@
       if (!EDIT.selected || EDIT.selected === "logo") return;
       EDIT.zones[EDIT.selected] = EDIT.zones[EDIT.selected] || { box: null };
       EDIT.zones[EDIT.selected].align = e.target.value;
+      makeDirty();
+    });
+    $("#panel-weight").addEventListener("change", e => {
+      if (!EDIT.selected || EDIT.selected === "logo") return;
+      const z = EDIT.zones[EDIT.selected] = EDIT.zones[EDIT.selected] || { box: null };
+      if (e.target.value) z.font_weight = e.target.value;
+      else delete z.font_weight;
+      makeDirty();
+    });
+    $("#panel-fontsize").addEventListener("input", e => {
+      if (!EDIT.selected || EDIT.selected === "logo") return;
+      const v = +e.target.value;
+      EDIT.zones[EDIT.selected] = EDIT.zones[EDIT.selected] || { box: null };
+      EDIT.zones[EDIT.selected].font_size = v;
+      $("#panel-fontsize-val").textContent = v + " px";
+      makeDirty();
+    });
+    $("#panel-fontsize-reset").addEventListener("click", () => {
+      if (!EDIT.selected || EDIT.selected === "logo") return;
+      const z = EDIT.zones[EDIT.selected];
+      if (z) delete z.font_size;
+      $("#panel-fontsize-val").textContent = "auto";
       makeDirty();
     });
     $("#panel-height").addEventListener("input", e => {
