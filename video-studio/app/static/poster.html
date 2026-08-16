@@ -25,6 +25,21 @@
   .drop-img:hover,.drop-img.drag { border-color:var(--accent); color:var(--accent2);
     background:rgba(124,92,255,.06); }
   .drop-img.on { border-style:solid; border-color:var(--ok); color:var(--ok); }
+  /* thumbnail preview shown once a file is picked */
+  .drop-img.has-prev { flex-direction:row; align-items:center; justify-content:flex-start;
+    gap:12px; text-align:left; }
+  .drop-prev { width:84px; height:84px; flex:0 0 84px; object-fit:contain; border-radius:8px;
+    background:var(--panel2); border:1px solid var(--line); pointer-events:none;
+    opacity:0; transition:opacity .18s; }
+  .drop-prev.ready { opacity:1; }
+  #objdrop .drop-prev { width:56px; height:56px; flex:0 0 56px; }
+  .drop-info { display:flex; flex-direction:column; gap:3px; min-width:0; word-break:break-word; }
+  .drop-img.has-prev .drop-info { flex:1; text-align:left; }
+  .drop-meta:empty { display:none; }
+  .drop-clear { position:absolute; top:6px; right:8px; font-size:15px; line-height:1;
+    color:var(--dim); cursor:pointer; padding:2px 5px; border-radius:6px; }
+  .drop-clear:hover { color:var(--warn); background:rgba(255,255,255,.07); }
+  .drop-img { position:relative; }
   .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:9px; }
   .row label.lbl { font-size:12px; color:var(--dim); min-width:64px; }
   .row select, .row input { flex:1; }
@@ -106,12 +121,22 @@
       <h3>1 · Product</h3>
       <label class="drop-img" id="drop">
         <input type="file" id="pfile" accept="image/png,image/jpeg,image/webp" style="display:none">
-        <span id="dropmsg">⬆ Drop the product photo here<br>
-          <span class="vs-hint">jpg · png · webp — up to 25 MB</span></span>
+        <img id="pprev" class="drop-prev" alt="product preview" hidden>
+        <span class="drop-info">
+          <span id="dropmsg">⬆ Drop the product photo here<br>
+            <span class="vs-hint">jpg · png · webp — up to 25 MB</span></span>
+          <span class="drop-meta vs-hint" id="pmeta"></span>
+        </span>
+        <span class="drop-clear" id="pclear" title="remove" hidden>✕</span>
       </label>
       <div class="drop-img" id="objdrop" style="min-height:70px">
         <input type="file" id="ofile" accept="image/png,image/jpeg,image/webp" style="display:none">
-        <span id="objmsg">＋ Optional: an additional object / prop image</span>
+        <img id="oprev" class="drop-prev" alt="object preview" hidden>
+        <span class="drop-info">
+          <span id="objmsg">＋ Optional: an additional object / prop image</span>
+          <span class="drop-meta vs-hint" id="ometa"></span>
+        </span>
+        <span class="drop-clear" id="oclear" title="remove" hidden>✕</span>
       </div>
 
       <h3 style="margin-top:18px">2 · Brief</h3>
@@ -304,18 +329,87 @@
   // ── upload (product + optional object, sent together) ───────────────
   const drop = $("#drop"), pfile = $("#pfile");
   const objdrop = $("#objdrop"), ofile = $("#ofile");
+
+  // -- thumbnail preview -------------------------------------------------
+  // The picked file is rendered locally (object URL) the moment it is chosen,
+  // so the operator sees the actual image while it is still uploading.
+  const SLOTS = {
+    product: {img:$("#pprev"), meta:$("#pmeta"), clear:$("#pclear"), drop: drop},
+    object:  {img:$("#oprev"), meta:$("#ometa"), clear:$("#oclear"), drop: objdrop},
+  };
+
+  function humanSize(bytes) {
+    const kb = bytes / 1024;
+    return kb >= 1024 ? (kb / 1024).toFixed(1) + " MB" : Math.max(1, Math.round(kb)) + " KB";
+  }
+
+  function setPreview(kind, file) {
+    const s = SLOTS[kind], img = s.img;
+    if (img.dataset.url) { URL.revokeObjectURL(img.dataset.url); delete img.dataset.url; }
+    img.classList.remove("ready");
+    if (!file) {
+      img.hidden = true; img.removeAttribute("src");
+      s.meta.textContent = ""; s.clear.hidden = true;
+      s.drop.classList.remove("has-prev");
+      return;
+    }
+    const url = URL.createObjectURL(file);
+    img.dataset.url = url;
+    img.onload = () => {                       // only reveal once decoded
+      img.classList.add("ready");
+      s.meta.textContent = `${img.naturalWidth}×${img.naturalHeight} · ${humanSize(file.size)}`;
+    };
+    img.onerror = () => {                      // not a decodable image
+      URL.revokeObjectURL(url); delete img.dataset.url;
+      img.hidden = true; s.drop.classList.remove("has-prev");
+      s.meta.textContent = "preview unavailable · " + humanSize(file.size);
+    };
+    img.hidden = false;
+    img.src = url;
+    s.drop.classList.add("has-prev");
+    s.clear.hidden = false;
+  }
+
+  function pickProduct(file) { S.productFile = file; setPreview("product", file); doUpload(); }
+  function pickObject(file)  { S.objectFile  = file; setPreview("object",  file); doUpload(); }
+
   drop.onclick = () => pfile.click();
-  pfile.onchange = e => { if (e.target.files[0]) { S.productFile = e.target.files[0]; doUpload(); } };
+  pfile.onchange = e => { if (e.target.files[0]) pickProduct(e.target.files[0]); };
   ["dragover","dragleave","drop"].forEach(ev => drop.addEventListener(ev, e => {
     e.preventDefault(); drop.classList.toggle("drag", ev === "dragover");
-    if (ev === "drop" && e.dataTransfer.files[0]) { S.productFile = e.dataTransfer.files[0]; doUpload(); }
+    if (ev === "drop" && e.dataTransfer.files[0]) pickProduct(e.dataTransfer.files[0]);
   }));
   objdrop.onclick = () => ofile.click();
-  ofile.onchange = e => { if (e.target.files[0]) { S.objectFile = e.target.files[0]; doUpload(); } };
+  ofile.onchange = e => { if (e.target.files[0]) pickObject(e.target.files[0]); };
   ["dragover","dragleave","drop"].forEach(ev => objdrop.addEventListener(ev, e => {
     e.preventDefault(); objdrop.classList.toggle("drag", ev === "dragover");
-    if (ev === "drop" && e.dataTransfer.files[0]) { S.objectFile = e.dataTransfer.files[0]; doUpload(); }
+    if (ev === "drop" && e.dataTransfer.files[0]) pickObject(e.dataTransfer.files[0]);
   }));
+
+  // -- remove buttons ----------------------------------------------------
+  $("#pclear").addEventListener("click", e => {
+    e.preventDefault(); e.stopPropagation();
+    S.productFile = null; S.objectFile = null; S.slug = null; S.plan = null;
+    pfile.value = ""; ofile.value = "";
+    setPreview("product", null); setPreview("object", null);
+    drop.classList.remove("on"); objdrop.classList.remove("on");
+    $("#dropmsg").innerHTML = '⬆ Drop the product photo here<br>' +
+      '<span class="vs-hint">jpg · png · webp — up to 25 MB</span>';
+    $("#objmsg").textContent = "＋ Optional: an additional object / prop image";
+    $("#copyfields").style.display = "none";
+    $("#btn-replan").style.display = "none";
+    $("#plannote").textContent = "";
+    $("#jobnote").textContent = "";
+    renderGallery({raws: [], finals: []});
+  });
+  $("#oclear").addEventListener("click", e => {
+    e.preventDefault(); e.stopPropagation();
+    S.objectFile = null; ofile.value = "";
+    setPreview("object", null);
+    objdrop.classList.remove("on");
+    $("#objmsg").textContent = "＋ Optional: an additional object / prop image";
+    if (S.productFile) doUpload();   // re-upload product alone
+  });
 
   async function doUpload() {
     if (!S.productFile) { VS.toast("drop the product photo first"); return; }
@@ -339,7 +433,11 @@
       $("#plannote").textContent = "";
       $("#jobnote").textContent = "Uploaded — write the brief, then Write the plan.";
       renderGallery({raws: [], finals: []});
-    } catch (e) { VS.toast("Upload failed: " + e.message); }
+    } catch (e) {
+      $("#dropmsg").textContent = "⚠ upload failed — click to retry";
+      drop.classList.remove("on");
+      VS.toast("Upload failed: " + e.message);
+    }
   }
 
   // ── plan ────────────────────────────────────────────────────────────
