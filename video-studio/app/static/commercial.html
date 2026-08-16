@@ -93,7 +93,8 @@
     <div class="vs-panel">
       <h3><span class="stepno">1</span>Template</h3>
       <div class="tplgrid" id="utpl">
-        <div class="tpl on" data-t="selfie">🤳 General selfie<small>phone at arm's length</small></div>
+        <div class="tpl on" data-t="auto">🪄 Auto<small>AI picks from your action + script</small></div>
+        <div class="tpl" data-t="selfie">🤳 General selfie<small>phone at arm's length</small></div>
         <div class="tpl" data-t="selling">🛍 Selling<small>UGC product pitch to camera</small></div>
         <div class="tpl" data-t="podcast">🎙 Podcast<small>big mic, studio vibe</small></div>
         <div class="tpl" data-t="car">🚗 Car talking<small>driver's seat, phone on dash</small></div>
@@ -125,7 +126,7 @@
     <div class="vs-panel">
       <h3><span class="stepno">3</span>AI model</h3>
       <select class="vs-sel" id="umodel" style="width:100%">
-        <option value="veo3-fast" selected>Google Veo 3 Fast — 720P · speaks (recommended)</option>
+        <option value="kling-2.6-pro" selected>Kling 2.6 Pro — native voice at half Veo's price · speaks (recommended)</option>
       </select>
       <div class="vs-hint" id="umodelnote" style="margin-top:6px;opacity:.85">🗣 <b>speaks</b> models voice the
         script themselves · 🎞 <b>silent</b> models film the person mouthing it — pair them with a Voice-Bank
@@ -167,7 +168,34 @@
             <option value="low">🪵 low and strong</option>
             <option value="high">🎈 very high</option>
             <option value="none">🔇 no sound</option>
-            <optgroup label="🎬 from a previous video (Voice Bank)" id="uvoicebank"></optgroup>
+          </select></label>
+        <label class="vs-hint">voice gender
+          <select class="vs-sel" id="ugender" style="margin-left:5px">
+            <option value="auto" selected>🚻 auto — match the photo</option>
+            <option value="male">🚹 male</option>
+            <option value="female">🚺 female</option>
+          </select></label>
+        <label class="vs-hint">accent
+          <select class="vs-sel" id="uaccent" style="margin-left:5px">
+            <option value="auto" selected>🌐 auto</option>
+            <option value="american">🇺🇸 American</option>
+            <option value="british">🇬🇧 British</option>
+            <option value="australian">🇦🇺 Australian</option>
+            <option value="irish">🇮🇪 Irish</option>
+            <option value="indian">🇮🇳 Indian</option>
+            <option value="sri-lankan">🇱🇰 Sri Lankan</option>
+            <option value="filipino">🇵🇭 Filipino</option>
+            <option value="nigerian">🇳🇬 Nigerian</option>
+            <option value="south-african">🇿🇦 South African</option>
+            <option value="latino">🌎 Latin American</option>
+            <option value="french">🇫🇷 French</option>
+            <option value="german">🇩🇪 German</option>
+            <option value="arabic">🕌 Arabic</option>
+            <option value="east-asian">🏮 East Asian</option>
+          </select></label>
+        <label class="vs-hint">saved voice (Voice Bank)
+          <select class="vs-sel" id="ubank" style="margin-left:5px">
+            <option value="" selected>🎲 fresh AI voice</option>
           </select></label>
         <label class="vs-hint">emotion
           <select class="vs-sel" id="uemotion" style="margin-left:5px">
@@ -386,7 +414,7 @@
     }
     $("#umodel").innerHTML =
       '<optgroup label="🗣 Speaks — the avatar voices the script itself">'
-      + speak.map(m => `<option value="${m.key}"${m.key === "veo3-fast" ? " selected" : ""}>${VS.esc(m.label)}</option>`).join("")
+      + speak.map(m => `<option value="${m.key}"${m.key === "kling-2.6-pro" ? " selected" : ""}>${VS.esc(m.label)}</option>`).join("")
       + '</optgroup><optgroup label="🎞 Silent — pair with a Voice-Bank voice (free)">'
       + silent.map(m => `<option value="${m.key}">${VS.esc(m.label)}</option>`).join("")
       + "</optgroup>";
@@ -395,16 +423,17 @@
   // voices cloned from previous videos (Voice Bank) → the voice-type picker
   try {
     const v = await VS.api("/api/voices");
-    const bank = $("#uvoicebank");
+    const bank = $("#ubank");
     for (const vc of (v.voices || []))
       bank.insertAdjacentHTML("beforeend",
-        `<option value="bank:${VS.esc(vc.id)}">🎬 ${VS.esc(vc.name)} — from your video</option>`);
+        `<option value="${VS.esc(vc.id)}">🎬 ${VS.esc(vc.name)} — from your video</option>`);
     if (!(v.voices || []).length)
-      bank.label = "🎬 Voice Bank — empty (clone one on the Voices tab)";
+      bank.insertAdjacentHTML("beforeend",
+        '<option value="" disabled>(empty — clone one on the Voices tab)</option>');
   } catch (e) { /* the bank is optional */ }
 
-  // template picker
-  let uTemplate = "selfie";
+  // template picker ("auto" → the server has AI pick from the action + script)
+  let uTemplate = "auto";
   $("#utpl").onclick = e => {
     const t = e.target.closest(".tpl");
     if (!t) return;
@@ -415,7 +444,7 @@
   // length + model → estimate. "auto" sizes the clip to the words (~2.3 w/s);
   // past the model's per-call cap the server chains segments — mirror its plan.
   const UGC_WPS = 2.3, UGC_MAX = 120;
-  const uModel = () => UGC_OPT[$("#umodel").value] || {audio: true, durations: [4, 6, 8], cost_per_s: 0.15, label: $("#umodel").value};
+  const uModel = () => UGC_OPT[$("#umodel").value] || {audio: true, durations: [5, 10], cost_per_s: 0.14, label: $("#umodel").value};
   function uPlan(sec) {
     const durs = [...uModel().durations].sort((a, b) => a - b);
     const segMax = durs[durs.length - 1];
@@ -443,14 +472,14 @@
     const m = uModel(), segs = uEffSeconds(), sec = segs.reduce((a, b) => a + b, 0);
     const words = $("#uscript").value.trim().split(/\s+/).filter(Boolean).length;
     const v = $("#uvoice").value;
-    const bank = v.startsWith("bank:");
+    const bank = !!$("#ubank").value;
     $("#ulipsyncrow").style.display = bank ? "" : "none";
     const nativeSpeech = m.audio && v !== "none" && !bank;
     const rate = (!nativeSpeech && m.cost_per_s_silent) ? m.cost_per_s_silent : (m.cost_per_s || 0.15);
     const lsRate = bank ? (LS_RATES[$("#ulipsync").value] || 0) : 0;
     const c = sec * rate + sec * lsRate + (UIMG.pr ? 0.039 : 0);
-    const silentNote = !m.audio && $("#uvoice").value !== "none"
-      && !$("#uvoice").value.startsWith("bank:") ? " · ⚠ silent model — pick a Voice-Bank voice" : "";
+    const silentNote = !m.audio && v !== "none" && !bank
+      ? " · ⚠ silent model — pick a Voice-Bank voice" : "";
     $("#uest").textContent = `estimated cost: ~$${c.toFixed(2)} · ${sec}s`
       + (segs.length > 1 ? ` in ${segs.length} chained segments` : "")
       + (uSeconds === "auto" && words ? ` — sized to your ${words} words` : "")
@@ -459,8 +488,43 @@
       + silentNote;
   }
   $("#uscript").addEventListener("input", uEstimate);
-  $("#uvoice").addEventListener("change", uEstimate);
   $("#ulipsync").addEventListener("change", uEstimate);
+  // the three voice inputs are mutually exclusive:
+  //   a saved (bank) voice defines its own sound → type + gender gray out
+  //   a custom voice type describes a FRESH voice → the bank select grays out
+  //   "no sound" → both gray out
+  function uVoiceUI() {
+    const bank = !!$("#ubank").value, type = $("#uvoice").value;
+    $("#uvoice").disabled = bank;
+    $("#ugender").disabled = bank || type === "none";
+    $("#uaccent").disabled = bank || type === "none";
+    $("#ubank").disabled = !bank && type !== "auto";
+    uEstimate();
+  }
+  $("#uvoice").addEventListener("change", uVoiceUI);
+  $("#ubank").addEventListener("change", uVoiceUI);
+  $("#ugender").addEventListener("change", uEstimate);
+  $("#uaccent").addEventListener("change", uEstimate);
+  uVoiceUI();
+
+  // avatar photo → AI looks at it and pre-selects the matching voice gender.
+  // Only overrides "auto" / a previous auto-pick — never a voice the user chose.
+  let uAutoVoice = null;
+  async function uDetectGender(image) {
+    try {
+      const r = await fetch("/api/ugc/detect", {method: "POST",
+        headers: {"Content-Type": "application/json"}, body: JSON.stringify({image})});
+      const g = r.ok ? (await r.json()).gender : null;
+      if (!g) return;
+      const sel = $("#ugender");
+      if (sel.value === "auto" || sel.value === uAutoVoice) {
+        sel.value = g;
+        uAutoVoice = g;
+        uEstimate();
+        VS.toast(`🚻 ${g === "male" ? "🚹 male" : "🚺 female"} voice selected from the photo — change the voice gender if wrong`);
+      }
+    } catch (e) { /* best-effort — "auto" still tells the model to match the person */ }
+  }
 
   // image slots: click / drag / Ctrl+V paste
   async function uUpload(slot, fileOrBlob) {
@@ -483,6 +547,7 @@
       msg.style.display = "none";
       box.classList.add("has");
       uEstimate();
+      if (slot === "av") uDetectGender(d.image);
     } catch (e) { msg.innerHTML = old; VS.toast("Upload failed: " + e.message); }
   }
   for (const [id, slot] of [["#uav", "av"], ["#upr", "pr"]]) {
@@ -521,9 +586,8 @@
   $("#ugo").onclick = async () => {
     if (uBusy) return;
     if (!UIMG.av) { VS.toast("Upload (or paste) the avatar image first"); return; }
-    const rawVoice = $("#uvoice").value;
-    const bankVoice = rawVoice.startsWith("bank:") ? rawVoice.slice(5) : "";
-    const voice = bankVoice ? "auto" : rawVoice;
+    const bankVoice = $("#ubank").value;
+    const voice = bankVoice ? "auto" : $("#uvoice").value;
     if (voice !== "none" && !$("#uscript").value.trim()) {
       VS.toast("Type the audio text — what should they say?"); return;
     }
@@ -533,7 +597,8 @@
     }
     const body = {image: UIMG.av, product: UIMG.pr || "", template: uTemplate,
       action: $("#uaction").value.trim(), script: $("#uscript").value.trim(),
-      voice, voice_id: bankVoice, emotion: $("#uemotion").value, bg: $("#ubg").value.trim(),
+      voice, voice_id: bankVoice, gender: $("#ugender").value, accent: $("#uaccent").value,
+      emotion: $("#uemotion").value, bg: $("#ubg").value.trim(),
       model: $("#umodel").value, seconds: uSeconds, lipsync: $("#ulipsync").value,
       captions: $("#ucap").checked, caption_text: $("#ucaptext").value.trim(),
       caption_keywords: $("#ucapkeys").value.trim()};
@@ -553,6 +618,7 @@
       const d = await r.json();
       $("#uprog").style.display = "block";
       $("#ulog").textContent = "";
+      $("#uproglbl").textContent = "⏳ filming…";
       VS.toast("🤳 Filming your avatar — ~1-3 min");
       uWatch(d.job_id);
     } catch (e) { VS.toast("Couldn't start: " + e.message); uBusy = false; $("#ugo").disabled = false; }

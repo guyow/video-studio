@@ -40,7 +40,7 @@ from pathlib import Path
 #   dur:   how the endpoint wants duration — "str" ('5'), "strs" ('8s'), "int" (8)
 #   durations: the segment lengths the endpoint accepts (chaining covers the rest)
 MODELS = {
-    "veo3-fast": {"label": "Google Veo 3 Fast — 720P · speaks (recommended)",
+    "veo3-fast": {"label": "Google Veo 3 Fast — 720P · speaks",
                   "endpoint": "fal-ai/veo3/fast/image-to-video", "audio": True,
                   "dur": "strs", "durations": (4, 6, 8),
                   "resolution": "720p", "cost_per_s": 0.15},
@@ -52,7 +52,7 @@ MODELS = {
                   "endpoint": "fal-ai/sora-2/image-to-video", "audio": True,
                   "dur": "int", "durations": (4, 8, 12),
                   "resolution": "720p", "cost_per_s": 0.30},
-    "kling-2.6-pro": {"label": "Kling 2.6 Pro — native voice at half Veo's price · speaks",
+    "kling-2.6-pro": {"label": "Kling 2.6 Pro — native voice at half Veo's price · speaks (recommended)",
                       "endpoint": "fal-ai/kling-video/v2.6/pro/image-to-video", "audio": True,
                       "dur": "str", "durations": (5, 10), "img_key": "start_image_url",
                       "cost_per_s": 0.14, "cost_per_s_silent": 0.07},
@@ -123,6 +123,30 @@ VOICES = {
     "low":     "in a low, strong, deep voice",
     "high":    "in a very high-pitched voice",
     "none":    "",
+}
+
+GENDERS = {
+    "auto":   "",
+    "male":   "in a natural male voice that matches his appearance",
+    "female": "in a natural female voice that matches her appearance",
+}
+
+ACCENTS = {
+    "auto":          "",
+    "american":      "with a natural American accent",
+    "british":       "with a natural British accent",
+    "australian":    "with a natural Australian accent",
+    "irish":         "with a natural Irish accent",
+    "indian":        "with a natural Indian accent",
+    "sri-lankan":    "with a natural Sri Lankan accent",
+    "filipino":      "with a natural Filipino accent",
+    "nigerian":      "with a natural Nigerian accent",
+    "south-african": "with a natural South African accent",
+    "latino":        "with a natural Latin American Spanish accent",
+    "french":        "with a natural French accent",
+    "german":        "with a natural German accent",
+    "arabic":        "with a natural Arabic accent",
+    "east-asian":    "with a natural East Asian accent",
 }
 
 EMOTIONS = {
@@ -246,12 +270,15 @@ def build_prompt(a: argparse.Namespace, say: str, speak: bool, cont: bool) -> st
         parts.append("The person does not speak.")
     else:
         text = say.strip().replace('"', "'")
-        voice = VOICES.get(a.voice, "")
+        voice = ", ".join(d for d in (GENDERS.get(getattr(a, "gender", "auto"), ""),
+                                      ACCENTS.get(getattr(a, "accent", "auto"), ""),
+                                      VOICES.get(a.voice, "")) if d)
         emo = EMOTIONS.get(a.emotion, "")
         line = f'The person looks at the camera and says{" " + voice if voice else ""}: "{text}"'
         if emo:
             line += f" — sounding {emo}"
-        parts.append(line + ". Natural, accurate lip-sync to the spoken words.")
+        parts.append(line + ". The voice naturally suits the person's appearance, gender and age. "
+                     "Natural, accurate lip-sync to the spoken words.")
     if a.bg.strip():
         parts.append(f"Background sound: {a.bg.strip().rstrip('.')}.")
     parts.append("Realistic UGC quality. No subtitles, no captions, no on-screen text, no watermark.")
@@ -266,9 +293,13 @@ def main() -> int:
     ap.add_argument("--action", default="", help="how the character behaves")
     ap.add_argument("--script", default="", help="what the avatar says (audio text)")
     ap.add_argument("--voice", default="auto", choices=sorted(VOICES))
+    ap.add_argument("--gender", default="auto", choices=sorted(GENDERS),
+                    help="voice gender for fresh AI voices (auto = match the person)")
+    ap.add_argument("--accent", default="auto", choices=sorted(ACCENTS),
+                    help="accent for fresh AI voices (auto = whatever the model picks)")
     ap.add_argument("--emotion", default="auto", choices=sorted(EMOTIONS))
     ap.add_argument("--bg", default="", help="background sound description")
-    ap.add_argument("--model", default="veo3-fast", choices=sorted(MODELS))
+    ap.add_argument("--model", default="kling-2.6-pro", choices=sorted(MODELS))
     ap.add_argument("--seconds", default="auto",
                     help="'auto' = as long as the words need; or a number (2-120)")
     ap.add_argument("--out", required=True, help="output dir: output/i2v/<slug>")

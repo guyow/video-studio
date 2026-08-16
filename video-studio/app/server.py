@@ -50,7 +50,7 @@ APP_DIR = Path(__file__).resolve().parent          # video-studio/app
 VS_ROOT = APP_DIR.parent                            # video-studio/
 CONFIG = json.loads((VS_ROOT / "config.json").read_text(encoding="utf-8"))
 
-ROOT = Path(CONFIG["autovsl_root"])                 # data root: the autoVSL repo (unchanged)
+ROOT = Path(CONFIG["autovsl_root"]).resolve()       # data root: the autoVSL repo (unchanged)
 ENGINES = Path(CONFIG["engines_dir"])               # autoVSL/dashboard — engine helper scripts
 # subtitle-studio's erase engine supersedes the dashboard copy: better caption-band
 # detection (EasyOCR/CRAFT), NaN-corruption retry, and a resume cache written next to
@@ -5972,13 +5972,13 @@ UGC_ENGINE = APP_DIR / "engines" / "ugc_avatar.py"
 # mirror of ugc_avatar.MODELS — every fal image→video model. audio=True models
 # SPEAK natively; silent ones need a Voice-Bank voice (free) or voice="none".
 UGC_MODELS = {
-    "veo3-fast": {"label": "Google Veo 3 Fast — 720P · speaks (recommended)",
+    "veo3-fast": {"label": "Google Veo 3 Fast — 720P · speaks",
                   "audio": True, "durations": (4, 6, 8), "cost_per_s": 0.15},
     "veo3":      {"label": "Google Veo 3 — 1080P · speaks (premium)",
                   "audio": True, "durations": (4, 6, 8), "cost_per_s": 0.40},
     "sora-2":    {"label": "Sora 2 — OpenAI realism · speaks",
                   "audio": True, "durations": (4, 8, 12), "cost_per_s": 0.30},
-    "kling-2.6-pro": {"label": "Kling 2.6 Pro — native voice at half Veo's price · speaks",
+    "kling-2.6-pro": {"label": "Kling 2.6 Pro — native voice at half Veo's price · speaks (recommended)",
                       "audio": True, "durations": (5, 10),
                       "cost_per_s": 0.14, "cost_per_s_silent": 0.07},
     "kling-2.5-pro":    {"label": "Kling 2.5 Turbo Pro — great motion · silent",
@@ -5994,6 +5994,10 @@ UGC_MODELS = {
 }
 UGC_TEMPLATES = ("selfie", "selling", "podcast", "car", "mirror", "stream", "static", "vsl")
 UGC_VOICES = ("auto", "whisper", "rough", "harsh", "soft", "low", "high", "none")
+UGC_GENDERS = ("auto", "male", "female")
+UGC_ACCENTS = ("auto", "american", "british", "australian", "irish", "indian",
+               "sri-lankan", "filipino", "nigerian", "south-african", "latino",
+               "french", "german", "arabic", "east-asian")
 UGC_EMOTIONS = ("auto", "happy", "angry", "fearful", "surprised", "disgusted",
                 "excited", "calm", "playful", "serious")
 UGC_MERGE_COST = 0.039          # nano-banana edit, when a product photo is added
@@ -6030,18 +6034,82 @@ def api_ugc_options():
     })
 
 
+def _ugc_pick_template(script: str, action: str, has_product: bool) -> str:
+    """AI reads the script/action and picks the best scene template ("auto" mode).
+    Falls back to a sensible default when the claude CLI is unavailable."""
+    fallback = "selling" if has_product else "selfie"
+    if not CLAUDE_EXE or not (script or action):
+        return fallback
+    try:
+        env = job_env()
+        env.pop("CLAUDECODE", None)
+        r = subprocess.run(
+            [CLAUDE_EXE, "-p", "--model", "haiku"],
+            input="Pick the best filming scene for a short UGC-style video.\n"
+                  f"Script (what the person says): {script[:400] or '(none)'}\n"
+                  f"Action (how they behave): {action[:400] or '(none)'}\n"
+                  f"Holding a product: {'yes' if has_product else 'no'}\n"
+                  "Scenes: selfie (casual phone at arm's length), selling (product pitch "
+                  "to camera), podcast (studio mic + headphones), car (driver's seat), "
+                  "mirror (bedroom/bathroom mirror), stream (webcam + ring light), "
+                  "static (fixed tripod, straight to lens).\n"
+                  "Reply with EXACTLY one word: selfie, selling, podcast, car, mirror, "
+                  "stream, or static.",
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=60, cwd=str(ROOT), env=env)
+        out = (r.stdout or "").strip().lower()
+        word = out.split()[-1].strip(".!\"'") if out else ""
+        return word if word in UGC_TEMPLATES else fallback
+    except Exception:                                     # noqa: BLE001
+        return fallback
+
+
+@app.post("/api/ugc/detect")
+def api_ugc_detect():
+    """Look at the uploaded avatar photo and guess the person's apparent gender,
+    so the UI can pre-select the matching voice (male/female). Best-effort:
+    returns {"gender": null} whenever unsure or the claude CLI is unavailable."""
+    rel = ((request.get_json(force=True) or {}).get("image") or "").replace("\\", "/")
+    p = (ROOT / rel).resolve()
+    if not str(p).startswith(str(I2V_UPLOADS.resolve())) or not p.is_file():
+        abort(400, "upload the image first")
+    if not CLAUDE_EXE:
+        return jsonify({"gender": None})
+    try:
+        env = job_env()
+        env.pop("CLAUDECODE", None)
+        r = subprocess.run(
+            [CLAUDE_EXE, "-p", "--model", "haiku", "--allowedTools", "Read",
+             "--disallowedTools", "Write,Edit,Bash,NotebookEdit,WebFetch,WebSearch,Task"],
+            input=f"Read the image {p} — it shows a person who will be the presenter in a "
+                  "video. Does the person look male or female? Reply with EXACTLY one word: "
+                  "male, female, or unsure.",
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=120, cwd=str(ROOT), env=env)
+        word = (r.stdout or "").strip().lower().split()[-1].strip(".!") if (r.stdout or "").strip() else ""
+        return jsonify({"gender": word if word in ("male", "female") else None})
+    except Exception:                                     # noqa: BLE001
+        return jsonify({"gender": None})
+
+
 @app.post("/api/ugc/run")
 def api_ugc_run():
     b = request.get_json(force=True)
-    model = b.get("model", "veo3-fast")
+    model = b.get("model", "kling-2.6-pro")
     if model not in UGC_MODELS:
         abort(400, "unknown model")
-    template = b.get("template", "selfie")
-    if template not in UGC_TEMPLATES:
+    template = b.get("template", "auto")
+    if template not in UGC_TEMPLATES and template != "auto":
         abort(400, "unknown template")
     voice = b.get("voice", "auto")
     if voice not in UGC_VOICES:
         abort(400, "unknown voice type")
+    gender = b.get("gender", "auto")
+    if gender not in UGC_GENDERS:
+        abort(400, "unknown voice gender")
+    accent = b.get("accent", "auto")
+    if accent not in UGC_ACCENTS:
+        abort(400, "unknown accent")
     emotion = b.get("emotion", "auto")
     if emotion not in UGC_EMOTIONS:
         abort(400, "unknown emotion")
@@ -6122,12 +6190,16 @@ def api_ugc_run():
     if not b.get("confirm_cost"):
         return jsonify({"needs_confirm": True, "estimate": est}), 402
 
+    if template == "auto":     # resolved only on the confirmed run (one AI call)
+        template = _ugc_pick_template(script, action, bool(product))
+
     slug = f"ugc-{time.strftime('%m%d-%H%M%S')}"
     out = I2V_OUT / slug
     out.mkdir(parents=True, exist_ok=True)
     cmd = [_cv_py(), str(UGC_ENGINE), "--image", str(avatar),
            "--template", template, "--action", action, "--script", script,
-           "--voice", voice, "--emotion", emotion, "--bg", bg,
+           "--voice", voice, "--gender", gender, "--accent", accent,
+           "--emotion", emotion, "--bg", bg,
            "--model", model, "--seconds", str(seconds),
            "--out", str(out), "--name", slug, "--env-file", str(FAL_ENV_FILE)]
     if product:
