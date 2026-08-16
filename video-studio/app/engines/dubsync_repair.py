@@ -144,19 +144,33 @@ def main() -> None:
         wav = work / f"new-vo-{stamp}.wav"
         run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(vo),
              "-ar", "44100", "-ac", "1", str(wav)], "voice -> wav for Wav2Lip")
-        cmd = [a.dub_python, a.lipsync, "--face", str(source), "--audio", str(wav),
-               "--out", str(out), "--restorer", a.restorer,
-               "--upscale", str(a.upscale), "--fidelity", str(a.fidelity)]
-        if a.restorer == "none":
-            cmd.append("--no-enhance")
-        print(f"re-running local lip-sync ({a.restorer}) on {source.name} — free, GPU", flush=True)
-        proc = subprocess.Popen(cmd, cwd=str(Path(a.lipsync).parent),
-                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                text=True, encoding="utf-8", errors="replace", bufsize=1)
-        for line in proc.stdout:
-            print(line.rstrip(), flush=True)
-        if proc.wait() != 0 or not out.is_file():
-            die("lip-sync failed — see the log above")
+
+        def try_lipsync(restorer: str) -> bool:
+            """One lip-sync attempt; returns True on success, False on CUDA OOM."""
+            cmd = [a.dub_python, a.lipsync, "--face", str(source), "--audio", str(wav),
+                   "--out", str(out), "--restorer", restorer,
+                   "--upscale", str(a.upscale), "--fidelity", str(a.fidelity)]
+            if restorer == "none":
+                cmd.append("--no-enhance")
+            print(f"re-running local lip-sync ({restorer}) on {source.name} — free, GPU", flush=True)
+            proc = subprocess.Popen(cmd, cwd=str(Path(a.lipsync).parent),
+                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                    text=True, encoding="utf-8", errors="replace", bufsize=1)
+            oom = False
+            for line in proc.stdout:
+                print(line.rstrip(), flush=True)
+                if "CUDA out of memory" in line or "CUBLAS_STATUS_ALLOC_FAILED" in line:
+                    oom = True
+            ok = proc.wait() == 0 and out.is_file()
+            return True if ok else (False if oom else die("lip-sync failed — see the log above"))
+
+        if not try_lipsync(a.restorer) and a.restorer != "none":
+            # 4 GB card: the face restorer is what OOMs — Wav2Lip alone fits.
+            print("fallback: Wav2Lip-only (face restorer hit CUDA OOM on the 4 GB card) — "
+                  "acceptable quality on close-ups", flush=True)
+            out.unlink(missing_ok=True)
+            if not try_lipsync("none"):
+                die("lip-sync failed even without the face restorer — GPU busy? try again")
         wav.unlink(missing_ok=True)
 
     if not out.is_file():

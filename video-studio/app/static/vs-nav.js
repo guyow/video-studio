@@ -33,6 +33,7 @@
         ["🧪 ComfyUI (raw)", "/studio", "direct image generation"],
       ] },
     ["🎙 Voices", "/voices", ["/voices"]],
+    ["🤖 Agent", "/agent", ["/agent"]],
     { label: "🧰 Tools", match: ["/tools", "/exports", "/editor", "/qc-lab", "/dubsync-lab",
                                  "/clone-lab", "/subtitles-lab", "/dubbing-lab", "/transcript-lab"],
       items: [

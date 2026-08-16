@@ -1404,6 +1404,24 @@ function costToast(c) {
   window._costToastT = setTimeout(() => { t.style.display = 'none'; t.textContent = ''; }, 9000);
 }
 
+// compact stage-map strip (same palette as vs.css .vs-sdot — pending gray ·
+// running blue pulse · done green · failed red · warned amber · skipped dashed)
+function stageStrip(stages) {
+  if (!stages || !stages.length) return '';
+  return '<span class="vs-stagestrip" style="margin-left:6px">' + stages.map(s =>
+    `<span class="vs-sdot ${s.status}" title="${s.label} — ${s.status}"></span>`).join('') + '</span>';
+}
+function nextStageHint(stages) {
+  if (!stages || !stages.length) return '';
+  const fail = stages.find(s => s.status === 'failed');
+  if (fail) return '⛔ failed at ' + fail.label;
+  const run = stages.find(s => s.status === 'running');
+  if (run) return '▶ ' + run.label + '…';
+  const warn = stages.find(s => s.status === 'warned');
+  if (warn) return '⚠ review ' + warn.label;
+  return '';
+}
+
 async function loadJobs() {
   const jobs = await api('/api/jobs');
   window._jobs = jobs;                        // used for per-stage durations on cards
@@ -1412,10 +1430,11 @@ async function loadJobs() {
     const pctTxt = (p && p.pct != null) ? ` — ${p.label} ${p.pct}%` : (p ? ` — ${p.label}` : '');
     const bar = (j.status === 'running' && p && p.pct != null)
       ? `<div class="jbar"><i style="width:${p.pct}%"></i></div>` : '';
+    const hint = nextStageHint(j.stages);
     return `<div class="job ${j.id === activeJob ? 'active' : ''}" onclick="watchJob('${j.id}')">
       ${j.status === 'running' ? '<span class="spin"></span>' : `<span class="dot ${j.status === 'done' ? 'ok' : (j.status === 'issues' ? 'warn' : 'bad')}"></span>`}
-      ${j.label}
-      <span class="status">${j.status}${j.status === 'running' ? pctTxt : ''}</span>
+      ${j.label}${stageStrip(j.stages)}
+      <span class="status">${j.status}${j.status === 'running' ? pctTxt : ''}${hint ? ' · ' + hint : ''}</span>
       ${j.status === 'running' ? `<button class="mini danger" onclick="event.stopPropagation();stopJob('${j.id}')" title="Cancel this job (source files are not harmed)">⏹</button>` : ''}
       ${bar}
     </div>`;

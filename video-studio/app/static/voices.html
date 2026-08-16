@@ -123,7 +123,23 @@
             <button class="iconbtn del" data-act="delete">delete</button>
           </div>
           ${v.sample ? `<audio controls preload="none" src="/media/${v.sample}"></audio>` : ""}
-          <div class="src">cloned from ${VS.esc(v.source || "?")}</div>`;
+          <div class="src">cloned from ${VS.esc(v.source || "?")}
+            ${v.has_fal_clone
+              ? ' · <b style="color:var(--ok)">☁ fal clone saved</b> — fal dubs with this actor skip the $1.50 fee'
+              : ' · <button class="iconbtn" data-act="falclone" title="One-time $1.50 — later fal dubs with this actor reuse it free">☁ pre-clone on fal ($1.50)</button>'}
+          </div>`;
+        const fc = el.querySelector('[data-act="falclone"]');
+        if (fc) fc.onclick = async () => {
+          if (!confirm(`Clone “${v.name}” on fal (MiniMax) for a one-time $1.50?\nEvery later fal dub with this actor then reuses it for free.`)) return;
+          try {
+            const d = await VS.post(`/api/voices/${encodeURIComponent(v.id)}/fal-clone`, {confirm_cost: true});
+            VS.toast("☁ cloning on fal — job " + d.job_id + " (watch it in Tools → Jobs)");
+          } catch (e) {
+            const est = e.body && e.body.estimate;
+            VS.toast(est && est.blocked ? (est.blocked_msg || "over the spend ceiling")
+                     : (e.body && e.body.error) || e.message);
+          }
+        };
         el.querySelector('[data-act="rename"]').onclick = async () => {
           const name = prompt("Rename voice:", v.name);
           if (!name) return;

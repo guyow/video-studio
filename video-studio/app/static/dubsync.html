@@ -245,6 +245,16 @@ function renderDetail(dub) {
   $("previewstrip").style.display = "none";
   $("stripnote").style.display = "none";
   $("vpnote").textContent = "";
+  // auto-advise card (written by the dub chain after every fal dub)
+  const an = $("advise-note");
+  if (dub.advise && an) {
+    an.style.display = "block";
+    const a = dub.advise;
+    an.innerHTML = a.recommend === "none"
+      ? `🩺 <b style="color:var(--ok)">Auto-advise: looks clean.</b> ${a.explanation || ""}`
+      : `🩺 <b style="color:var(--warn)">Auto-advise: ${a.recommend} recommended (free).</b> ${a.explanation || ""}
+         <button class="rowbtn" onclick="applyAdvise('${a.recommend}')">Apply ${a.recommend}</button>`;
+  }
   $("takes-wrap").style.display = dub.takes.length ? "block" : "none";
   const tk = $("takes");
   tk.innerHTML = "";
@@ -261,12 +271,32 @@ function renderDetail(dub) {
   }
 }
 
-async function promote(stem, file) {
-  if (!confirm(`Make “${file}” the new final for ${stem}? The current final is archived.`)) return;
-  const r = await fetch("/api/dub-promote", {method:"POST", headers:{"Content-Type":"application/json"},
-    body: JSON.stringify({stem, file})});
-  if (!r.ok) { alert(await r.text()); return; }
+async function promote(stem, file, force) {
+  if (!force && !confirm(`Make “${file}” the new final for ${stem}? It gets QA-checked first; the current final is archived and captions re-burn automatically.`)) return;
+  $("jobnote").textContent = "🔎 QA-checking the take…";
+  const r = await fetch("/api/dubsync/promote", {method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({stem, file, force: !!force})});
+  let d = null;
+  try { d = await r.json(); } catch (e) { /* html error */ }
+  if (r.status === 409 && d && d.qa) {
+    const bad = (d.qa.checks || []).filter(c => !c.pass && !c.warn)
+      .map(c => `${c.key}: ${c.value}`).join("\n");
+    if (confirm(`QA FAILED on this take:\n\n${bad}\n\nPromote it anyway?`))
+      return promote(stem, file, true);
+    $("jobnote").textContent = "⚠ promote cancelled — QA failed";
+    return;
+  }
+  if (!r.ok) { alert((d && d.error) || (d && d.message) || "promote failed"); $("jobnote").textContent = ""; return; }
+  $("jobnote").textContent = "⭐ promoted — QA " + (d.qa && d.qa.pass ? "PASS" : "checked") +
+    (d.caption_job ? " · captions re-burning (free)" : "");
   await loadDubs(true);
+}
+
+async function applyAdvise(action) {
+  if (!SEL) return;
+  const radio = document.querySelector(`input[name="fix"][value="${action}"]`);
+  if (radio && !radio.disabled) radio.checked = true;
+  $("btn-run").click();
 }
 
 // ---------- visual repair: lip-box drawing (letterbox-aware, coords in true video px)

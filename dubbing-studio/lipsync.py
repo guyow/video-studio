@@ -267,9 +267,14 @@ if __name__ == "__main__":
     ap.add_argument("--fidelity", type=float, default=0.7,
                     help="CodeFormer identity fidelity 0-1 (higher = more faithful)")
     ap.add_argument("--no-enhance", action="store_true", help="Wav2Lip only, skip restore")
+    ap.add_argument("--wav2lip-batch", type=int, default=16,
+                    help="Wav2Lip batch size (lower it on OOM; default 16 fits 4 GB)")
+    ap.add_argument("--facedet-batch", type=int, default=4,
+                    help="face-detector batch size (lower it on OOM; default 4)")
     a = ap.parse_args()
     for s in (sys.stdout, sys.stderr):
         with contextlib.suppress(Exception):
             s.reconfigure(encoding="utf-8")
     lipsync_video(a.face, a.audio, a.out, enhance=not a.no_enhance,
-                  restorer=a.restorer, upscale=a.upscale, fidelity=a.fidelity)
+                  restorer=a.restorer, upscale=a.upscale, fidelity=a.fidelity,
+                  wav2lip_batch=a.wav2lip_batch, facedet_batch=a.facedet_batch)

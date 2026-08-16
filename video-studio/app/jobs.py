@@ -29,12 +29,31 @@ FLUSH_EVERY = 2.0        # seconds between persistence sweeps
 GPU_MARKERS = ("transcribe.py", "caption.py", "recaption.py", "erase_subs.py", "local_dub.py",
                # b-roll generation drives ComfyUI, which owns the whole 4 GB card while
                # it samples — serialize it with the rest or both jobs thrash.
-               "broll_factory.py")
+               "broll_factory.py",
+               # QA transcribes with faster-whisper when the caption cache is stale
+               "qa_vsl.py")
 
 jobs: dict[str, dict] = {}
 jobs_lock = threading.Lock()
 GPU_LOCK = threading.Lock()  # the 4GB GPU fits exactly one AI engine run
 _meta: dict[str, dict] = {}  # flusher bookkeeping, kept out of the job dicts
+
+# optional event sink (server registers its events.jsonl emitter here — jobs.py
+# can't import the server without a cycle)
+_event_hook = None
+
+
+def set_event_hook(fn) -> None:
+    global _event_hook
+    _event_hook = fn
+
+
+def emit(event_type: str, payload: dict) -> None:
+    if _event_hook:
+        try:
+            _event_hook(event_type, payload)
+        except Exception:  # noqa: BLE001 — events must never break a job
+            pass
 
 
 # ---------------------------------------------------------------- creation
@@ -57,6 +76,7 @@ def create(action: str, slug: str, label: str, **extra) -> str:
     job.update(extra)
     with jobs_lock:
         jobs[job_id] = job
+    emit("job-created", {"id": job_id, "action": action, "slug": slug, "label": label})
     return job_id
 
 

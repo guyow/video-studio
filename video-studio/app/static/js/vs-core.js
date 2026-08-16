@@ -206,4 +206,156 @@ Output only the script.`;
     await pollJobs();
     setInterval(loop, 3000);
   };
+
+  // ── stage-map components ───────────────────────────────────────────────────
+  // One contract, two consumers: /api/jobs & /api/job/<id> ship a `stages`
+  // array for dub jobs; these render it. Colors are information — the same
+  // palette everywhere: pending gray · running blue pulse · done green ·
+  // failed red · warned amber · skipped dashed (see vs.css .vs-sdot).
+  VS.stageStrip = stages => {
+    if (!stages || !stages.length) return "";
+    return '<span class="vs-stagestrip">' + stages.map(s =>
+      `<span class="vs-sdot ${s.status}" title="${VS.esc(s.label)} — ${s.status}"></span>`
+    ).join("") + "</span>";
+  };
+
+  // the "what should I do now?" line — every card answers it at a glance
+  VS.nextStageHint = stages => {
+    if (!stages || !stages.length) return "";
+    const fail = stages.find(s => s.status === "failed");
+    if (fail) return "⛔ failed at " + fail.label;
+    const run = stages.find(s => s.status === "running");
+    if (run) return "▶ " + run.label + "…";
+    const warn = stages.find(s => s.status === "warned");
+    if (warn) return "⚠ review " + warn.label;
+    const pend = stages.find(s => s.status === "pending");
+    return pend ? "next: " + pend.label : "✓ complete";
+  };
+
+  VS.qaCard = meta => {
+    if (!meta || !meta.verdict) return "";
+    const checks = (meta.checks || []).map(c =>
+      `<div class="vs-qcheck ${c.pass ? "ok" : (c.warn ? "warn" : "bad")}">` +
+      `${c.pass ? "✓" : (c.warn ? "⚠" : "✗")} <b>${VS.esc(c.key)}</b> ${VS.esc(String(c.value ?? ""))}` +
+      (c.fix && !c.pass ? `<span class="vs-qfix">${VS.esc(c.fix)}</span>` : "") + "</div>").join("");
+    return `<div class="vs-qacard ${meta.verdict === "PASS" ? "pass" : "fail"}">` +
+      `<div class="vs-qverdict">QA ${VS.esc(meta.verdict)}</div>${checks}</div>`;
+  };
+
+  VS.stageDetail = stages => {
+    if (!stages || !stages.length) return "";
+    return '<div class="vs-stagedetail">' + stages.map(s => {
+      const dur = (s.started && s.finished) ? ` <span class="vs-sdur">${Math.max(1, Math.round(s.finished - s.started))}s</span>` : "";
+      const art = s.artifact ? ` <a class="vs-sart" href="/media/${VS.esc(s.artifact)}" target="_blank">▸ open</a>` : "";
+      const note = s.note ? `<div class="vs-snote">🤖 ${VS.esc(s.note.note || s.note)}</div>` : "";
+      const qa = (s.key === "qa" && s.meta) ? VS.qaCard(s.meta) : "";
+      return `<div class="vs-srow"><span class="vs-sdot ${s.status}"></span>` +
+        `<span class="vs-slabel">${VS.esc(s.label)}</span>` +
+        `<span class="vs-sstate ${s.status}">${s.status}</span>${dur}${art}${note}${qa}</div>`;
+    }).join("") + "</div>";
+  };
+
+  // ── fal health pill ────────────────────────────────────────────────────────
+  VS.falPill = async el => {
+    if (!el) return;
+    el.className = "vs-falpill";
+    el.textContent = "fal …";
+    try {
+      const st = await VS.api("/api/fal/status");
+      el.classList.add(st.valid ? "ok" : "bad");
+      el.innerHTML = st.valid
+        ? `● fal OK <span class="vs-falkey">${VS.esc(st.key_masked || "")}</span>`
+        : `● fal blocked — <a href="https://fal.ai/dashboard/billing" target="_blank">top up</a> or replace the key`;
+      el.title = st.message || "";
+    } catch (e) { el.classList.add("bad"); el.textContent = "fal status unavailable"; }
+  };
+
+  // ── Hermes chat (shared) ───────────────────────────────────────────────────
+  // Mounts the founder ↔ Hermes chat (two-way mirror of the sg-hermes Telegram
+  // group) into any container. Used on /agent and inside the UGC Factory.
+  VS.chatMount = (root, opts) => {
+    if (!root || root._vsChat) return;
+    root._vsChat = true;
+    opts = opts || {};
+    root.innerHTML =
+      '<div class="vs-chathead"><span>💬 ' + VS.esc(opts.title || "Chat with Hermes") + "</span>" +
+      '<span class="vs-tgpill off">connecting…</span></div>' +
+      '<div class="vs-chatbox"><div class="vs-hint">no messages yet — say hi 👋</div></div>' +
+      '<div class="vs-chatin"><input placeholder="' +
+      VS.esc(opts.placeholder || "message Hermes — lands in the sg-hermes Telegram group") +
+      '" autocomplete="off"><button class="vs-btn">Send</button></div>' +
+      '<div class="vs-hint vs-tghint"></div>';
+    const box = root.querySelector(".vs-chatbox"), pill = root.querySelector(".vs-tgpill"),
+          hint = root.querySelector(".vs-tghint"), inp = root.querySelector("input"),
+          btn = root.querySelector(".vs-chatin .vs-btn");
+    let lastId = 0, rows = [];
+    const bubble = m => {
+      const who = m.author === "founder" ? (m.source === "telegram" ? "you · via Telegram" : "you")
+        : (m.name || m.author) + (m.source === "telegram" ? " · Telegram" : "");
+      const cls = m.author === "founder" ? "founder" : (m.author === "hermes" ? "hermes" : "member");
+      return '<div class="vs-bubble ' + cls + '"><span class="who">' + VS.esc(who) + " · " +
+        new Date(m.at * 1000).toTimeString().slice(0, 5) + "</span>" + VS.esc(m.text) + "</div>";
+    };
+    async function load() {
+      try {
+        const d = await VS.api("/api/chat?since=" + lastId);
+        const t = d.telegram || {};
+        // three states: direct Telegram bridge · Hermes relaying over the
+        // tailnet (fresh hermes message) · nothing connected yet
+        const relayFresh = d.relay && d.relay.last_hermes &&
+          (Date.now() / 1000 - d.relay.last_hermes) < 6 * 3600;
+        if (t.connected) {
+          pill.className = "vs-tgpill ok"; pill.textContent = "● " + (t.group || "Telegram");
+          hint.textContent = "";
+        } else if (relayFresh) {
+          pill.className = "vs-tgpill ok"; pill.textContent = "● via Hermes relay";
+          hint.textContent = "";
+        } else {
+          pill.className = "vs-tgpill off"; pill.textContent = "Telegram off";
+          hint.textContent = t.error
+            ? "⚠ " + t.error + " — messages still reach Hermes via the studio feed" : "";
+        }
+        if (d.messages && d.messages.length) {
+          const atBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 40;
+          lastId = d.last_id;
+          rows = rows.concat(d.messages.map(bubble)).slice(-200);
+          box.innerHTML = rows.join("");
+          if (atBottom || rows.length <= d.messages.length) box.scrollTop = box.scrollHeight;
+        }
+      } catch (e) { /* server briefly away */ }
+    }
+    async function send() {
+      const text = inp.value.trim();
+      if (!text) return;
+      inp.value = ""; inp.focus();
+      try {
+        const d = await VS.post("/api/chat", {text});
+        if (d.telegram === false) VS.toast("sent to the studio feed — Telegram bridge not connected");
+        load();
+      } catch (e) { VS.toast("send failed: " + e.message); inp.value = text; }
+    }
+    btn.onclick = send;
+    inp.addEventListener("keydown", e => { if (e.key === "Enter") send(); });
+    load();
+    setInterval(() => { if (!document.hidden) load(); }, opts.interval || 4000);
+  };
+
+  // ── pending-plans nav badge (Agent tab) ────────────────────────────────────
+  async function pollPlans() {
+    try {
+      const d = await VS.api("/api/plans?status=pending");
+      const n = (d.plans || []).length;
+      VS.state.pendingPlans = d.plans || [];
+      VS.emit("plans", d.plans || []);
+      const tab = document.querySelector('#vs-shell a[href="/agent"]');
+      if (tab) {
+        let b = tab.querySelector(".vs-navbadge");
+        if (n && !b) { b = document.createElement("span"); b.className = "vs-navbadge"; tab.appendChild(b); }
+        if (b) { b.textContent = n; b.style.display = n ? "" : "none"; }
+      }
+    } catch (e) { /* ignore */ }
+  }
+  VS.pollPlans = pollPlans;
+  setTimeout(pollPlans, 800);
+  setInterval(() => { if (!document.hidden) pollPlans(); }, 30000);
 })();

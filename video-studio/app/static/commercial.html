@@ -80,6 +80,16 @@
 <!-- ═══════════════════ UGC FACTORY ═══════════════════ -->
 <div class="twocol" id="mode-ugc" style="display:none">
   <section>
+    <div class="vs-panel" id="uchat"></div>
+    <div class="vs-panel" id="udraft" style="display:none;border-color:var(--accent2)">
+      <h3>🤖 Agent draft — review before generating</h3>
+      <div class="vs-hint" id="udraft-meta"></div>
+      <div id="udraft-note" style="margin:6px 0 10px;font-size:13px"></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="vs-btn" id="udraft-apply">✍ Fill the form with it</button>
+        <button class="vs-btn ghost" id="udraft-dismiss">✕ Dismiss</button>
+      </div>
+    </div>
     <div class="vs-panel">
       <h3><span class="stepno">1</span>Template</h3>
       <div class="tplgrid" id="utpl">
@@ -90,6 +100,7 @@
         <div class="tpl" data-t="mirror">🪞 Mirror<small>filming into the mirror</small></div>
         <div class="tpl" data-t="stream">🖥 Stream<small>webcam + ring-light look</small></div>
         <div class="tpl" data-t="static">🎥 Static<small>fixed tripod, straight to lens</small></div>
+        <div class="tpl" data-t="vsl">📈 VSL<small>video sales letter — founder at desk</small></div>
       </div>
     </div>
 
@@ -191,6 +202,22 @@
       <div class="vs-hint" style="margin-top:10px">Background sound</div>
       <input class="vs-in" id="ubg" style="width:100%;margin-top:5px"
         placeholder="e.g. quiet café hum, soft lo-fi music, birds outside the car window">
+    </div>
+
+    <div class="vs-panel">
+      <h3><span class="stepno">6</span>Captions <span class="r vs-hint">VSL karaoke style</span></h3>
+      <label class="vs-hint" style="display:flex;gap:8px;align-items:center">
+        <input type="checkbox" id="ucap" checked>
+        burn word-by-word VSL captions <b style="color:var(--ok)">FREE · local</b>
+      </label>
+      <textarea class="vs-ta" id="ucaptext" rows="3" style="margin-top:8px"
+        placeholder="caption text (optional) — leave empty to caption the spoken words automatically. Paste your exact VSL copy here and it burns word-for-word; the timing still follows the voice."></textarea>
+      <input class="vs-in" id="ucapkeys" style="width:100%;margin-top:8px"
+        placeholder="gold words (optional) — comma-separated words/phrases held in gold, e.g. Fairy Flame, no crash, link below">
+      <div class="vs-hint" style="margin-top:6px;opacity:.85">Bold rounded face (Baloo 2) · ALL CAPS ·
+        3 words per line · word-by-word karaoke · active word pops in liitt gold · keyword phrases stay
+        gold — the exact cr_test2 reference style. clip.mp4 stays clean; the deliverable is
+        clip-captioned.mp4.</div>
     </div>
 
     <div class="vs-panel" style="border-color:var(--accent)">
@@ -507,7 +534,9 @@
     const body = {image: UIMG.av, product: UIMG.pr || "", template: uTemplate,
       action: $("#uaction").value.trim(), script: $("#uscript").value.trim(),
       voice, voice_id: bankVoice, emotion: $("#uemotion").value, bg: $("#ubg").value.trim(),
-      model: $("#umodel").value, seconds: uSeconds, lipsync: $("#ulipsync").value};
+      model: $("#umodel").value, seconds: uSeconds, lipsync: $("#ulipsync").value,
+      captions: $("#ucap").checked, caption_text: $("#ucaptext").value.trim(),
+      caption_keywords: $("#ucapkeys").value.trim()};
     const hdr = {"Content-Type": "application/json"};
     uBusy = true; $("#ugo").disabled = true; $("#ugomsg").textContent = "";
     try {
@@ -546,6 +575,75 @@
     if (status === "done") { $("#uproglbl").textContent = "✅ done"; VS.toast("✅ UGC video ready"); loadClips(); }
     else { $("#uproglbl").textContent = "❌ " + status; VS.toast("Failed — see the log"); }
   }
+
+  /* ──────────────── agent draft: the agent pre-fills this form so the founder
+     sees the planned generation BEFORE anything runs. Nothing auto-executes —
+     the 402 cost confirm still gates the run. ──────────────── */
+  let uDraftSeen = 0;
+  function uApplyDraft(f) {
+    if (f.template) { const t = document.querySelector(`#utpl .tpl[data-t="${f.template}"]`);
+      if (t) { uTemplate = f.template;
+        document.querySelectorAll("#utpl .tpl").forEach(x => x.classList.toggle("on", x === t)); } }
+    if (f.model && document.querySelector(`#umodel option[value="${f.model}"]`))
+      $("#umodel").value = f.model;
+    if (f.seconds != null) { const chip = document.querySelector(`#ulen [data-s="${f.seconds}"]`);
+      if (chip) { uSeconds = String(f.seconds);
+        document.querySelectorAll("#ulen .chipbtn").forEach(b => b.classList.toggle("on", b === chip)); } }
+    for (const [key, sel] of [["action", "#uaction"], ["script", "#uscript"], ["bg", "#ubg"]])
+      if (typeof f[key] === "string") $(sel).value = f[key];
+    if (f.voice_id && document.querySelector(`#uvoice option[value="bank:${f.voice_id}"]`))
+      $("#uvoice").value = "bank:" + f.voice_id;
+    else if (f.voice && document.querySelector(`#uvoice option[value="${f.voice}"]`))
+      $("#uvoice").value = f.voice;
+    if (f.emotion && document.querySelector(`#uemotion option[value="${f.emotion}"]`))
+      $("#uemotion").value = f.emotion;
+    if (f.lipsync && document.querySelector(`#ulipsync option[value="${f.lipsync}"]`))
+      $("#ulipsync").value = f.lipsync;
+    if (typeof f.captions === "boolean") $("#ucap").checked = f.captions;
+    if (typeof f.caption_text === "string") $("#ucaptext").value = f.caption_text;
+    if (typeof f.caption_keywords === "string") $("#ucapkeys").value = f.caption_keywords;
+    for (const [key, slot, box] of [["image", "av", "#uav"], ["product", "pr", "#upr"]])
+      if (f[key]) { UIMG[slot] = f[key];
+        $(box).querySelector(".msg").innerHTML =
+          "🤖 from agent draft:<br><span class='vs-hint'>" + VS.esc(String(f[key]).split("/").pop()) + "</span>"; }
+    uEstimate();
+  }
+  async function uCheckDraft() {
+    try {
+      const d = await VS.api("/api/drafts/ugc");
+      const dr = d.draft;
+      if (!dr || dr.created === uDraftSeen) { if (!dr) $("#udraft").style.display = "none"; return; }
+      uDraftSeen = dr.created;
+      $("#udraft").style.display = "";
+      $("#udraft-meta").textContent = `by ${dr.author} · ${VS.fmtAgo(dr.created)}` +
+        (dr.fields.script ? ` · ${String(dr.fields.script).trim().split(/\s+/).length} words` : "");
+      $("#udraft-note").textContent = dr.note || "";
+      const fields = Object.entries(dr.fields)
+        .filter(([k, v]) => v != null && String(v).trim() !== "")
+        .map(([k, v]) => `${k}: ${String(v).slice(0, 120)}`).join("\n");
+      $("#udraft-note").textContent = (dr.note ? dr.note + "\n\n" : "") + fields;
+      $("#udraft-note").style.whiteSpace = "pre-wrap";
+      if (document.querySelector("#mode-ugc").style.display !== "none")
+        VS.toast("🤖 the agent drafted a UGC generation — review it at the top of the form");
+    } catch (e) { /* ignore */ }
+  }
+  $("#udraft-apply").onclick = () => {
+    VS.api("/api/drafts/ugc").then(d => {
+      if (d.draft) { uApplyDraft(d.draft.fields);
+        VS.toast("✍ form filled from the draft — review, then Generate"); }
+    });
+  };
+  $("#udraft-dismiss").onclick = async () => {
+    await VS.post("/api/drafts/ugc/clear", {});
+    $("#udraft").style.display = "none";
+  };
+  uCheckDraft();
+  setInterval(() => { if (!document.hidden) uCheckDraft(); }, 15000);
+
+  // Hermes chat inside the factory — talk it over BEFORE generating; Hermes
+  // answers here (and can drop a draft into the panel above)
+  VS.chatMount($("#uchat"), {placeholder:
+    "ask Hermes to plan this UGC — e.g. “draft me a podcast ad for Fairy Flame”"});
 
   /* ════════════════════ TEXT → COMMERCIAL ════════════════════ */
   let lengthS = 30, aspect = "9:16", busy = false, t2vModels = [];
@@ -716,13 +814,16 @@
         el.className = "clipcard";
         const running = c.job && c.job.status === "running";
         const badge = c.slug.startsWith("ugc-") ? "🤳 UGC" : "📺 Commercial";
+        // prefer the captioned deliverable when the pipeline burned one
+        const best = c.captioned || c.clip;
         el.innerHTML = (c.ready
-            ? `<video controls preload="none" src="/media/${c.clip}?v=${c.clip_mtime}"></video>`
+            ? `<video controls preload="none" src="/media/${best}?v=${c.clip_mtime}"></video>`
             : `<div style="padding:40px;text-align:center;color:var(--dim)">${running ? "⏳ filming…" : "❌ failed"}</div>`)
-          + `<div class="meta">${badge} · ${VS.esc((c.prompt || c.slug).slice(0, 64))}<br>
+          + `<div class="meta">${badge}${c.captioned ? ' · <b style="color:var(--ok)">📝 captioned</b>' : ""} · ${VS.esc((c.prompt || c.slug).slice(0, 64))}<br>
              ~$${(c.est_cost || 0).toFixed(2)}
-             ${c.ready ? `· <a href="#" data-send="${VS.esc(c.clip)}">send to Desktop</a>
-               · <a href="/media/${c.clip}" download>download</a>` : ""}</div>`;
+             ${c.ready ? `· <a href="#" data-send="${VS.esc(best)}">send to Desktop</a>
+               · <a href="/media/${best}" download>download</a>
+               ${c.captioned ? `· <a href="/media/${c.clip}" download>no-captions version</a>` : ""}` : ""}</div>`;
         const send = el.querySelector("[data-send]");
         if (send) send.onclick = async ev => {
           ev.preventDefault();

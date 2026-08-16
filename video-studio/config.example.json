@@ -29,9 +29,20 @@
   "brand_out": "<REPO_ROOT>/autoVSL/output/brand-content",
   "remote_pin": "000000",
   "secret_key": "",
+  "agent_token": "",
+  "telegram_api_id": null,
+  "telegram_api_hash": "",
+  "telegram_group": "sg-hermes",
   "lan_access": true,
   "auto_cleanup": {
     "enabled": true,
     "delay_hours": 24.0
-  }
+  },
+  "spend_ceiling_usd": 15,
+  "spend_ceiling_window": "day",
+  "auto_caption": true,
+  "auto_qa": true,
+  "auto_advise": true,
+  "auto_qc": true,
+  "webhook_url": ""
 }

@@ -25,13 +25,36 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 READY_DIR = Path.home() / "Desktop" / "liitt testimonial Ready"
 
-# House caption style — pro social captions: Arial Black scaled to the video,
-# thick outline + soft shadow, active word popped in liitt gold (karaoke).
+# House caption style — the cr_test2 reference format: bold ROUNDED sans-serif,
+# white fill + heavy black outline, word-by-word karaoke, lower third, active
+# word popped in liitt gold, keyword phrases held in gold persistently.
 WORDS_PER_LINE = 3
-FONT = "Arial Black"                 # heavy social-caption face; ships with Windows
+FONTS_DIR = Path(__file__).resolve().parent / "fonts"
+_BALOO = FONTS_DIR / "baloo-2-v23-latin-800.ttf"
+# rounded face matches the reference; Arial Black stays the fallback when the
+# font file is missing on a fresh checkout
+FONT = "Baloo 2 ExtraBold" if _BALOO.is_file() else "Arial Black"
 HILITE = "&H0042C5F5"                # liitt gold #F5C542 (ASS is &H00BBGGRR)
 BRAND = "līītt"
 BRAND_ALIASES = {"lit", "litt", "liit", "liitt", "leet", "lift"}
+
+
+def _norm(w: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", w.lower())
+
+
+def mark_keywords(words: list[dict], phrases: list[str]) -> None:
+    """Flag the words covered by any keyword phrase (consecutive match) so the
+    renderer holds them in gold — the reference's 'yellow keyword highlight'."""
+    seq = [_norm(w["text"]) for w in words]
+    for phrase in phrases:
+        toks = [_norm(t) for t in phrase.split() if _norm(t)]
+        if not toks:
+            continue
+        for i in range(len(seq) - len(toks) + 1):
+            if seq[i:i + len(toks)] == toks:
+                for k in range(i, i + len(toks)):
+                    words[k]["gold"] = True
 
 
 def cap_size(video_h: int) -> int:
@@ -175,35 +198,70 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     # one event per active word: the full line each time, the spoken word popped
     # in liitt gold. Windows chain word-start → next-word-start, so no flicker.
     events: list[str] = []
+
+    def styled(g: list[dict], toks: list[str], active: int) -> str:
+        """Active word: gold + popped. Keyword words: held gold. Rest: white."""
+        parts = []
+        for j, t in enumerate(toks):
+            if j == active:
+                parts.append("{\\1c" + HILITE + "\\fscx108\\fscy108}" + t + "{\\r}")
+            elif g[j].get("gold"):
+                parts.append("{\\1c" + HILITE + "}" + t + "{\\r}")
+            else:
+                parts.append(t)
+        return " ".join(parts)
+
     for g in lines:
         toks = [render_word(w["text"].strip()) for w in g]
         if len(toks) == 1:
-            events.append(f"Dialogue: 0,{_ass_time(g[0]['start'])},{_ass_time(g[-1]['end'])},Cap,,0,0,0,,{toks[0]}")
+            events.append(f"Dialogue: 0,{_ass_time(g[0]['start'])},{_ass_time(g[-1]['end'])},Cap,,0,0,0,,"
+                          + styled(g, toks, 0))
             continue
         for i, w in enumerate(g):
             s = g[0]["start"] if i == 0 else w["start"]
             e = g[-1]["end"] if i == len(g) - 1 else g[i + 1]["start"]
             if e <= s:
                 continue
-            parts = [("{\\1c" + HILITE + "\\fscx108\\fscy108}" + t + "{\\r}") if j == i else t
-                     for j, t in enumerate(toks)]
-            events.append(f"Dialogue: 0,{_ass_time(s)},{_ass_time(e)},Cap,,0,0,0,," + " ".join(parts))
+            events.append(f"Dialogue: 0,{_ass_time(s)},{_ass_time(e)},Cap,,0,0,0,," + styled(g, toks, i))
     out_path.write_text(header + "\n".join(events) + "\n", encoding="utf-8")
+
+
+def refit_text(words: list[dict], text: str) -> list[dict]:
+    """Burn the USER'S exact wording instead of whisper's: keep the recognized
+    word timeline, map the provided words onto it proportionally (1:1 swap when
+    the counts match). The karaoke rhythm survives; the words are verbatim."""
+    toks = text.split()
+    if not toks or not words:
+        return words
+    n_rec = len(words)
+    out = []
+    for i, tok in enumerate(toks):
+        a = min(int(i * n_rec / len(toks)), n_rec - 1)
+        b = max(a + 1, min(int((i + 1) * n_rec / len(toks)) or 1, n_rec))
+        out.append({"text": " " + tok, "start": words[a]["start"],
+                    "end": words[b - 1]["end"]})
+    return out
 
 
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--name", help="script-swap work dir name (caption a dubbed final)")
     ap.add_argument("--video", help="caption an uploads video directly — word timing from its ORIGINAL audio")
+    ap.add_argument("--text", help="exact caption text (timing still comes from the audio)")
+    ap.add_argument("--keywords", help="comma-separated words/phrases held in gold "
+                                       "(the reference style's yellow keyword highlight)")
     args = ap.parse_args()
-    if bool(args.name) == bool(args.video):
-        sys.exit("pass exactly one of --name or --video")
+    if not (args.name or args.video):
+        sys.exit("pass --name (dubbed final) or --video (any file; add --name to pick the workdir)")
+    # stage marker for the studio's stage map (dub.py prints its own when chaining)
+    print("=== stage: captions ===", flush=True)
 
     if args.video:
         final = Path(args.video).resolve()
         if not final.is_file():
             sys.exit(f"no such video: {final}")
-        name = final.stem
+        # --name alongside --video names the workdir (UGC clips are all clip.mp4)
+        name = args.name or final.stem
         work = ROOT / "output" / "recaption" / name
         work.mkdir(parents=True, exist_ok=True)
         vo = final  # whisper reads the audio track straight out of the video
@@ -223,7 +281,18 @@ def main() -> int:
         deliverable_name = f"{name}-ready-captioned.mp4"
         get_margin = cleaned_band_margin
 
+    if args.text and args.video:
+        # prime whisper with the intended wording (helps brand words align);
+        # --name mode must NOT touch script-edited.txt — that's the dub's script
+        (work / "script-edited.txt").write_text(args.text, encoding="utf-8")
     words = words_from_vo(vo, work)
+    if args.text:
+        words = refit_text(words, args.text.strip())
+        print(f"captions: using the provided text verbatim ({len(args.text.split())} words)")
+    if args.keywords:
+        phrases = [p.strip() for p in args.keywords.replace("·", ",").split(",") if p.strip()]
+        mark_keywords(words, phrases)
+        print(f"captions: {sum(1 for w in words if w.get('gold'))} keyword words held in gold")
 
     probe = subprocess.run(
         ["ffprobe", "-v", "error", "-select_streams", "v:0",
@@ -238,10 +307,15 @@ def main() -> int:
     build_ass(words, ass, vw, vh, margin_v=band)
     print(f"captions: {ass.name} built for {vw}x{vh}")
 
-    # subtitles filter path escaping (Windows: forward slashes + escaped colon)
+    # subtitles filter path escaping (Windows: forward slashes + escaped colon);
+    # fontsdir ships the rounded Baloo 2 face with the repo — no font install
     ass_esc = str(ass).replace("\\", "/").replace(":", "\\:")
+    vf = f"subtitles='{ass_esc}'"
+    if _BALOO.is_file():
+        fonts_esc = str(FONTS_DIR).replace("\\", "/").replace(":", "\\:")
+        vf += f":fontsdir='{fonts_esc}'"
     proc = subprocess.run(
-        ["ffmpeg", "-y", "-i", str(final), "-vf", f"subtitles='{ass_esc}'",
+        ["ffmpeg", "-y", "-i", str(final), "-vf", vf,
          "-c:v", "libx264", "-crf", "18", "-preset", "medium", "-c:a", "copy", str(out)],
         capture_output=True, text=True, encoding="utf-8", errors="replace")
     if proc.returncode != 0 or not out.is_file():

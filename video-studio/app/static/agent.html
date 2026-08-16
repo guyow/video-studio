@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Video Studio — Agent</title>
+<link rel="stylesheet" href="/static/vs-creator.css">
+<link rel="stylesheet" href="/static/vs.css">
+<script src="/static/vs-nav.js" defer></script>
+<style>
+  body { background:var(--bg); margin:0; }
+  .plan-card { background:var(--panel2); border:1px solid var(--line); border-radius:12px;
+               padding:14px 16px; margin-bottom:12px; }
+  .plan-card.pending { border-color:var(--warn); }
+  .plan-title { font-weight:800; font-size:14.5px; }
+  .plan-meta { color:var(--dim); font-size:11.5px; margin:3px 0 8px; }
+  .plan-steps { margin:0 0 8px 18px; font-size:13px; }
+  .plan-steps li { margin-bottom:2px; }
+  .plan-cost { color:var(--warn); font-weight:700; }
+  .plan-asks { background:var(--panel); border-radius:8px; padding:7px 10px; font-size:12.5px;
+               margin-bottom:10px; }
+  .plan-actions { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .plan-actions input { flex:1; min-width:160px; background:var(--panel); color:var(--text);
+                        border:1px solid var(--line); border-radius:8px; padding:8px 10px; font-size:12.5px; }
+  .plan-status { font-size:11px; font-weight:800; text-transform:uppercase; letter-spacing:.5px; }
+  .plan-status.approved { color:var(--ok); } .plan-status.rejected { color:var(--bad); }
+  .plan-status.pending { color:var(--warn); } .plan-status.executing { color:var(--accent2); }
+  .plan-status.done { color:var(--dim); }
+  .feed { max-height:520px; overflow:auto; font-size:12.5px; }
+  .feed-row { display:flex; gap:9px; padding:6px 4px; border-bottom:1px solid var(--line);
+              align-items:baseline; }
+  .feed-row:last-child { border-bottom:0; }
+  .feed-t { color:var(--dim); font-family:var(--mono); font-size:11px; flex:none; }
+  .feed-flag { flex:none; }
+  .feed-row.bad .feed-msg { color:var(--bad); }
+  .feed-row.warn .feed-msg { color:var(--warn); }
+  .feed-row.note .feed-msg { color:var(--accent2); }
+  .spend-row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-bottom:16px; }
+  #chatmount .vs-chatbox { max-height:420px; }
+</style>
+</head>
+<body>
+<header class="vs-head"><h1>🤖 Agent <b>panel</b></h1>
+  <div class="sub">Hermes execution plans, live stage feed, spend ledger — approve paid work here</div>
+</header>
+<main class="vs-page">
+  <div class="spend-row">
+    <span id="falpill"></span>
+    <div class="vs-chip"><b id="sp-today">…</b><span>spent today</span></div>
+    <div class="vs-chip"><b id="sp-total">…</b><span>fal total</span></div>
+    <div class="vs-chip"><b id="sp-ceiling">…</b><span>daily ceiling</span></div>
+  </div>
+
+  <div class="vs-panel" id="chatmount"></div>
+
+  <div class="vs-panel">
+    <h3>⏳ Pending plans <span class="r" id="pending-count"></span></h3>
+    <div id="pending"><div class="vs-hint">no pending plans — Hermes hasn't asked for anything</div></div>
+  </div>
+
+  <div class="vs-panel">
+    <h3>📡 Live stage feed</h3>
+    <div class="feed" id="feed"><div class="vs-hint">waiting for events…</div></div>
+  </div>
+
+  <div class="vs-panel">
+    <h3>🗂 Recent plans</h3>
+    <div id="history"><div class="vs-hint">none yet</div></div>
+  </div>
+</main>
+
+<script src="/static/js/vs-core.js"></script>
+<script>
+(async () => {
+  const $ = VS.$;
+
+  VS.falPill($("#falpill"));
+
+  async function loadSpend() {
+    try {
+      const [s, d] = await Promise.all([VS.api("/api/spend"), VS.api("/api/spend/daily")]);
+      $("#sp-today").textContent = "$" + (d.today || 0).toFixed(2);
+      $("#sp-total").textContent = "$" + (s.total || 0).toFixed(2);
+      $("#sp-ceiling").textContent = d.ceiling_usd ? ("$" + d.ceiling_usd + "/" + (d.window || "day")) : "off";
+    } catch (e) { /* ignore */ }
+  }
+
+  function planCard(p, withActions) {
+    const steps = (p.steps || []).map(s =>
+      "<li>" + VS.esc(typeof s === "string" ? s : (s.step || JSON.stringify(s))) +
+      (s && s.cost ? ' <span class="plan-cost">$' + Number(s.cost).toFixed(2) + "</span>" : "") + "</li>").join("");
+    return '<div class="plan-card ' + VS.esc(p.status) + '" data-id="' + VS.esc(p.id) + '">' +
+      '<div class="plan-title">' + VS.esc(p.title) + ' <span class="plan-status ' + VS.esc(p.status) + '">' + VS.esc(p.status) + "</span></div>" +
+      '<div class="plan-meta">by ' + VS.esc(p.author || "?") + " · " + VS.fmtAgo(p.created) +
+      (p.cost_estimate != null ? ' · est. <span class="plan-cost">$' + Number(p.cost_estimate).toFixed(2) + "</span>" : "") +
+      (p.comment ? " · “" + VS.esc(p.comment) + "”" : "") + "</div>" +
+      (steps ? '<ol class="plan-steps">' + steps + "</ol>" : "") +
+      (p.asks ? '<div class="plan-asks">🙏 ' + VS.esc(p.asks) + "</div>" : "") +
+      (withActions
+        ? '<div class="plan-actions"><input placeholder="comment (optional)" class="pc">' +
+          '<button class="vs-btn ok-btn">✅ Approve</button>' +
+          '<button class="vs-btn ghost no-btn">❌ Reject</button></div>'
+        : "") + "</div>";
+  }
+
+  async function loadPlans() {
+    try {
+      const d = await VS.api("/api/plans");
+      const plans = d.plans || [];
+      const pending = plans.filter(p => p.status === "pending");
+      $("#pending-count").textContent = pending.length || "";
+      $("#pending").innerHTML = pending.length
+        ? pending.map(p => planCard(p, true)).join("")
+        : '<div class="vs-hint">no pending plans — Hermes hasn\'t asked for anything</div>';
+      const rest = plans.filter(p => p.status !== "pending").slice(0, 12);
+      $("#history").innerHTML = rest.length ? rest.map(p => planCard(p, false)).join("")
+        : '<div class="vs-hint">none yet</div>';
+      VS.$$("#pending .plan-card").forEach(card => {
+        const id = card.dataset.id;
+        const comment = () => card.querySelector(".pc").value.trim();
+        card.querySelector(".ok-btn").onclick = async () => {
+          try { await VS.post("/api/plans/" + id + "/approve", {comment: comment()});
+                VS.toast("plan approved — Hermes will pick it up"); loadPlans(); VS.pollPlans(); }
+          catch (e) { VS.toast(e.message); }
+        };
+        card.querySelector(".no-btn").onclick = async () => {
+          try { await VS.post("/api/plans/" + id + "/reject", {comment: comment()});
+                VS.toast("plan rejected"); loadPlans(); VS.pollPlans(); }
+          catch (e) { VS.toast(e.message); }
+        };
+      });
+    } catch (e) { /* ignore */ }
+  }
+
+  // live stage feed — drain /api/events forward from the last seen id
+  let lastId = 0, feedRows = [];
+  function fmtEvent(e) {
+    const p = e.payload || {};
+    const t = new Date(e.at * 1000).toTimeString().slice(0, 5);
+    let flag = "·", cls = "", msg = "";
+    if (e.type === "stage") { msg = (p.slug || "?") + " → " + p.stage; }
+    else if (e.type === "job") {
+      msg = (p.slug || "?") + " " + p.status + (p.cost ? " ($" + Number(p.cost).toFixed(2) + ")" : "");
+      if (p.status === "failed") { flag = "⛔"; cls = "bad"; msg += p.error ? " — " + p.error : ""; }
+      else if (p.status === "done") flag = "✅";
+    }
+    else if (e.type === "job-created") { flag = "▶"; msg = p.label || p.slug || "job"; }
+    else if (e.type === "spend") { flag = "💰"; cls = "warn"; msg = "$" + Number(p.cost || 0).toFixed(2) + " — " + (p.summary || p.stem || ""); }
+    else if (e.type === "stage-note") { flag = "🤖"; cls = "note"; msg = (p.slug || "") + " · " + p.stage + ": " + (p.note || ""); }
+    else if (e.type.startsWith("plan-")) { flag = "📋"; cls = "note"; msg = e.type.slice(5) + ": " + (p.title || p.id); }
+    else { msg = e.type; }
+    return '<div class="feed-row ' + cls + '"><span class="feed-t">' + t + '</span>' +
+           '<span class="feed-flag">' + flag + '</span><span class="feed-msg">' + VS.esc(msg) + "</span></div>";
+  }
+  async function loadFeed() {
+    try {
+      const d = await VS.api("/api/events?since=" + lastId + "&limit=200");
+      if (d.events && d.events.length) {
+        lastId = d.last_id;
+        feedRows = feedRows.concat(d.events.map(fmtEvent)).slice(-200);
+        $("#feed").innerHTML = feedRows.slice().reverse().join("");
+      }
+    } catch (e) { /* ignore */ }
+  }
+
+  VS.chatMount($("#chatmount"));
+
+  await Promise.all([loadSpend(), loadPlans(), loadFeed()]);
+  setInterval(() => { if (!document.hidden) { loadFeed(); } }, 5000);
+  setInterval(() => { if (!document.hidden) { loadPlans(); loadSpend(); } }, 20000);
+})();
+</script>
+</body>
+</html>

@@ -93,6 +93,10 @@ TEMPLATES = {
                "LED accents in the background",
     "static":  "Static tripod shot: fixed camera, the person stands centred and talks straight "
                "into the lens, clean stable framing",
+    "vsl":     "Video sales letter: the person sits at a clean desk facing a fixed camera like a "
+               "founder speaking directly to the viewer, warm key light, softly blurred office or "
+               "study background, confident direct-to-lens delivery with occasional hand gestures, "
+               "premium infomercial energy without any on-screen text",
 }
 
 # cloud lip-sync tiers (fal.ai) — endpoints + prices proven in autoVSL's

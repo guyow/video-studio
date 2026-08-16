@@ -158,10 +158,10 @@
             <span><b>fal.ai cloud</b> — the pipeline that made the original winner.
               <span class="paid">COSTS $</span>
               <select id="tier" style="margin-left:8px">
-                <option value="standard" selected>sync v2 standard (~$3/min)</option>
-                <option value="pro">sync v2 pro (best, $$)</option>
-                <option value="veed">veed (~$0.40/min)</option>
-                <option value="latentsync">latentsync (cheapest)</option>
+                <option value="latentsync" selected>latentsync — best value ($0.30/min)</option>
+                <option value="veed">veed ($0.40/min)</option>
+                <option value="standard">sync v2 standard ($3/min)</option>
+                <option value="pro">sync v2 pro (best, $6/min)</option>
               </select>
               <select id="tts">
                 <option value="hd" selected>MiniMax HD voice</option>
@@ -170,23 +170,61 @@
               </select>
               <label style="display:inline-flex;gap:5px;align-items:center;margin-left:8px;font-size:12px">
                 <input type="checkbox" id="confirm-cost"> I approve the cost</label></span></label>
+          <div class="btnrow"><span id="falpill"></span><span class="hint" id="estline"></span></div>
         </div>
       </div>
 
       <button class="bigbtn" id="btn-run" disabled>🚀 Create the clone</button>
       <span class="hint" id="runnote" style="margin-left:12px"></span>
+      <div class="card" id="stageview" style="display:none;margin-top:14px"><h2>Pipeline</h2>
+        <div id="stagerows"></div></div>
       <div id="joblog"></div>
     </div>
   </div>
 </main>
+<script src="/static/js/vs-core.js"></script>
 <script>
 const $ = id => document.getElementById(id);
 const api = async (url, opts) => {
   const r = await fetch(url, opts);
-  if (!r.ok) throw new Error(await r.text());
+  if (!r.ok) {
+    const t = await r.text();
+    let body = null;
+    try { body = JSON.parse(t); } catch (_) { /* html */ }
+    const err = new Error((body && (body.error || body.message)) || t.slice(0, 300));
+    err.status = r.status; err.body = body;
+    throw err;
+  }
   return r.json();
 };
 let WINNERS = [], SEL = null, ACTOR = "same", GENERATED = false;
+
+VS.falPill($("falpill"));
+
+// live cost estimate for the fal engine — updates as the choices change
+let estTimer = null;
+function refreshEstimate() {
+  clearTimeout(estTimer);
+  estTimer = setTimeout(async () => {
+    const engine = document.querySelector('input[name="engine"]:checked').value;
+    if (!SEL) { $("estline").textContent = ""; return; }
+    if (engine !== "fal") { $("estline").textContent = "local engine — $0.00"; return; }
+    if (ACTOR === null) { $("estline").textContent = ""; return; }
+    try {
+      const est = await api("/api/clone/estimate", {method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({winner: SEL.stem, actor: ACTOR, engine: "fal",
+          tier: $("tier").value, tts: $("tts").value,
+          script: $("newscript").value.trim()})});
+      $("estline").innerHTML = `≈ <b>$${est.this_run.toFixed(2)}</b> — ${VS.esc(est.summary)}` +
+        (est.voice_reused ? ' · <span class="free">voice reused (no clone fee)</span>' : "") +
+        (est.blocked ? ` · <span class="paid">⛔ ${VS.esc(est.blocked_msg || "over the spend ceiling")}</span>` : "");
+    } catch (e) { $("estline").textContent = ""; }
+  }, 400);
+}
+["tier", "tts"].forEach(id => $(id).addEventListener("change", refreshEstimate));
+document.querySelectorAll('input[name="engine"]').forEach(r =>
+  r.addEventListener("change", refreshEstimate));
 
 function fmtDate(t){ return new Date(t*1000).toLocaleDateString(undefined,{month:"short",day:"numeric"}); }
 
@@ -220,6 +258,7 @@ function select(w, el){
   $("newscript").value = "";
   $("genmeta").textContent = "";
   updateRun();
+  refreshEstimate();
 }
 
 // actor choice
@@ -267,6 +306,7 @@ $("newscript").addEventListener("input", updateRun);
 function updateRun(){
   const ok = SEL && ACTOR !== null && $("newscript").value.trim().split(/\s+/).filter(Boolean).length >= 8;
   $("btn-run").disabled = !ok;
+  refreshEstimate();
 }
 
 $("btn-run").onclick = async () => {
@@ -284,11 +324,20 @@ $("btn-run").onclick = async () => {
         winner: SEL.stem, actor: ACTOR, script: $("newscript").value.trim(),
         engine, lipsync: $("lipsync").value, tier: $("tier").value, tts: $("tts").value,
         confirm_cost: $("confirm-cost").checked})});
-    $("runnote").textContent = `🎬 cloning as “${d.stem}” — watch the log below; it lands in “Your clones” when done`;
+    $("runnote").textContent = `🎬 cloning as “${d.stem}” — the pipeline below goes dub → captions → QA`;
     watchJob(d.job_id);
     loadClones();
   } catch (e) {
-    $("runnote").textContent = "❌ " + e.message;
+    if (e.status === 402 && e.body && e.body.estimate) {
+      const est = e.body.estimate;
+      $("runnote").textContent = est.blocked
+        ? "⛔ " + (est.blocked_msg || "over the spend ceiling")
+        : `💰 $${est.this_run.toFixed(2)} — tick “I approve the cost”, then run again (${est.summary})`;
+    } else if (e.status === 503 && e.body) {
+      $("runnote").textContent = "⛔ " + (e.body.error || "fal blocked") + " — " + (e.body.fix || "");
+    } else {
+      $("runnote").textContent = "❌ " + e.message;
+    }
     $("btn-run").disabled = false;
   }
 };
@@ -296,20 +345,28 @@ $("btn-run").onclick = async () => {
 async function watchJob(id){
   const log = $("joblog");
   log.style.display = "block";
+  $("stageview").style.display = "";
+  let offset = 0, shown = [];
   for (;;) {
     let j;
-    try { j = await api("/api/job/" + id); } catch { break; }
-    log.textContent = (j.lines || []).slice(-40).join("\n");
+    try { j = await api(`/api/job/${id}?offset=${offset}`); } catch { break; }
+    shown = shown.concat(j.lines || []).slice(-60);
+    offset = j.next_offset || offset;
+    log.textContent = shown.join("\n");
     log.scrollTop = log.scrollHeight;
+    if (j.stages) $("stagerows").innerHTML = VS.stageDetail(j.stages);
     if (j.status !== "running") {
+      const qa = (j.stages || []).find(s => s.key === "qa" && s.meta);
       $("runnote").textContent = j.status === "done"
-        ? "✅ clone finished — it's in “Your clones” and every other tab"
+        ? (qa && qa.meta.verdict === "FAIL"
+           ? "⚠ clone finished but QA flagged issues — see the verdict below"
+           : "✅ clone finished — captioned + QA'd, it's in “Your clones” and Exports")
         : `❌ clone ${j.status} — see the log`;
       $("btn-run").disabled = false;
       loadClones(); loadWinners();
       break;
     }
-    await new Promise(r => setTimeout(r, 3000));
+    await new Promise(r => setTimeout(r, 2000));
   }
 }
 

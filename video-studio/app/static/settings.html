@@ -43,6 +43,47 @@
   </div>
 
   <div class="vs-panel">
+    <h3>💳 fal.ai &amp; spend guardrails</h3>
+    <div class="vs-row" style="margin-bottom:10px">
+      <span id="falpill"></span>
+      <button class="vs-btn" id="fal-test" style="padding:5px 12px;font-size:12px">Test now</button>
+      <span class="vs-hint" id="fal-when"></span>
+    </div>
+    <div class="vs-row">
+      <label class="vs-hint">spend ceiling $
+        <input class="vs-in" id="sp-cap" type="number" min="0" step="1" style="width:80px"></label>
+      <label class="vs-hint">per
+        <select class="vs-sel" id="sp-window">
+          <option value="day">day</option><option value="week">week</option>
+          <option value="month">month</option>
+        </select></label>
+      <span class="vs-hint">0 = no ceiling · paid runs over the ceiling are refused</span>
+    </div>
+    <div class="vs-row" style="margin-top:8px">
+      <label class="vs-hint" style="display:flex;gap:6px;align-items:center">
+        <input type="checkbox" id="f-caption"> auto-captions after every dub</label>
+      <label class="vs-hint" style="display:flex;gap:6px;align-items:center">
+        <input type="checkbox" id="f-qa"> auto-QA verdict</label>
+      <label class="vs-hint" style="display:flex;gap:6px;align-items:center">
+        <input type="checkbox" id="f-advise"> auto-advise (fal dubs)</label>
+      <label class="vs-hint" style="display:flex;gap:6px;align-items:center">
+        <input type="checkbox" id="f-qc"> auto AI QC review</label>
+    </div>
+  </div>
+
+  <div class="vs-panel">
+    <h3>🔑 API keys &amp; connections</h3>
+    <div class="vs-hint">Bearer keys for agents and integrations (Hermes, scripts, other tools).
+      Callers send <code>Authorization: Bearer &lt;token&gt;</code> — paid runs with a key require an
+      approved plan. "Last seen" shows who's actually connected.</div>
+    <div class="vs-row" style="margin-top:10px">
+      <input class="vs-in" id="key-name" placeholder="key name — e.g. hermes, n8n, phone" style="min-width:220px">
+      <button class="vs-btn" id="key-gen">➕ Generate key</button>
+    </div>
+    <div id="keys" style="margin-top:12px"><span class="vs-hint">loading…</span></div>
+  </div>
+
+  <div class="vs-panel">
     <h3>🔐 Remote access</h3>
     <div class="vs-hint" id="ra-info">…</div>
   </div>
@@ -71,7 +112,70 @@
   $("#ex-dir").value = cfg.exports_dir;
   $("#ra-info").innerHTML =
     `PIN: <b>${cfg.remote_pin_set ? "configured" : "not set"}</b> · LAN access: <b>${cfg.lan_access ? "on" : "off"}</b>
+     · agent token: <b>${cfg.agent_token_set ? "configured" : "not set"}</b>
      · port ${cfg.port}<br>change these in <code>video-studio/config.json</code> and restart.`;
+  $("#sp-cap").value = cfg.spend_ceiling_usd || 0;
+  $("#sp-window").value = cfg.spend_ceiling_window || "month";
+  $("#f-caption").checked = cfg.auto_caption;
+  $("#f-qa").checked = cfg.auto_qa;
+  $("#f-advise").checked = cfg.auto_advise;
+  $("#f-qc").checked = cfg.auto_qc;
+  async function falCheck(force) {
+    await VS.falPill($("#falpill"));
+    try {
+      const st = await VS.api("/api/fal/status" + (force ? "?force=1" : ""));
+      $("#fal-when").textContent = "checked " + new Date(st.checked_at * 1000).toLocaleTimeString();
+    } catch (e) { /* pill already shows the failure */ }
+  }
+  falCheck();
+  $("#fal-test").onclick = () => falCheck(true);
+
+  // ── API keys & connections ──
+  async function loadKeys() {
+    try {
+      const d = await VS.api("/api/keys");
+      const box = $("#keys");
+      const rows = (d.keys || []).map(k => {
+        const seen = k.last_seen
+          ? VS.fmtAgo(k.last_seen) + (k.last_ip ? " · " + VS.esc(k.last_ip) : "")
+          : "never connected";
+        return `<div class="vs-row" style="margin-top:7px;align-items:center;gap:10px">
+          <b style="min-width:110px${k.revoked ? ";text-decoration:line-through;color:var(--dim)" : ""}">${VS.esc(k.name)}</b>
+          <code style="font-size:11px;color:var(--dim);user-select:all">${VS.esc(k.token)}</code>
+          <button class="vs-btn" data-copy="${VS.esc(k.token)}" style="padding:3px 10px;font-size:11px">copy</button>
+          <span class="vs-hint">${k.revoked ? '<b style="color:var(--bad)">revoked</b>' : "🟢 " + seen}</span>
+          <button class="vs-btn ghost" data-rev="${k.id}" style="padding:3px 10px;font-size:11px">${k.revoked ? "restore" : "revoke"}</button>
+          <button class="vs-btn ghost" data-del="${k.id}" style="padding:3px 10px;font-size:11px">🗑</button>
+        </div>`;
+      });
+      if (d.legacy_config_token)
+        rows.push('<div class="vs-hint" style="margin-top:8px">+ the legacy agent_token in config.json still works — remove it there once every client uses a named key.</div>');
+      box.innerHTML = rows.length ? rows.join("") : '<span class="vs-hint">no keys yet — generate one above</span>';
+      box.querySelectorAll("[data-copy]").forEach(b => b.onclick = async () => {
+        try { await navigator.clipboard.writeText(b.dataset.copy); VS.toast("copied"); }
+        catch (e) { VS.toast("select the token and copy manually"); }
+      });
+      box.querySelectorAll("[data-rev]").forEach(b => b.onclick = async () => {
+        await VS.post(`/api/keys/${b.dataset.rev}/revoke`, {}); loadKeys();
+      });
+      box.querySelectorAll("[data-del]").forEach(b => b.onclick = async () => {
+        if (confirm("Delete this key permanently? Anything using it loses access.")) {
+          await VS.post(`/api/keys/${b.dataset.del}/delete`, {}); loadKeys();
+        }
+      });
+    } catch (e) { $("#keys").innerHTML = '<span class="vs-hint">⚠ ' + VS.esc(e.message) + "</span>"; }
+  }
+  $("#key-gen").onclick = async () => {
+    const name = $("#key-name").value.trim();
+    if (!name) { VS.toast("name the key first — who connects with it?"); return; }
+    try {
+      const d = await VS.post("/api/keys", {name});
+      $("#key-name").value = "";
+      VS.toast("🔑 key created — copy it from the list");
+      loadKeys();
+    } catch (e) { VS.toast(e.message); }
+  };
+  loadKeys();
 
   async function queue() {
     try {
@@ -100,6 +204,10 @@
       await VS.post("/api/settings", {
         auto_cleanup: {enabled: $("#ac-on").checked, delay_hours: parseFloat($("#ac-delay").value)},
         exports_dir: $("#ex-dir").value.trim(),
+        spend_ceiling_usd: parseFloat($("#sp-cap").value || "0"),
+        spend_ceiling_window: $("#sp-window").value,
+        auto_caption: $("#f-caption").checked, auto_qa: $("#f-qa").checked,
+        auto_advise: $("#f-advise").checked, auto_qc: $("#f-qc").checked,
       });
       $("#msg").textContent = "✅ saved";
       setTimeout(() => $("#msg").textContent = "", 3000);

@@ -42,7 +42,7 @@ SCRIPT TO REWRITE:
 Respond with ONLY the rewritten script text — no preamble, no explanation, no markdown."""
 
 from flask import (Flask, abort, jsonify, request, send_file, send_from_directory,
-                   redirect, session)
+                   redirect, session, g)
 import cleanup
 from werkzeug.utils import secure_filename
 
@@ -68,6 +68,7 @@ OBJECT_REPAIR_PY = APP_DIR / "engines" / "object_repair.py"
 FRAME_SWAP_PY = APP_DIR / "engines" / "frame_swap.py"
 SEGMENT_LIPSYNC_PY = APP_DIR / "engines" / "segment_lipsync.py"
 BACKGROUND_SWAP_PY = APP_DIR / "engines" / "background_swap.py"
+QA_ENGINE = APP_DIR / "engines" / "qa_vsl.py"         # dub QA verdict (duration/aspect/pace/banned words)
 BACKGROUNDS_DIR = ROOT / "banks" / "backgrounds"      # reusable scene library (green screen → real room)
 # the ONE Desktop folder for finished deliverables (replaces the scattered
 # "litt VSL's" / "liitt testimonial Ready" / "Subtitle Studio" folders going forward)
@@ -119,6 +120,10 @@ if not app.secret_key or app.secret_key == "dev-only-change-me":
 # The app spends money (fal.ai) and deletes files, so once it's reachable beyond this
 # PC it MUST be behind a PIN. Desktop use (localhost) bypasses the gate entirely.
 REMOTE_PIN = str(CONFIG.get("remote_pin") or "")
+# optional agent identity: Hermes calls with `Authorization: Bearer <agent_token>`
+# instead of the shared PIN, which makes plan authorship + the paid-run approval
+# gate auditable (see agent_plan_gate)
+AGENT_TOKEN = str(CONFIG.get("agent_token") or "")
 _AUTH_OPEN = {"/login", "/api/login", "/favicon.ico", "/api/ping"}
 
 
@@ -126,19 +131,414 @@ def _is_local(addr: str) -> bool:
     return addr in ("127.0.0.1", "::1", "localhost") or (addr or "").startswith("127.")
 
 
+# ---------------------------------------------------------------- API keys
+# Named Bearer keys for agents/integrations (Hermes, scripts, other tools),
+# generated + revoked from Settings. The config.json agent_token keeps working
+# as a legacy key. last_seen/last_ip per key doubles as the "connections" view.
+API_KEYS_FILE = VS_ROOT / "jobs" / "api-keys.json"
+api_keys_lock = threading.Lock()
+_key_touch: dict[str, float] = {}          # throttle last_seen writes
+
+
+def _keys_load() -> dict:
+    try:
+        return json.loads(API_KEYS_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _keys_save(d: dict) -> None:
+    API_KEYS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = API_KEYS_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(d, indent=1), encoding="utf-8")
+    tmp.replace(API_KEYS_FILE)
+
+
+def _touch_key(kid: str) -> None:
+    now = time.time()
+    if now - _key_touch.get(kid, 0) < 60:
+        return
+    _key_touch[kid] = now
+    with api_keys_lock:
+        d = _keys_load()
+        if kid in d:
+            d[kid]["last_seen"] = now
+            d[kid]["last_ip"] = request.remote_addr
+            _keys_save(d)
+
+
+def _agent_key() -> dict | None:
+    """The API key authenticating this request, or None."""
+    auth = request.headers.get("Authorization") or ""
+    if not auth.startswith("Bearer "):
+        return None
+    tok = auth[7:].strip()
+    if not tok:
+        return None
+    if AGENT_TOKEN and tok == AGENT_TOKEN:
+        return {"id": "_config", "name": "agent_token (config.json)"}
+    with api_keys_lock:
+        d = _keys_load()
+    for k in d.values():
+        if not k.get("revoked") and k.get("token") == tok:
+            return k
+    return None
+
+
 @app.before_request
 def _require_pin():
+    key = _agent_key()
+    g.agent = key is not None
+    if key:
+        g.agent_name = key.get("name")
+        if key["id"] != "_config":
+            _touch_key(key["id"])
     if not REMOTE_PIN:                          # no PIN configured → no gate
         return
     if _is_local(request.remote_addr or ""):    # this PC → never prompt
         return
     if request.path in _AUTH_OPEN or request.path.startswith("/static/"):
         return
+    if g.agent:                                 # token-authenticated agent (Hermes)
+        return
     if session.get("vs_auth"):
         return
     if request.path.startswith("/api/"):
         abort(401)                               # API callers get 401, not a redirect
     return redirect("/login?next=" + request.path)
+
+
+# ---------------------------------------------------------------- plans (Hermes approval loop)
+# Hermes writes an execution plan, the founder approves/rejects it on /agent,
+# and agent-authenticated PAID runs are refused without an approved plan id.
+# Founder runs (session/local) are never gated — the 402 confirm flow covers them.
+PLANS_FILE = VS_ROOT / "jobs" / "plans.json"
+plans_lock = threading.Lock()
+
+
+def _plans_load() -> dict:
+    return read_json(PLANS_FILE) or {}
+
+
+def _plans_save(d: dict) -> None:
+    PLANS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = PLANS_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(d, indent=1, ensure_ascii=False), encoding="utf-8")
+    tmp.replace(PLANS_FILE)
+
+
+@app.before_request
+def _agent_paid_gate():
+    """Every paid run in this app is marked by confirm_cost:true — so this one
+    hook enforces plan-first execution for the agent on ALL paid endpoints."""
+    if not getattr(g, "agent", False) or request.method != "POST":
+        return
+    body = request.get_json(silent=True) or {}
+    if not isinstance(body, dict) or not body.get("confirm_cost"):
+        return
+    pid = str(body.get("plan_id") or "")
+    with plans_lock:
+        plan = _plans_load().get(pid)
+    if not plan or plan.get("status") != "approved":
+        return jsonify({
+            "error": "agent paid runs need an approved plan",
+            "fix": "POST /api/plans with the execution plan, wait for founder approval "
+                   "on /agent, then re-call this endpoint with plan_id"}), 403
+
+
+@app.post("/api/plans")
+def api_plans_create():
+    b = request.get_json(force=True) or {}
+    title = (b.get("title") or "").strip()[:200]
+    if not title:
+        abort(400, "plan needs a title")
+    steps = b.get("steps") if isinstance(b.get("steps"), list) else []
+    pid = uuid.uuid4().hex[:8]
+    plan = {"id": pid, "title": title, "steps": steps[:40],
+            "cost_estimate": b.get("cost_estimate"), "asks": b.get("asks"),
+            "ref": b.get("ref"), "author": "hermes" if g.agent else "founder",
+            "status": "pending", "comment": None,
+            "created": time.time(), "updated": time.time()}
+    with plans_lock:
+        d = _plans_load()
+        d[pid] = plan
+        _plans_save(d)
+    emit_event("plan-created", {"id": pid, "title": title, "author": plan["author"],
+                                "cost_estimate": plan.get("cost_estimate")})
+    return jsonify({"id": pid, "plan": plan})
+
+
+@app.get("/api/plans")
+def api_plans_list():
+    want = request.args.get("status")
+    with plans_lock:
+        plans = list(_plans_load().values())
+    if want:
+        plans = [p for p in plans if p.get("status") == want]
+    plans.sort(key=lambda p: p.get("created") or 0, reverse=True)
+    return jsonify({"plans": plans[:100]})
+
+
+def _plan_set_status(pid: str, status: str, comment: str | None = None) -> dict:
+    with plans_lock:
+        d = _plans_load()
+        plan = d.get(pid)
+        if not plan:
+            abort(404, "no such plan")
+        plan["status"] = status
+        plan["updated"] = time.time()
+        if comment is not None:
+            plan["comment"] = comment
+        _plans_save(d)
+    emit_event(f"plan-{status}", {"id": pid, "title": plan.get("title"),
+                                  "comment": comment})
+    return plan
+
+
+@app.post("/api/plans/<pid>/approve")
+@app.post("/api/plans/<pid>/reject")
+def api_plans_decide(pid):
+    if getattr(g, "agent", False):
+        abort(403, "only the founder approves or rejects plans")
+    decision = "approved" if request.path.endswith("/approve") else "rejected"
+    comment = ((request.get_json(silent=True) or {}).get("comment") or "").strip()[:500]
+    return jsonify({"plan": _plan_set_status(pid, decision, comment or None)})
+
+
+@app.post("/api/plans/<pid>/status")
+def api_plans_status(pid):
+    """Hermes marks progress on an approved plan: executing | done."""
+    status = (request.get_json(force=True) or {}).get("status")
+    if status not in ("executing", "done"):
+        abort(400, "status must be executing or done")
+    with plans_lock:
+        current = (_plans_load().get(pid) or {}).get("status")
+    if current not in ("approved", "executing"):
+        abort(400, f"plan is {current or 'missing'} — only approved plans can execute")
+    return jsonify({"plan": _plan_set_status(pid, status)})
+
+
+# ---------------------------------------------------------------- form drafts
+# The agent pre-fills a page's form so the founder SEES the planned generation
+# before anything runs (nothing auto-executes — the paid confirm flow still
+# gates the run). One draft per page key (e.g. "ugc").
+DRAFTS_FILE = VS_ROOT / "jobs" / "drafts.json"
+drafts_lock = threading.Lock()
+
+
+def _drafts_load() -> dict:
+    return read_json(DRAFTS_FILE) or {}
+
+
+@app.post("/api/drafts/<page>")
+def api_draft_write(page):
+    page = re.sub(r"[^a-z0-9-]", "", page.lower())[:32]
+    b = request.get_json(force=True) or {}
+    fields = b.get("fields")
+    if not page or not isinstance(fields, dict) or not fields:
+        abort(400, "body needs {fields: {…}} — the form values to pre-fill")
+    draft = {"fields": {str(k)[:64]: v for k, v in list(fields.items())[:40]},
+             "note": (b.get("note") or "").strip()[:500],
+             "author": "hermes" if getattr(g, "agent", False) else "founder",
+             "created": time.time()}
+    with drafts_lock:
+        d = _drafts_load()
+        d[page] = draft
+        DRAFTS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = DRAFTS_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(d, indent=1, ensure_ascii=False), encoding="utf-8")
+        tmp.replace(DRAFTS_FILE)
+    emit_event("draft", {"page": page, "author": draft["author"], "note": draft["note"]})
+    return jsonify({"ok": True, "page": page})
+
+
+@app.get("/api/drafts/<page>")
+def api_draft_read(page):
+    page = re.sub(r"[^a-z0-9-]", "", page.lower())[:32]
+    with drafts_lock:
+        return jsonify({"draft": _drafts_load().get(page)})
+
+
+@app.post("/api/drafts/<page>/clear")
+def api_draft_clear(page):
+    page = re.sub(r"[^a-z0-9-]", "", page.lower())[:32]
+    with drafts_lock:
+        d = _drafts_load()
+        gone = d.pop(page, None)
+        if gone is not None:
+            tmp = DRAFTS_FILE.with_suffix(".tmp")
+            tmp.write_text(json.dumps(d, indent=1, ensure_ascii=False), encoding="utf-8")
+            tmp.replace(DRAFTS_FILE)
+    return jsonify({"cleared": gone is not None})
+
+
+def _founder_only() -> None:
+    if getattr(g, "agent", False):
+        abort(403, "founder only — API keys are managed from the dashboard")
+
+
+@app.get("/api/keys")
+def api_keys_list():
+    _founder_only()
+    with api_keys_lock:
+        d = _keys_load()
+    keys = sorted(d.values(), key=lambda k: k.get("created") or 0, reverse=True)
+    return jsonify({"keys": keys, "legacy_config_token": bool(AGENT_TOKEN),
+                    "how": "Authorization: Bearer <token> on every call"})
+
+
+@app.post("/api/keys")
+def api_keys_create():
+    _founder_only()
+    name = ((request.get_json(force=True) or {}).get("name") or "").strip()[:60]
+    if not name:
+        abort(400, "give the key a name — who or what connects with it")
+    import secrets as _secrets
+    kid = uuid.uuid4().hex[:8]
+    key = {"id": kid, "name": name, "token": "vs_" + _secrets.token_hex(24),
+           "created": time.time(), "last_seen": None, "last_ip": None, "revoked": False}
+    with api_keys_lock:
+        d = _keys_load()
+        d[kid] = key
+        _keys_save(d)
+    emit_event("api-key", {"id": kid, "name": name, "action": "created"})
+    return jsonify({"key": key})
+
+
+@app.post("/api/keys/<kid>/revoke")
+def api_keys_revoke(kid):
+    _founder_only()
+    with api_keys_lock:
+        d = _keys_load()
+        if kid not in d:
+            abort(404, "no such key")
+        d[kid]["revoked"] = not d[kid].get("revoked")   # toggle = un-revoke too
+        state = d[kid]["revoked"]
+        _keys_save(d)
+    emit_event("api-key", {"id": kid, "name": d[kid].get("name"),
+                           "action": "revoked" if state else "restored"})
+    return jsonify({"key": d[kid]})
+
+
+@app.post("/api/keys/<kid>/delete")
+def api_keys_delete(kid):
+    _founder_only()
+    with api_keys_lock:
+        d = _keys_load()
+        gone = d.pop(kid, None)
+        if gone is None:
+            abort(404, "no such key")
+        _keys_save(d)
+    emit_event("api-key", {"id": kid, "name": gone.get("name"), "action": "deleted"})
+    return jsonify({"deleted": kid})
+
+
+# ---------------------------------------------------------------- chat (founder ↔ Hermes)
+# The studio chat mirrors the sg-hermes Telegram group two-way via
+# telegram_bridge (connected as the founder's own account — a bot bridge could
+# never see Hermes's bot replies). With the bridge down, messages still land
+# here and in the event stream, which Hermes drains as a fallback.
+import telegram_bridge  # noqa: E402
+
+CHAT_FILE = VS_ROOT / "jobs" / "chat.jsonl"
+chat_lock = threading.Lock()
+_chat_count: int | None = None
+_last_hermes_msg: float | None = None      # UI shows "via Hermes relay" off this
+
+
+def chat_append(author: str, text: str, source: str = "studio",
+                name: str | None = None) -> dict:
+    global _chat_count, _last_hermes_msg
+    if author == "hermes":
+        _last_hermes_msg = time.time()
+    with chat_lock:
+        if _chat_count is None:
+            try:
+                with CHAT_FILE.open("r", encoding="utf-8") as f:
+                    _chat_count = sum(1 for _ in f)
+            except OSError:
+                _chat_count = 0
+        _chat_count += 1
+        msg = {"id": _chat_count, "author": author, "name": name,
+               "text": str(text)[:3000], "source": source, "at": time.time()}
+        CHAT_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with CHAT_FILE.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(msg, ensure_ascii=False) + "\n")
+    emit_event("chat", {"id": msg["id"], "author": author, "text": msg["text"][:400],
+                        "source": source})
+    return msg
+
+
+@app.get("/api/chat")
+def api_chat_read():
+    try:
+        since = int(request.args.get("since") or 0)
+    except ValueError:
+        abort(400, "since must be an int")
+    limit = min(300, int(request.args.get("limit") or 100))
+    out = []
+    try:
+        with CHAT_FILE.open("r", encoding="utf-8") as f:
+            for i, line in enumerate(f, start=1):
+                if i <= since:
+                    continue
+                try:
+                    out.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+    except OSError:
+        pass
+    return jsonify({"messages": out[-limit:],
+                    "last_id": out[-1]["id"] if out else since,
+                    "telegram": dict(telegram_bridge.state),
+                    "relay": {"last_hermes": _last_hermes_msg}})
+
+
+@app.post("/api/chat")
+def api_chat_send():
+    text = ((request.get_json(force=True) or {}).get("text") or "").strip()
+    if not text:
+        abort(400, "empty message")
+    if getattr(g, "agent", False):
+        # Hermes replying through the API (fallback path when Telegram is down)
+        msg = chat_append("hermes", text, source="agent-api", name="Hermes")
+        return jsonify({"ok": True, "msg": msg})
+    msg = chat_append("founder", text, source="studio", name="you")
+    delivered = telegram_bridge.send(text)
+    return jsonify({"ok": True, "msg": msg, "telegram": delivered})
+
+
+@app.get("/api/chat/status")
+def api_chat_status():
+    return jsonify(dict(telegram_bridge.state) | {"last_hermes": _last_hermes_msg})
+
+
+@app.get("/api/agent-token")
+def api_agent_token():
+    """Self-service credential handoff for Hermes over the tailnet: any
+    authenticated caller (PIN session / localhost) gets the named 'hermes' API
+    key — created on first call, visible/revocable in Settings. The token never
+    goes into the repo — this is how the VPS picks it up."""
+    with api_keys_lock:
+        d = _keys_load()
+        key = next((k for k in d.values()
+                    if k.get("name") == "hermes" and not k.get("revoked")), None)
+        if key is None:
+            import secrets as _secrets
+            kid = uuid.uuid4().hex[:8]
+            key = {"id": kid, "name": "hermes", "token": "vs_" + _secrets.token_hex(24),
+                   "created": time.time(), "last_seen": None, "last_ip": None,
+                   "revoked": False}
+            d[kid] = key
+            _keys_save(d)
+    return jsonify({"agent_token": key["token"],
+                    "use": "Authorization: Bearer <token>",
+                    "endpoints": {"chat": "/api/chat", "events": "/api/events?since=<id>",
+                                  "plans": "/api/plans", "drafts": "/api/drafts/<page>",
+                                  "spec": "video-studio/docs/HERMES-CHAT-RELAY.md"}})
+
+
+telegram_bridge.start(chat_append)   # no-op (with a clear state.error) until configured
 
 
 @app.get("/login")
@@ -171,9 +571,82 @@ def api_ping():
 
 from jobs import (jobs, jobs_lock, GPU_LOCK, needs_gpu, wait_for_gpu,
                   acquire_gpu, init as jobs_init, create as jobs_create,
-                  cleanup as jobs_cleanup)
+                  cleanup as jobs_cleanup, set_event_hook)
 
 jobs_init()  # restore persisted jobs; start the flusher + keep-awake threads
+
+# ---------------------------------------------------------------- event stream
+# Append-only ledger Hermes drains (`GET /api/events?since=<id>`): job lifecycle,
+# stage transitions, spend, plan approvals. id = 1-based line number, so a
+# consumer's cursor survives restarts. Optional push: config.json "webhook_url"
+# gets a fire-and-forget POST per event (polling stays the fallback).
+EVENTS_FILE = VS_ROOT / "jobs" / "events.jsonl"
+events_lock = threading.Lock()
+_events_count: int | None = None       # cached line count (None until first use)
+
+
+def _events_next_id() -> int:
+    global _events_count
+    if _events_count is None:
+        try:
+            with EVENTS_FILE.open("r", encoding="utf-8") as f:
+                _events_count = sum(1 for _ in f)
+        except OSError:
+            _events_count = 0
+    _events_count += 1
+    return _events_count
+
+
+def emit_event(event_type: str, payload: dict) -> None:
+    try:
+        with events_lock:
+            eid = _events_next_id()
+            evt = {"id": eid, "type": event_type, "at": time.time(), "payload": payload}
+            EVENTS_FILE.parent.mkdir(parents=True, exist_ok=True)
+            with EVENTS_FILE.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(evt, ensure_ascii=False) + "\n")
+    except Exception:  # noqa: BLE001 — the event stream must never break a job
+        return
+    url = CONFIG.get("webhook_url")
+    if url:
+        def _push():
+            try:
+                import urllib.request
+                req = urllib.request.Request(
+                    url, data=json.dumps(evt).encode(),
+                    headers={"Content-Type": "application/json"}, method="POST")
+                urllib.request.urlopen(req, timeout=5).read()
+            except Exception:  # noqa: BLE001
+                pass           # polling is the fallback — never retry, never block
+        threading.Thread(target=_push, daemon=True).start()
+
+
+set_event_hook(emit_event)
+
+
+@app.get("/api/events")
+def api_events():
+    """Drain events after a cursor: /api/events?since=<id> (0 = from the start)."""
+    try:
+        since = int(request.args.get("since") or 0)
+    except ValueError:
+        abort(400, "since must be an int")
+    limit = min(500, int(request.args.get("limit") or 200))
+    out = []
+    try:
+        with EVENTS_FILE.open("r", encoding="utf-8") as f:
+            for i, line in enumerate(f, start=1):
+                if i <= since:
+                    continue
+                try:
+                    out.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+                if len(out) >= limit:
+                    break
+    except OSError:
+        pass
+    return jsonify({"events": out, "last_id": out[-1]["id"] if out else since})
 
 ACTIONS = {
     "check-media":    {"script": "scripts/check-media.sh",    "label": "Check media"},
@@ -226,11 +699,15 @@ def load_spend() -> dict:
 
 
 def estimate_dub_cost(engine: str, tts: str, tier: str, video: Path, stem: str,
-                      already_cloned: dict) -> dict:
-    """Estimate this dub's fal.ai cost. Returns a breakdown dict (no side effects)."""
+                      already_cloned: dict, chars_override: int | None = None) -> dict:
+    """Estimate this dub's fal.ai cost. Returns a breakdown dict (no side effects).
+    chars_override lets callers estimate before the workdir/script file exists."""
     dur = video_duration(ffprobe_json(video)) if video and video.is_file() else 0.0
-    script = SWAP_WORK / stem / "script-edited.txt"
-    chars = len(script.read_text(encoding="utf-8")) if script.is_file() else 0
+    if chars_override is not None:
+        chars = chars_override
+    else:
+        script = SWAP_WORK / stem / "script-edited.txt"
+        chars = len(script.read_text(encoding="utf-8")) if script.is_file() else 0
 
     voice_cost = clone_cost = 0.0
     if engine == "fal":
@@ -279,7 +756,9 @@ def record_spend(stem: str, info: dict) -> dict:
             d.setdefault("cloned_stems", {})[stem] = info["tts"]
         FAL_SPEND_FILE.parent.mkdir(parents=True, exist_ok=True)
         FAL_SPEND_FILE.write_text(json.dumps(d, indent=1), encoding="utf-8")
-        return {"this_run": info["this_run"], "total": d["total"]}
+    emit_event("spend", {"stem": stem, "cost": info["this_run"],
+                         "total": d["total"], "summary": info.get("summary")})
+    return {"this_run": info["this_run"], "total": d["total"]}
 
 
 # a single confirm-dialog estimate should shout above this number (the owner's
@@ -320,6 +799,91 @@ def gate_estimate(est: dict) -> dict:
                 f"adds ~${total:.2f}, over the ${float(ceiling):.2f} limit. Raise "
                 "spend_ceiling_usd in video-studio/config.json to continue.")
     return est
+
+
+# ---------------------------------------------------------------- fal.ai pre-flight
+# The engines run their own fal_guard probe, but only ~1-2 min into the job.
+# This server-side check answers in <1s so paid endpoints (and the UI's fal
+# pill) can refuse BEFORE a workdir is built and a job slot is burned.
+FAL_STATUS_TTL = 60.0
+_fal_status_cache: dict = {"at": 0.0, "res": None}
+fal_status_lock = threading.Lock()
+
+
+def _fal_key() -> str:
+    try:
+        for line in FAL_ENV_FILE.read_text(encoding="utf-8").splitlines():
+            if line.strip().startswith("FAL_KEY="):
+                return line.split("=", 1)[1].strip()
+    except OSError:
+        pass
+    return ""
+
+
+def fal_key_status(force: bool = False) -> dict:
+    """Probe fal.ai auth/balance with the same free storage-initiate call
+    fal_guard uses (no charge). Cached FAL_STATUS_TTL seconds."""
+    now = time.time()
+    with fal_status_lock:
+        cached = _fal_status_cache["res"]
+        if cached and not force and now - _fal_status_cache["at"] < FAL_STATUS_TTL:
+            return cached
+    key = _fal_key()
+    masked = f"{key[:8]}…{key[-4:]}" if len(key) > 14 else ("(not set)" if not key else "(malformed)")
+    if not key:
+        res = {"valid": False, "key_masked": masked,
+               "message": "FAL_KEY is not set — add it to autoVSL/.env"}
+    else:
+        import urllib.request
+        import urllib.error
+        req = urllib.request.Request(
+            "https://rest.alpha.fal.ai/storage/upload/initiate",
+            data=json.dumps({"file_name": "preflight.txt",
+                             "content_type": "text/plain"}).encode(),
+            headers={"Authorization": f"Key {key}", "Content-Type": "application/json"},
+            method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=8) as r:
+                r.read()
+            res = {"valid": True, "key_masked": masked, "message": "fal key OK"}
+        except urllib.error.HTTPError as e:
+            try:
+                body = e.read().decode("utf-8", "replace")
+            except Exception:  # noqa: BLE001
+                body = ""
+            low = body.lower()
+            if e.code == 401 or "unauthor" in low:
+                msg = "fal.ai key rejected — replace FAL_KEY in autoVSL/.env"
+            elif e.code in (402, 403) or any(w in low for w in ("locked", "balance", "exhaust")):
+                msg = ("fal.ai account locked or out of balance — top up at "
+                       "fal.ai/dashboard/billing or replace FAL_KEY in autoVSL/.env")
+            else:
+                msg = f"fal.ai returned HTTP {e.code}: {body[:120]}"
+            res = {"valid": False, "key_masked": masked, "message": msg, "http": e.code}
+        except Exception as exc:  # noqa: BLE001
+            # network trouble is not a bad key — don't hard-block paid runs on it;
+            # the engine's own fal_guard probe runs again at job start
+            res = {"valid": True, "unreachable": True, "key_masked": masked,
+                   "message": f"fal.ai unreachable ({str(exc)[:120]}) — engine will re-check"}
+    res["checked_at"] = now
+    with fal_status_lock:
+        _fal_status_cache.update(at=now, res=res)
+    return res
+
+
+@app.get("/api/fal/status")
+def api_fal_status():
+    return jsonify(fal_key_status(force=bool(request.args.get("force"))))
+
+
+def fal_blocked_response():
+    """503 body for paid endpoints when the fal key can't pay; None when OK."""
+    st = fal_key_status()
+    if st.get("valid"):
+        return None
+    return jsonify({"error": st["message"], "fal_status": st,
+                    "fix": "Top up at fal.ai/dashboard/billing, or create your own key at "
+                           "fal.ai/dashboard/keys and replace FAL_KEY=... in autoVSL/.env"}), 503
 
 
 def soft_delete(target: Path, label: str) -> str:
@@ -416,6 +980,107 @@ def classify_failure(tail: str, returncode: int) -> dict | None:
     return None
 
 
+# ---------------------------------------------------------------- stage map
+# One contract, two consumers: the UI renders it as a stepper, Hermes reads it
+# as a supervision feed. Raw `=== stage: X ===` engine markers are folded into
+# canonical stages; jobs.py persists stage_log/stage_notes with the job.
+STAGE_MARK_RE = re.compile(r"=== stage:\s*([\w-]+)")
+STAGE_ALIASES = {"clone": "voice", "local-voice": "voice", "speak": "voice",
+                 "lipsync": "lipsync", "hd": "lipsync", "mux": "lipsync",
+                 "captions": "captions", "qa": "qa"}
+DUB_STAGES = ["plan", "voice", "lipsync", "captions", "qa", "export"]
+DUB_STAGE_TITLES = {"plan": "Plan & cost", "voice": "Voice (clone/TTS)",
+                    "lipsync": "Lip-sync", "captions": "Karaoke captions",
+                    "qa": "QA verdict", "export": "Export"}
+
+
+def _note_stage(job: dict, raw_key: str) -> None:
+    canon = STAGE_ALIASES.get(raw_key)
+    if not canon:
+        return
+    with jobs_lock:
+        log = job.setdefault("stage_log", [])
+        if log and log[-1]["key"] == canon:
+            return
+        log.append({"key": canon, "ts": time.time()})
+    emit_event("stage", {"job": job["id"], "slug": job.get("slug"),
+                         "action": job.get("action"), "stage": canon})
+
+
+def job_stages(job: dict) -> list[dict] | None:
+    """Compose the per-stage view of a dub job from its stage_log + workdir files."""
+    if job.get("action") != "dub":
+        return None
+    slug = job.get("slug") or ""
+    work = SWAP_WORK / slug
+    rel = f"output/script-swap/{slug}"
+    seen: dict[str, float] = {}
+    for e in job.get("stage_log") or []:
+        seen.setdefault(e["key"], e["ts"])
+    notes = job.get("stage_notes") or {}
+    jstatus = job.get("status")
+    reached = [k for k in DUB_STAGES if k in seen]
+    current = reached[-1] if reached else "plan"
+    cur_i = DUB_STAGES.index(current)
+    final = work / "final.mp4"
+    captioned = work / "final-captioned.mp4"
+    qa = read_json(work / "qa.json") if (work / "qa.json").is_file() else None
+    artifacts = {
+        "voice": work / "new-vo.mp3", "lipsync": final, "captions": captioned,
+        "qa": work / "qa.json", "export": captioned if captioned.is_file() else final,
+    }
+    out = []
+    for i, key in enumerate(DUB_STAGES):
+        if key == "plan":
+            st, started = "done", job.get("started")
+        elif i < cur_i:
+            st, started = "done", seen.get(key)
+        elif i == cur_i:
+            started = seen.get(key)
+            st = ("running" if jstatus == "running"
+                  else "done" if jstatus == "done" else "failed")
+        else:
+            started = None
+            st = "pending" if jstatus == "running" else "skipped"
+        # the deliverable check beats log inference for the tail stages
+        if jstatus == "done":
+            if key == "export" and (captioned.is_file() or final.is_file()):
+                st = "done"
+            if key == "qa" and qa is not None:
+                st = "done" if qa.get("pass") else "warned"
+        nxt = next((seen[k] for k in DUB_STAGES[i + 1:] if k in seen), None)
+        finished = (nxt or job.get("ended")) if st in ("done", "failed", "warned") else None
+        art = artifacts.get(key)
+        entry = {"key": key, "label": DUB_STAGE_TITLES[key], "status": st,
+                 "started": started, "finished": finished,
+                 "artifact": f"{rel}/{art.name}" if (art is not None and art.is_file()) else None}
+        if key == "qa" and qa is not None:
+            entry["meta"] = {"verdict": "PASS" if qa.get("pass") else "FAIL",
+                             "checks": qa.get("checks")}
+        if key in notes:
+            entry["note"] = notes[key]
+        out.append(entry)
+    return out
+
+
+@app.post("/api/job/<job_id>/stages/<key>/note")
+def api_job_stage_note(job_id, key):
+    """Attach a short supervision annotation to a stage (Hermes advises here)."""
+    job = jobs.get(job_id)
+    if not job:
+        abort(404)
+    if key not in DUB_STAGES:
+        abort(400, f"unknown stage — one of: {', '.join(DUB_STAGES)}")
+    note = ((request.get_json(force=True) or {}).get("note") or "").strip()[:500]
+    if not note:
+        abort(400, "empty note")
+    with jobs_lock:
+        job.setdefault("stage_notes", {})[key] = {"note": note, "at": time.time()}
+    emit_event("stage-note", {"job": job_id, "slug": job.get("slug"),
+                              "stage": key, "note": note})
+    return jsonify({"ok": True})
+
+
 def run_job(job_id: str, cmd: list[str], timeout_s: float | None = None) -> None:
     job = jobs[job_id]
     job["cmd"] = [str(c) for c in cmd]   # recorded so the job can be resumed
@@ -448,6 +1113,9 @@ def run_job(job_id: str, cmd: list[str], timeout_s: float | None = None) -> None
         for line in proc.stdout:
             with jobs_lock:
                 job["lines"].append(line.rstrip("\n"))
+            m = STAGE_MARK_RE.search(line)
+            if m:
+                _note_stage(job, m.group(1))
         proc.wait()
         if watchdog:
             watchdog.cancel()
@@ -480,6 +1148,14 @@ def run_job(job_id: str, cmd: list[str], timeout_s: float | None = None) -> None
         if got_gpu:
             GPU_LOCK.release()
         job["ended"] = time.time()
+        # a chain wrapper (_chaining) emits ONE terminal event itself — only
+        # standalone runs and failures report from here
+        if job["status"] != "running" and not (job["status"] == "done" and job.get("_chaining")):
+            job.pop("_chaining", None)
+            emit_event("job", {"id": job_id, "action": job.get("action"),
+                               "slug": job.get("slug"), "status": job["status"],
+                               "error": (job.get("error") or {}).get("title"),
+                               "cost": (job.get("cost") or {}).get("this_run")})
 
 
 @app.post("/api/job/<job_id>/stop")
@@ -538,10 +1214,24 @@ def api_job_resume(job_id):
 
 def run_dub_job(job_id: str, cmd: list[str], cost_ctx: dict) -> None:
     """Run a dub, then (if it spent money) append a cost line + update the running total."""
-    run_job(job_id, cmd)
     job = jobs[job_id]
-    if job["status"] != "done":
-        return
+    job["_chaining"] = True     # captions/QA may follow — one terminal event at the end
+    try:
+        run_job(job_id, cmd)
+        if job["status"] != "done":
+            return
+        _run_dub_cost(job_id, cmd, cost_ctx)
+        _post_dub_chain(job_id, cost_ctx)
+    finally:
+        job.pop("_chaining", None)
+        if job["status"] == "done":
+            emit_event("job", {"id": job_id, "action": job.get("action"),
+                               "slug": job.get("slug"), "status": "done",
+                               "cost": (job.get("cost") or {}).get("this_run")})
+
+
+def _run_dub_cost(job_id: str, cmd: list[str], cost_ctx: dict) -> None:
+    job = jobs[job_id]
     try:
         info = estimate_dub_cost(cost_ctx["engine"], cost_ctx["tts"], cost_ctx["tier"],
                                  Path(cost_ctx["video"]), cost_ctx["stem"],
@@ -564,11 +1254,125 @@ def run_dub_job(job_id: str, cmd: list[str], cost_ctx: dict) -> None:
             job["lines"].append(f"(cost tracking skipped: {exc})")
 
 
+def _post_dub_chain(job_id: str, cost_ctx: dict) -> None:
+    """Free follow-ups after a successful dub, in the SAME job: word-timed
+    captions (skipped when the dub already burned them / they're fresh) and the
+    QA verdict. Kill-switches in config.json: auto_caption / auto_qa (default on)."""
+    job = jobs[job_id]
+    if job["status"] != "done":
+        return
+    stem = cost_ctx.get("stem") or ""
+    work = SWAP_WORK / stem
+    final = work / "final.mp4"
+    if not stem or not final.is_file():
+        return
+    steps: list[tuple[str, str, list[str]]] = []
+    captioned = work / "final-captioned.mp4"
+    if (CONFIG.get("auto_caption", True) and (work / "new-vo.mp3").is_file()
+            and (not captioned.is_file()
+                 or final.stat().st_mtime > captioned.stat().st_mtime)):
+        steps.append(("captions", "captions (free, local)",
+                      [str(TRANSCRIBE_VENV_PY), str(ENGINES / "caption.py"), "--name", stem]))
+    if CONFIG.get("auto_qa", True):
+        steps.append(("qa", "QA verdict",
+                      [str(TRANSCRIBE_VENV_PY), str(QA_ENGINE), "--work", str(work)]))
+    for key, step_label, cmd in steps:
+        with jobs_lock:
+            job["status"] = "running"
+            job["ended"] = None
+            job["lines"].append("")
+            job["lines"].append(f"=== step: {step_label} ===")
+        _note_stage(job, key)
+        run_job(job_id, cmd)
+        if job["status"] != "done":
+            return
+    if cost_ctx.get("engine") == "fal" and CONFIG.get("auto_advise", True) and CLAUDE_EXE:
+        _auto_advise(job, stem)
+    if CONFIG.get("auto_qc", True) and CLAUDE_EXE and (work / "final-captioned.mp4").is_file():
+        rel = f"output/script-swap/{stem}/final-captioned.mp4"
+        qc_id = jobs_create("qc-ai", stem, f"AI QC review — {stem}")
+        threading.Thread(target=qc_ai_worker, args=(qc_id, rel), daemon=True).start()
+        with jobs_lock:
+            job["lines"].append(f"🔍 AI QC review queued on final-captioned.mp4 (job {qc_id})")
+
+
+AUTO_ADVISE_PROMPT = """You are the automated post-dub reviewer inside a local video tool. \
+A video was just dubbed with AI lip-sync. First, Read these {n_frames} image files — frames \
+from the DUBBED video:
+{frame_list}
+
+Judge the visual quality: is the mouth/lip region natural (no warping, smearing or ghost \
+teeth), is the rest of the face undamaged, is anything in frame artifacted?
+
+Reply with ONLY this JSON, no other text:
+{{"ok": true/false,
+  "recommend": "none|relipsync|visual|renorm",
+  "explanation": "1-2 short sentences on what you saw"}}
+Use "relipsync" for a bad mouth (free local Wav2Lip redo), "visual" for damage outside the \
+lips, "renorm" only for nothing-visual issues, "none" when it looks good."""
+
+
+def _auto_advise(job: dict, stem: str) -> None:
+    """Post-dub quality read: Claude looks at sample frames and either blesses the
+    take or recommends the free repair. Result → job log + <work>/advise.json,
+    which the DubSync lab renders as a one-click apply."""
+    work = SWAP_WORK / stem
+    final = work / "final.mp4"
+    try:
+        frames, _idx, iw, ih, _scale = _advise_frames(work, final)
+        if not frames:
+            return
+        prompt = AUTO_ADVISE_PROMPT.format(
+            n_frames=len(frames), frame_list="\n".join(f"  {p}" for p in frames))
+        env = job_env()
+        env.pop("CLAUDECODE", None)
+        r = subprocess.run([CLAUDE_EXE, "-p", "--model", "sonnet", "--allowedTools", "Read"],
+                           input=prompt, capture_output=True, text=True, encoding="utf-8",
+                           errors="replace", timeout=240, cwd=str(work), env=env)
+        out = (r.stdout or "").replace("�", "-")   # Windows console mojibake scrub
+        i, j2 = out.find("{"), out.rfind("}")
+        if r.returncode != 0 or i < 0 or j2 <= i:
+            raise RuntimeError((r.stderr or out)[:160] or "no reply")
+        verdict = json.loads(out[i:j2 + 1])
+        rec = verdict.get("recommend") if verdict.get("recommend") in (
+            "none", "relipsync", "visual", "renorm") else ("none" if verdict.get("ok") else "relipsync")
+        (work / "advise.json").write_text(json.dumps(
+            {"ok": bool(verdict.get("ok")), "recommend": rec,
+             "explanation": verdict.get("explanation") or "", "ts": time.time()},
+            indent=1), encoding="utf-8")
+        with jobs_lock:
+            job["lines"].append("")
+            if rec == "none":
+                job["lines"].append(f"🩺 DubSync advise: OK — {verdict.get('explanation') or 'lip-sync looks clean'}")
+            else:
+                free = " (free)" if rec in ("relipsync", "renorm", "visual") else ""
+                job["lines"].append(f"🩺 DubSync advise: {rec} recommended{free} — "
+                                    f"{verdict.get('explanation') or ''} → one click in the DubSync lab")
+        emit_event("advise", {"slug": stem, "recommend": rec,
+                              "explanation": verdict.get("explanation") or ""})
+    except Exception as exc:  # noqa: BLE001 — advice is best-effort, never fail the dub
+        with jobs_lock:
+            job["lines"].append(f"(auto-advise skipped: {str(exc)[:120]})")
+
+
 @app.get("/api/spend")
 def api_spend():
     d = load_spend()
     return jsonify({"total": round(float(d.get("total", 0.0)), 2),
                     "runs": list(reversed(d.get("runs", [])))[:20]})
+
+
+@app.get("/api/spend/daily")
+def api_spend_daily():
+    """Per-day spend rollup — Hermes alerts on day-over-day deltas from this."""
+    days: dict[str, float] = {}
+    for r in load_spend().get("runs", []):
+        day = time.strftime("%Y-%m-%d", time.localtime(float(r.get("ts") or 0)))
+        days[day] = round(days.get(day, 0.0) + float(r.get("cost") or 0), 4)
+    today = time.strftime("%Y-%m-%d")
+    return jsonify({"days": days, "today": days.get(today, 0.0),
+                    "ceiling_usd": CONFIG.get("spend_ceiling_usd"),
+                    "window": CONFIG.get("spend_ceiling_window", "month")})
 
 
 @app.get("/api/prices")
@@ -711,6 +1515,9 @@ def api_run():
                 "hummingbird", "sync3") else "pro"
             tts = body.get("tts") if body.get("tts") in (
                 "hd", "turbo", "hd25", "turbo25", "f5", "chatterbox") else "hd"
+            blocked = fal_blocked_response()   # fail in <1s, not 2 min into the job
+            if blocked:
+                return blocked
             # cloud pipeline: always costs money — answer with the real number first
             est = gate_estimate(estimate_dub_cost("fal", tts, tier, src, stem,
                                                   load_spend().get("cloned_stems", {})))
@@ -794,6 +1601,12 @@ def api_jobs():
             | {"line_count": len(j["lines"]), "progress": job_progress(j)}
             for j in sorted(jobs.values(), key=lambda j: j["started"], reverse=True)
         ]
+    # stage maps for the cards: running dubs + the 20 newest (file stats — outside the lock)
+    fresh = 0
+    for j in out:
+        if j.get("action") == "dub" and (j.get("status") == "running" or fresh < 20):
+            j["stages"] = job_stages(j)
+            fresh += 1
     return jsonify(out)
 
 
@@ -820,13 +1633,16 @@ def api_job(job_id):
     offset = int(request.args.get("offset", 0))
     with jobs_lock:
         lines = job["lines"][offset:]
-        return jsonify({
+        payload = {
             "id": job["id"], "label": job["label"], "status": job["status"],
             "returncode": job["returncode"], "lines": lines,
             "next_offset": offset + len(lines),
             "cost": job.get("cost"),
             "error": job.get("error"),
-        })
+            "action": job.get("action"), "slug": job.get("slug"),
+        }
+    payload["stages"] = job_stages(job)     # file stats — outside the lock
+    return jsonify(payload)
 
 
 # ---------------------------------------------------------------- transcribe
@@ -2652,6 +3468,9 @@ def api_dubs():
                 "has_vo": (d / "new-vo.mp3").is_file(),
                 "has_source": bool(source) and Path(source).is_file(),
                 "takes": takes[:12],
+                "advise": read_json(d / "advise.json"),
+                "qa": (lambda q: {"pass": q.get("pass"), "checks": q.get("checks")}
+                       if q else None)(read_json(d / "qa.json")),
             })
     dubs.sort(key=lambda x: x["final_mtime"], reverse=True)
     return jsonify({"dubs": dubs})
@@ -2723,6 +3542,9 @@ def api_dubsync_repair():
             secs += max((s1 - s0) + 2 * pad, min_bill)
         if not parts:
             abort(400, "mark at least one time range first")
+        blocked = fal_blocked_response()
+        if blocked:
+            return blocked
         est = gate_estimate({
             "this_run": round(secs * rate, 3), "engine": "fal-segsync", "tier": tier,
             "summary": f"re-lipsync {len(parts)} segment(s) / ~{secs:.1f}s on {tier} "
@@ -2849,6 +3671,60 @@ def api_dubsync_visual_preview():
     warn = next((ln for ln in out.splitlines() if ln.startswith("WARNING:")), None)
     return jsonify({"img": f"/media/output/script-swap/{stem}/preview-visual.jpg",
                     "align": align, "warning": warn, "ts": time.time()})
+
+
+@app.post("/api/dubsync/promote")
+def api_dubsync_promote():
+    """Repair → QA → promote: run the QA checks on a repair take; on PASS it
+    becomes final.mp4 (the old final is archived into versions.json) and the
+    captions re-burn automatically — the captioned_stale flag never lingers."""
+    body = request.get_json(force=True)
+    stem = Path(body.get("stem") or "").name
+    fname = Path(body.get("file") or "").name
+    work = SWAP_WORK / stem
+    take = work / fname
+    if (not stem or not take.is_file() or take.suffix != ".mp4"
+            or not (fname.startswith("repair-") or fname.startswith("final."))):
+        abort(400, "pick a repair-*.mp4 (or archived final.*.mp4) take in this dub's workdir")
+    qa_out = work / "qa-promote.json"
+    try:
+        r = subprocess.run([str(TRANSCRIBE_VENV_PY), str(QA_ENGINE), "--work", str(work),
+                            "--video", str(take), "--out", str(qa_out)],
+                           capture_output=True, text=True, encoding="utf-8", errors="replace",
+                           timeout=600, env=job_env())
+    except subprocess.TimeoutExpired:
+        abort(504, "QA took too long — the GPU is probably busy; try again")
+    verdict = read_json(qa_out) or {}
+    if r.returncode != 0 or not verdict:
+        abort(500, f"QA could not run: {((r.stdout or '') + (r.stderr or ''))[-250:]}")
+    if not verdict.get("pass") and not body.get("force"):
+        return jsonify({"promoted": False, "qa": verdict,
+                        "hint": "QA failed — fix the take or pass force:true to promote anyway"}), 409
+
+    final = work / "final.mp4"
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    versions = read_json(work / "versions.json") or {}
+    archived = None
+    if final.is_file():
+        dest = work / f"final.{stamp}.mp4"
+        final.rename(dest)
+        versions[dest.name] = {"created": time.time(), "archived_by": "promote"}
+        archived = dest.name
+    shutil.copy2(take, final)
+    versions.pop(fname, None)
+    (work / "versions.json").write_text(json.dumps(versions, indent=1), encoding="utf-8")
+    qa_out.replace(work / "qa.json")            # the take IS the final now
+
+    caption_job = None
+    if CONFIG.get("auto_caption", True) and (work / "new-vo.mp3").is_file():
+        caption_job = jobs_create("captions", stem, f"Captions after promote — {stem}")
+        threading.Thread(target=run_job, args=(caption_job,
+                         [str(TRANSCRIBE_VENV_PY), str(ENGINES / "caption.py"), "--name", stem]),
+                         daemon=True).start()
+    emit_event("promote", {"slug": stem, "take": fname, "archived": archived,
+                           "qa_pass": bool(verdict.get("pass"))})
+    return jsonify({"promoted": True, "qa": verdict, "archived": archived,
+                    "caption_job": caption_job})
 
 
 ADVISE_PROMPT = """You are the repair advisor inside a local video tool. A user dubbed a video \
@@ -3453,6 +4329,9 @@ def api_background_generate():
                        "the background you want in the box (or add a reference photo)")
         prompt = _BG_SCENE_BASE + _BG_SCENE_FROM_SCRIPT + script[:1500]
 
+    blocked = fal_blocked_response()
+    if blocked:
+        return blocked
     est = _img_estimate(model, 1, "1K")
     est = gate_estimate(est)
     if est.get("blocked") or not body.get("confirm_cost"):
@@ -3664,6 +4543,63 @@ def api_clone_script():
                     "seconds": round(secs, 1), "rate": round(rate, 2)})
 
 
+def _clone_reuse_voice(work: Path, actor: str) -> Path | None:
+    """An existing paid voice clone this run can reuse (skips the $1.50 fee):
+    same actor → the winner's voice.json; a different actor → a Voice Bank entry
+    whose source video matches and has a saved fal clone (fal-voice.json)."""
+    if actor == "same":
+        v = work / "voice.json"
+        return v if v.is_file() else None
+    aname = Path(actor).name
+    if VOICES_DIR.is_dir():
+        for d in VOICES_DIR.iterdir():
+            if ((d / "fal-voice.json").is_file()
+                    and (read_json(d / "voice.json") or {}).get("source") == aname):
+                return d / "fal-voice.json"
+    return None
+
+
+def _clone_params(body: dict) -> dict:
+    """Shared engine/tier/tts parsing for clone estimate + run (one source of truth)."""
+    engine = body.get("engine") if body.get("engine") in ("local", "fal") else "local"
+    lipsync = body.get("lipsync") if body.get("lipsync") in (
+        "none", "wav2lip", "wav2lip-hd") else "wav2lip-hd"
+    # latentsync default: best quality/cost on fal ($0.005/s ≈ $0.21 per 41s VSL)
+    tier = body.get("tier") if body.get("tier") in (
+        "pro", "standard", "veed", "latentsync") else "latentsync"
+    tts = body.get("tts") if body.get("tts") in ("hd", "turbo", "f5") else "hd"
+    return {"engine": engine, "lipsync": lipsync, "tier": tier, "tts": tts}
+
+
+def _clone_dub_estimate(work: Path, actor: str, script: str, p: dict) -> dict:
+    """Clone-run cost estimate BEFORE the workdir exists (script text from the body)."""
+    video = _clone_actor_video(work, actor)
+    stem = "__clone__"
+    already = dict(load_spend().get("cloned_stems", {}))
+    reuse = _clone_reuse_voice(work, actor)
+    if p["engine"] == "fal" and reuse:
+        already[stem] = p["tts"]        # a saved clone will be copied in — no fee
+    tier = p["tier"] if p["engine"] == "fal" else p["lipsync"]
+    est = estimate_dub_cost(p["engine"], p["tts"] if p["engine"] == "fal" else "local",
+                            tier, video, stem, already, chars_override=len(script))
+    est["voice_reused"] = bool(p["engine"] == "fal" and reuse)
+    return est
+
+
+@app.post("/api/clone/estimate")
+def api_clone_estimate():
+    """Cost estimate for a clone run — same shape the paid-run confirm dialog expects."""
+    body = request.get_json(force=True)
+    winner = Path(body.get("winner") or "").name
+    work = SWAP_WORK / winner
+    if not winner or not work.is_dir():
+        abort(404, "no such winner")
+    script = (body.get("script") or "").strip() or _winner_script(work)
+    p = _clone_params(body)
+    return jsonify(gate_estimate(_clone_dub_estimate(work, body.get("actor") or "same",
+                                                     script, p)))
+
+
 @app.post("/api/clone/run")
 def api_clone_run():
     """Create the clone workdir and run the full dub chain on it (same GPU/cost gates as Dubbing)."""
@@ -3677,12 +4613,24 @@ def api_clone_run():
         abort(400, "the clone script is empty/too short — generate or paste one first")
     actor = body.get("actor") or "same"
     video = _clone_actor_video(work, actor)
+    p = _clone_params(body)
 
     with jobs_lock:
         busy = next((j for j in jobs.values()
                      if j["action"] == "dub" and j["status"] == "running"), None)
     if busy:
         abort(409, f"a dub is already running ({busy['slug']}) — the GPU handles one at a time")
+
+    # paid path: refuse BEFORE building the workdir — key preflight, then the
+    # house 402 confirm/ceiling gate (this endpoint used to bypass gate_estimate)
+    est = None
+    if p["engine"] == "fal":
+        blocked = fal_blocked_response()
+        if blocked:
+            return blocked
+        est = gate_estimate(_clone_dub_estimate(work, actor, script, p))
+        if est.get("blocked") or not body.get("confirm_cost"):
+            return jsonify({"needs_confirm": True, "estimate": est}), 402
 
     n = 2
     while (SWAP_WORK / f"{winner}-v{n}").exists():
@@ -3696,34 +4644,31 @@ def api_clone_run():
         "winner": winner, "actor": "same" if actor == "same" else video.name,
         "created": time.time()}, indent=1), encoding="utf-8")
 
-    engine = body.get("engine") if body.get("engine") in ("local", "fal") else "local"
     venv_py = Path(CONFIG["venvs"]["cv"])
-    if engine == "local":
-        lipsync = body.get("lipsync") if body.get("lipsync") in (
-            "none", "wav2lip", "wav2lip-hd") else "wav2lip-hd"
+    first_lines = []
+    if p["engine"] == "local":
         cmd = [str(venv_py), str(ENGINES / "local_dub.py"), str(video),
-               "--name", stem, "--lipsync", lipsync]
-        label = f"Clone winner — {stem} (local XTTS + {lipsync}, FREE)"
-        cost_ctx = {"engine": "local", "tts": "local", "tier": lipsync,
+               "--name", stem, "--lipsync", p["lipsync"]]
+        label = f"Clone winner — {stem} (local XTTS + {p['lipsync']}, FREE)"
+        cost_ctx = {"engine": "local", "tts": "local", "tier": p["lipsync"],
                     "video": str(video), "stem": stem, "paid": False}
     else:
-        if not body.get("confirm_cost"):
-            shutil.rmtree(clone_work, ignore_errors=True)
-            abort(400, "FAL.AI clone spends money (voice + TTS + lip-sync) — needs cost approval (confirm_cost)")
-        # same actor → reuse the winner's paid voice clone (skips the $1.50 clone fee)
-        if actor == "same" and (work / "voice.json").is_file():
-            shutil.copy2(work / "voice.json", clone_work / "voice.json")
-        tier = body.get("tier") if body.get("tier") in ("pro", "standard", "veed", "latentsync") else "standard"
-        tts = body.get("tts") if body.get("tts") in ("hd", "turbo", "f5") else "hd"
+        reuse = _clone_reuse_voice(work, actor)
+        if reuse:
+            shutil.copy2(reuse, clone_work / "voice.json")
+            first_lines.append("🎙 Reusing saved voice clone (free — no $1.50 fee)")
+        else:
+            first_lines.append(f"🎙 Cloning voice from {video.name} audio (one-time $1.50)")
         cmd = [str(venv_py), str(ENGINES / "dub.py"), str(video),
-               "--name", stem, "--tier", tier, "--tts", tts]
-        label = f"Clone winner — {stem} (fal {tts}/{tier}) $"
-        cost_ctx = {"engine": "fal", "tts": tts, "tier": tier,
+               "--name", stem, "--tier", p["tier"], "--tts", p["tts"]]
+        label = f"Clone winner — {stem} (fal {p['tts']}/{p['tier']}) $"
+        cost_ctx = {"engine": "fal", "tts": p["tts"], "tier": p["tier"],
                     "video": str(video), "stem": stem, "paid": True}
+        first_lines.insert(0, f"💰 estimate: ${est['this_run']:.2f} — {est['summary']}")
 
-    job_id = jobs_create("dub", stem, label)
+    job_id = jobs_create("dub", stem, label, lines=first_lines)
     threading.Thread(target=run_dub_job, args=(job_id, cmd, cost_ctx), daemon=True).start()
-    return jsonify({"job_id": job_id, "stem": stem})
+    return jsonify({"job_id": job_id, "stem": stem, "estimate": est})
 
 
 @app.get("/api/clone/list")
@@ -3876,6 +4821,9 @@ def api_duo_run():
     if not cfg:
         abort(400, "no duo-config yet — run Detect speakers first")
 
+    blocked = fal_blocked_response()
+    if blocked:
+        return blocked
     est = _duo_estimate(stem, cfg, tier)
     est = gate_estimate(est)
     if est.get("blocked") or not body.get("confirm_cost"):
@@ -4026,6 +4974,7 @@ def api_voices():
                 "id": d.name, "name": info.get("name") or d.name,
                 "source": info.get("source"), "created": info.get("created"),
                 "sample": f"output/voices/{d.name}/sample.mp3" if (d / "sample.mp3").is_file() else None,
+                "has_fal_clone": (d / "fal-voice.json").is_file(),
             })
     return jsonify({"voices": out})
 
@@ -4076,6 +5025,63 @@ def api_voices_create():
                     "sample": f"output/voices/{vid}/sample.mp3"})
 
 
+def run_voice_clone_job(job_id: str, cmd: list[str], vid: str, tmp_work: Path) -> None:
+    """Run the MiniMax clone stage, then move the voice id into the Voice Bank."""
+    run_job(job_id, cmd)
+    job = jobs[job_id]
+    src = tmp_work / "voice.json"
+    try:
+        if job["status"] == "done" and src.is_file():
+            shutil.copy2(src, VOICES_DIR / vid / "fal-voice.json")
+            res = record_spend(f"voice-{vid}", {
+                "this_run": MINIMAX_CLONE_FEE, "engine": "fal", "clone": 0,
+                "summary": f"one-time MiniMax voice clone saved to Voice Bank ({vid})"})
+            with jobs_lock:
+                job["lines"].append("")
+                job["lines"].append(f"🎙 Voice clone saved — future fal dubs with this "
+                                    f"actor skip the ${MINIMAX_CLONE_FEE:.2f} fee")
+                job["lines"].append(f"💰 ${res['this_run']:.2f} on fal.ai (total ${res['total']:.2f})")
+            job["cost"] = {"this_run": res["this_run"], "total": res["total"],
+                           "summary": "voice clone"}
+        elif job["status"] == "done":
+            job["status"] = "failed"
+            job["error"] = {"kind": "no_output", "title": "clone stage produced no voice.json",
+                            "fix": "See the log — the fal clone call likely failed"}
+    finally:
+        shutil.rmtree(tmp_work, ignore_errors=True)
+
+
+@app.post("/api/voices/<vid>/fal-clone")
+def api_voices_fal_clone(vid):
+    """Pre-clone this voice on fal (MiniMax, one-time $1.50) so later fal dubs
+    with the same actor reuse it for free. Saves fal-voice.json in the bank."""
+    vid = Path(vid).name
+    meta = _voice_meta(vid)
+    if not meta:
+        abort(404, "voice not found")
+    if (VOICES_DIR / vid / "fal-voice.json").is_file():
+        abort(400, "this voice already has a saved fal clone")
+    src = UPLOADS / Path(meta.get("source") or "").name
+    if not src.is_file():
+        abort(400, f"the voice's source video is gone from uploads: {meta.get('source')}")
+    blocked = fal_blocked_response()
+    if blocked:
+        return blocked
+    est = gate_estimate({"this_run": MINIMAX_CLONE_FEE, "engine": "fal-clone",
+                         "summary": f"one-time MiniMax voice clone ≈ ${MINIMAX_CLONE_FEE:.2f}"})
+    if est.get("blocked") or not (request.get_json(silent=True) or {}).get("confirm_cost"):
+        return jsonify({"needs_confirm": True, "estimate": est}), 402
+    tmp_name = f"_voice-{vid}"
+    tmp_work = SWAP_WORK / tmp_name
+    tmp_work.mkdir(parents=True, exist_ok=True)
+    cmd = [str(Path(CONFIG["venvs"]["cv"])), str(ROOT / "scripts" / "script-swap.py"),
+           "clone", str(src), "--name", tmp_name]
+    job_id = jobs_create("voice-clone", vid, f"Voice Bank — fal clone of {meta.get('name') or vid} $")
+    threading.Thread(target=run_voice_clone_job, args=(job_id, cmd, vid, tmp_work),
+                     daemon=True).start()
+    return jsonify({"job_id": job_id, "estimate": est})
+
+
 @app.post("/api/voices/rename")
 def api_voices_rename():
     b = request.get_json(force=True)
@@ -4103,6 +5109,11 @@ def api_voices_delete():
 @app.get("/voices")
 def voices_page():
     return send_from_directory(STATIC, "voices.html")
+
+
+@app.get("/agent")
+def agent_page():
+    return send_from_directory(STATIC, "agent.html")
 
 
 # ------------------------------------------------ Image -> Video (fal.ai)
@@ -4197,6 +5208,9 @@ def api_i2v_run():
     if not str(img).startswith(str(I2V_UPLOADS.resolve())) or not img.is_file():
         abort(400, "upload an image first")
 
+    blocked = fal_blocked_response()
+    if blocked:
+        return blocked
     est = _i2v_estimate(model, seconds)
     est = gate_estimate(est)
     if est.get("blocked") or not b.get("confirm_cost"):
@@ -4226,6 +5240,7 @@ def api_i2v_list():
             with jobs_lock:
                 cand = [j for j in jobs.values() if j["slug"] == d.name and j["action"] == "i2v"]
                 job = max(cand, key=lambda j: j["started"]) if cand else None
+            cap = d / "clip-captioned.mp4"
             items.append({
                 "slug": d.name, "prompt": info.get("prompt"), "model_label": info.get("model_label"),
                 "aspect": info.get("aspect"), "seconds": info.get("seconds"),
@@ -4233,6 +5248,8 @@ def api_i2v_list():
                 "ready": clip.is_file() and clip.stat().st_size > 0,
                 "clip": f"output/i2v/{d.name}/clip.mp4" if clip.is_file() else None,
                 "clip_mtime": clip.stat().st_mtime if clip.is_file() else None,
+                "captioned": (f"output/i2v/{d.name}/clip-captioned.mp4"
+                              if cap.is_file() and cap.stat().st_size > 0 else None),
                 "job": {"id": job["id"], "status": job["status"]} if job else None,
             })
     return jsonify({"items": items})
@@ -4359,6 +5376,9 @@ def api_fit_run():
     aspect = _fit_aspect(src, aspect)
     seg = I2V_MODELS[model]["seg"]
     need = _fit_need(float(plan.get("gap") or 0), seg)
+    blocked = fal_blocked_response()
+    if blocked:
+        return blocked
     est = _i2v_estimate(model, need)
     est = gate_estimate(est)
     if est.get("blocked") or not b.get("confirm_cost"):
@@ -4482,6 +5502,9 @@ def api_t2v_continue():
         end = float(b.get("end") or 0)
     except (TypeError, ValueError):
         abort(400, "bad start/end times")
+    blocked = fal_blocked_response()
+    if blocked:
+        return blocked
     est = _i2v_estimate(model, seconds)
     est = gate_estimate(est)
     if est.get("blocked") or not b.get("confirm_cost"):
@@ -4690,6 +5713,9 @@ def api_brollvid_run():
                         f"\n= ~${total:.2f} total")
         est = {"this_run": total, "engine": "fal-t2v", "model": t2v_model, "summary": summary}
     if est:
+        blocked = fal_blocked_response()
+        if blocked:
+            return blocked
         est = gate_estimate(est)
     if est and (est.get("blocked") or not b.get("confirm_cost")):
         return jsonify({"needs_confirm": True, "estimate": est}), 402
@@ -4966,7 +5992,7 @@ UGC_MODELS = {
     "wan-2.2":   {"label": "Wan 2.2 — budget · silent",
                   "audio": False, "durations": (5,), "cost_per_s": 0.04},
 }
-UGC_TEMPLATES = ("selfie", "selling", "podcast", "car", "mirror", "stream", "static")
+UGC_TEMPLATES = ("selfie", "selling", "podcast", "car", "mirror", "stream", "static", "vsl")
 UGC_VOICES = ("auto", "whisper", "rough", "harsh", "soft", "low", "high", "none")
 UGC_EMOTIONS = ("auto", "happy", "angry", "fearful", "surprised", "disgusted",
                 "excited", "calm", "playful", "serious")
@@ -5090,6 +6116,9 @@ def api_ugc_run():
                + (f" (incl. ${UGC_MERGE_COST} product merge)" if product else ""))
     est = {"this_run": total, "engine": "fal-ugc", "model": model, "seconds": eff_seconds,
            "segments": len(segs), "summary": summary}
+    blocked = fal_blocked_response()
+    if blocked:
+        return blocked
     if not b.get("confirm_cost"):
         return jsonify({"needs_confirm": True, "estimate": est}), 402
 
@@ -5108,10 +6137,53 @@ def api_ugc_run():
                 "--ds-app", str(Path(CONFIG["dubbing_studio"]) / "app.py"),
                 "--lipsync", lipsync]
     # a bank voice runs XTTS (and possibly Wav2Lip) locally — hold the GPU slot
+    do_captions = bool(b.get("captions", CONFIG.get("auto_caption", True)))
+    caption_text = (b.get("caption_text") or "").strip()[:1500]
+    caption_keywords = (b.get("caption_keywords") or "").strip()[:500]
     job_id = jobs_create("ugc", slug, f"UGC Factory — {slug} [{template}/{model}]",
                          gpu=bool(voice_ref))
-    threading.Thread(target=run_i2v_job, args=(job_id, cmd, slug, est), daemon=True).start()
+    threading.Thread(target=run_ugc_job,
+                     args=(job_id, cmd, slug, est, do_captions, caption_text,
+                           caption_keywords),
+                     daemon=True).start()
     return jsonify({"job_id": job_id, "slug": slug, "estimate": est})
+
+
+def run_ugc_job(job_id: str, cmd: list[str], slug: str, est: dict,
+                do_captions: bool = True, caption_text: str = "",
+                caption_keywords: str = "") -> None:
+    """UGC pipeline: generate → (free) VSL-style karaoke captions in the SAME
+    job, mirroring the dub chain. clip.mp4 stays clean; the deliverable with
+    captions is clip-captioned.mp4. Step 6 in the form: on/off per run, and
+    caption_text burns the founder's exact wording (timing from the audio)."""
+    run_i2v_job(job_id, cmd, slug, est)          # generation + spend ledger
+    job = jobs[job_id]
+    clip = I2V_OUT / slug / "clip.mp4"
+    if (job["status"] != "done" or not do_captions
+            or not clip.is_file() or not has_audio_stream(clip)):
+        return
+    with jobs_lock:
+        job["status"] = "running"
+        job["ended"] = None
+        job["lines"].append("")
+        job["lines"].append("=== step: captions (free, local) ===")
+    cap_cmd = [str(TRANSCRIBE_VENV_PY), str(ENGINES / "caption.py"),
+               "--video", str(clip), "--name", slug]
+    if caption_text:
+        cap_cmd += ["--text", caption_text]
+    if caption_keywords:
+        cap_cmd += ["--keywords", caption_keywords]
+    run_job(job_id, cap_cmd)
+    if job["status"] != "done":
+        return
+    src = ROOT / "output" / "recaption" / slug / "captioned.mp4"
+    if src.is_file():
+        shutil.copy2(src, I2V_OUT / slug / "clip-captioned.mp4")
+        with jobs_lock:
+            job["lines"].append(f"📝 captioned deliverable → output/i2v/{slug}/clip-captioned.mp4")
+    else:
+        with jobs_lock:
+            job["lines"].append("(captions produced no output — clip.mp4 is still good)")
 
 
 @app.get("/commercial")
@@ -5139,8 +6211,15 @@ def api_settings_get():
                          "min_free_space_gb": float(ac.get("min_free_space_gb", 20))},
         "exports_dir": str(EXPORTS_DIR),
         "remote_pin_set": bool(CONFIG.get("remote_pin")),
+        "agent_token_set": bool(CONFIG.get("agent_token")),
         "lan_access": bool(CONFIG.get("lan_access")),
         "port": CONFIG.get("port"),
+        "spend_ceiling_usd": CONFIG.get("spend_ceiling_usd"),
+        "spend_ceiling_window": CONFIG.get("spend_ceiling_window", "month"),
+        "auto_caption": bool(CONFIG.get("auto_caption", True)),
+        "auto_qa": bool(CONFIG.get("auto_qa", True)),
+        "auto_advise": bool(CONFIG.get("auto_advise", True)),
+        "auto_qc": bool(CONFIG.get("auto_qc", True)),
     })
 
 
@@ -5168,6 +6247,17 @@ def api_settings_save():
             p.mkdir(parents=True, exist_ok=True)
             CONFIG["exports_dir"] = str(p)
             EXPORTS_DIR = p
+        if "spend_ceiling_usd" in b:
+            try:
+                v = float(b["spend_ceiling_usd"] or 0)
+            except (TypeError, ValueError):
+                abort(400, "spend_ceiling_usd must be a number")
+            CONFIG["spend_ceiling_usd"] = round(v, 2) if v > 0 else None
+        if b.get("spend_ceiling_window") in ("day", "week", "month"):
+            CONFIG["spend_ceiling_window"] = b["spend_ceiling_window"]
+        for flag in ("auto_caption", "auto_qa", "auto_advise", "auto_qc"):
+            if flag in b:
+                CONFIG[flag] = bool(b[flag])
         tmp = CONFIG_FILE.with_suffix(".tmp")
         tmp.write_text(json.dumps(CONFIG, indent=2), encoding="utf-8")
         tmp.replace(CONFIG_FILE)
@@ -6030,6 +7120,9 @@ def api_broll_generate():
         model = b.get("fal_model", "kling-2.1")
         if model not in I2V_MODELS:
             abort(400, "unknown fal model")
+        blocked = fal_blocked_response()
+        if blocked:
+            return blocked
         est = gate_estimate(_broll_fal_estimate(recipe, ids, model))
         if est.get("blocked") or not b.get("confirm_cost"):
             return jsonify({"needs_confirm": True, "estimate": est}), 402
@@ -6601,6 +7694,9 @@ def api_img_run():
             abort(400, "bad reference image")
         refs.append(p)
 
+    blocked = fal_blocked_response()
+    if blocked:
+        return blocked
     est = _img_estimate(model, num, resolution)
     est = gate_estimate(est)
     if est.get("blocked") or not b.get("confirm_cost"):
@@ -7005,6 +8101,9 @@ def api_img_mask_ai():
         return jsonify({"needs_confirm": True,
                         "estimate": {"this_run": SAM_COST, "engine": "fal-sam",
                                      "summary": f"EVF-SAM mask ≈ ${SAM_COST:.3f}"}}), 402
+    blocked = fal_blocked_response()
+    if blocked:
+        return blocked
 
     cmd = [str(Path(CONFIG["venvs"]["cv"])), str(MASKEDIT_ENGINE),
            "--work", str(work), "--image", str(src), "--task", "mask",
@@ -7046,6 +8145,9 @@ def api_img_fill():
     if not mask.is_file():
         abort(400, "make a mask first — draw a box, paint it, or describe it")
 
+    blocked = fal_blocked_response()
+    if blocked:
+        return blocked
     est = _fill_estimate(model, src)
     est = gate_estimate(est)
     if est.get("blocked") or not b.get("confirm_cost"):
