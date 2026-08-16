@@ -223,3 +223,42 @@ def init() -> None:
     load_persisted()
     threading.Thread(target=_flusher, daemon=True).start()
     threading.Thread(target=_awake_keeper, daemon=True).start()
+
+
+# ---------------------------------------------------------------- cleanup
+
+def cleanup(statuses: list[str] | None = None, keep: int = 30) -> dict:
+    """Delete finished jobs of the given statuses, keeping the newest `keep`
+    per status. Also removes their log files.
+
+    Never touches running/queued jobs. Returns a summary dict with the number
+    of removed jobs, the removed ids (first 50) and how many were kept per
+    status.
+    """
+    statuses = statuses or ["failed", "interrupted", "stopped"]
+    removed: list[str] = []
+    kept_per_status: dict[str, int] = {}
+    with jobs_lock:
+        by_status: dict[str, list[str]] = {}
+        for jid, job in jobs.items():
+            st = job.get("status")
+            if st in statuses:
+                by_status.setdefault(st, []).append(jid)
+        for st, jids in by_status.items():
+            jids.sort(key=lambda j: jobs[j].get("started") or 0, reverse=True)
+            doomed = jids[keep:]
+            kept_per_status[st] = len(jids) - len(doomed)
+            for jid in doomed:
+                del jobs[jid]
+                _meta.pop(jid, None)
+                removed.append(jid)
+    # _write_index takes jobs_lock itself — call OUTSIDE the lock (no deadlock)
+    _write_index()
+    # delete log files outside the lock (best effort, never fatal)
+    for jid in removed:
+        try:
+            (JOBS_DIR / f"{jid}.log").unlink(missing_ok=True)
+        except Exception:
+            pass
+    return {"removed": len(removed), "ids": removed[:50],
+            "kept_per_status": kept_per_status}

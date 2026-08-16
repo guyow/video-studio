@@ -170,7 +170,8 @@ def api_ping():
 # ---------------------------------------------------------------- job runner
 
 from jobs import (jobs, jobs_lock, GPU_LOCK, needs_gpu, wait_for_gpu,
-                  acquire_gpu, init as jobs_init, create as jobs_create)
+                  acquire_gpu, init as jobs_init, create as jobs_create,
+                  cleanup as jobs_cleanup)
 
 jobs_init()  # restore persisted jobs; start the flusher + keep-awake threads
 
@@ -794,6 +795,21 @@ def api_jobs():
             for j in sorted(jobs.values(), key=lambda j: j["started"], reverse=True)
         ]
     return jsonify(out)
+
+
+@app.post("/api/jobs/cleanup")
+def api_jobs_cleanup():
+    """Delete finished jobs by status (default: failed/interrupted/stopped),
+    keeping the newest N per status. Body: {statuses?: [..], keep?: int}."""
+    body = request.get_json(force=True) or {}
+    statuses = body.get("statuses")
+    if statuses is not None and not isinstance(statuses, list):
+        abort(400, "statuses must be a list")
+    try:
+        keep = int(body.get("keep") or 30)
+    except (TypeError, ValueError):
+        abort(400, "keep must be an int")
+    return jsonify(jobs_cleanup(statuses=statuses, keep=keep))
 
 
 @app.get("/api/job/<job_id>")

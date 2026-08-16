@@ -119,3 +119,6 @@ opencode.json
 tools/XR-Animator/
 video-studio/weights/
 autoVSL/banks/backgrounds/
+
+# editor backup snapshots
+*.bak-*
