@@ -25,10 +25,21 @@
   .drop-img:hover,.drop-img.drag { border-color:var(--accent); color:var(--accent2);
     background:rgba(124,92,255,.06); }
   .drop-img.on { border-style:solid; border-color:var(--ok); color:var(--ok); }
-  .drop-img .pv { display:flex; align-items:center; gap:12px; text-align:left; min-width:0; }
-  .drop-img .pv .thumb { width:64px; height:64px; object-fit:cover; border-radius:9px;
-    border:1px solid var(--line); background:#0a0d14; flex:none; }
-  .drop-img .pv .nm { font-size:12.5px; overflow-wrap:anywhere; }
+  /* thumbnail preview shown once a file is picked */
+  .drop-img.has-prev { flex-direction:row; align-items:center; justify-content:flex-start;
+    gap:12px; text-align:left; }
+  .drop-prev { width:84px; height:84px; flex:0 0 84px; object-fit:contain; border-radius:8px;
+    background:var(--panel2); border:1px solid var(--line); pointer-events:none;
+    opacity:0; transition:opacity .18s; }
+  .drop-prev.ready { opacity:1; }
+  #objdrop .drop-prev, #refdrop .drop-prev { width:56px; height:56px; flex:0 0 56px; }
+  .drop-info { display:flex; flex-direction:column; gap:3px; min-width:0; word-break:break-word; }
+  .drop-img.has-prev .drop-info { flex:1; text-align:left; }
+  .drop-meta:empty { display:none; }
+  .drop-clear { position:absolute; top:6px; right:8px; font-size:15px; line-height:1;
+    color:var(--dim); cursor:pointer; padding:2px 5px; border-radius:6px; }
+  .drop-clear:hover { color:var(--warn); background:rgba(255,255,255,.07); }
+  .drop-img { position:relative; }
   .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:9px; }
   .row label.lbl { font-size:12px; color:var(--dim); min-width:64px; }
   .row select, .row input { flex:1; }
@@ -115,17 +126,32 @@
         </select></div>
       <label class="drop-img" id="drop">
         <input type="file" id="pfile" accept="image/png,image/jpeg,image/webp" style="display:none">
-        <span id="dropmsg">⬆ Drop the product photo here<br>
-          <span class="vs-hint">jpg · png · webp — up to 25 MB</span></span>
+        <img id="pprev" class="drop-prev" alt="product preview" hidden>
+        <span class="drop-info">
+          <span id="dropmsg">⬆ Drop the product photo here<br>
+            <span class="vs-hint">jpg · png · webp — up to 25 MB</span></span>
+          <span class="drop-meta vs-hint" id="pmeta"></span>
+        </span>
+        <span class="drop-clear" id="pclear" title="remove" hidden>✕</span>
       </label>
       <div class="drop-img" id="refdrop" style="min-height:70px; display:none">
         <input type="file" id="rfile" accept="image/png,image/jpeg,image/webp,application/pdf" style="display:none">
-        <span id="refmsg">⬆ Reference poster to replicate<br>
-          <span class="vs-hint">jpg · png · webp · pdf (page 1 used)</span></span>
+        <img id="rprev" class="drop-prev" alt="reference preview" hidden>
+        <span class="drop-info">
+          <span id="refmsg">⬆ Reference poster to replicate<br>
+            <span class="vs-hint">jpg · png · webp · pdf (page 1 used)</span></span>
+          <span class="drop-meta vs-hint" id="rmeta"></span>
+        </span>
+        <span class="drop-clear" id="rclear" title="remove" hidden>✕</span>
       </div>
       <div class="drop-img" id="objdrop" style="min-height:70px">
         <input type="file" id="ofile" accept="image/png,image/jpeg,image/webp" style="display:none">
-        <span id="objmsg">＋ Optional: an additional object / prop image</span>
+        <img id="oprev" class="drop-prev" alt="object preview" hidden>
+        <span class="drop-info">
+          <span id="objmsg">＋ Optional: an additional object / prop image</span>
+          <span class="drop-meta vs-hint" id="ometa"></span>
+        </span>
+        <span class="drop-clear" id="oclear" title="remove" hidden>✕</span>
       </div>
 
       <h3 style="margin-top:18px">2 · Brief</h3>
@@ -315,27 +341,73 @@
     } catch (e) { /* non-fatal */ }
   }
 
-  // ── upload (product + optional object, sent together) ───────────────
+  // ── upload (product + optional reference/object, sent together) ─────
   const drop = $("#drop"), pfile = $("#pfile");
   const objdrop = $("#objdrop"), ofile = $("#ofile");
+  const refdrop = $("#refdrop"), rfile = $("#rfile");
+
+  // -- thumbnail preview -------------------------------------------------
+  // The picked file is rendered locally (object URL) the moment it is chosen,
+  // so the operator sees the actual image while it is still uploading.
+  const SLOTS = {
+    product:   {img:$("#pprev"), meta:$("#pmeta"), clear:$("#pclear"), drop: drop},
+    object:    {img:$("#oprev"), meta:$("#ometa"), clear:$("#oclear"), drop: objdrop},
+    reference: {img:$("#rprev"), meta:$("#rmeta"), clear:$("#rclear"), drop: refdrop},
+  };
+
+  function humanSize(bytes) {
+    const kb = bytes / 1024;
+    return kb >= 1024 ? (kb / 1024).toFixed(1) + " MB" : Math.max(1, Math.round(kb)) + " KB";
+  }
+
+  function setPreview(kind, file) {
+    const s = SLOTS[kind], img = s.img;
+    if (img.dataset.url) { URL.revokeObjectURL(img.dataset.url); delete img.dataset.url; }
+    img.classList.remove("ready");
+    if (!file) {
+      img.hidden = true; img.removeAttribute("src");
+      s.meta.textContent = ""; s.clear.hidden = true;
+      s.drop.classList.remove("has-prev");
+      return;
+    }
+    const url = URL.createObjectURL(file);
+    img.dataset.url = url;
+    img.onload = () => {                       // only reveal once decoded
+      img.classList.add("ready");
+      s.meta.textContent = `${img.naturalWidth}×${img.naturalHeight} · ${humanSize(file.size)}`;
+    };
+    img.onerror = () => {                      // not a decodable image
+      URL.revokeObjectURL(url); delete img.dataset.url;
+      img.hidden = true; s.drop.classList.remove("has-prev");
+      s.meta.textContent = "preview unavailable · " + humanSize(file.size);
+    };
+    img.hidden = false;
+    img.src = url;
+    s.drop.classList.add("has-prev");
+    s.clear.hidden = false;
+  }
+
+  function pickProduct(file) { S.productFile = file; setPreview("product", file); doUpload(); }
+  function pickObject(file)  { S.objectFile  = file; setPreview("object",  file); doUpload(); }
+  function pickReference(file) { S.referenceFile = file; setPreview("reference", file); doUpload(); }
+
   drop.onclick = () => pfile.click();
-  pfile.onchange = e => { if (e.target.files[0]) { S.productFile = e.target.files[0]; doUpload(); } };
+  pfile.onchange = e => { if (e.target.files[0]) pickProduct(e.target.files[0]); };
   ["dragover","dragleave","drop"].forEach(ev => drop.addEventListener(ev, e => {
     e.preventDefault(); drop.classList.toggle("drag", ev === "dragover");
-    if (ev === "drop" && e.dataTransfer.files[0]) { S.productFile = e.dataTransfer.files[0]; doUpload(); }
+    if (ev === "drop" && e.dataTransfer.files[0]) pickProduct(e.dataTransfer.files[0]);
   }));
   objdrop.onclick = () => ofile.click();
-  ofile.onchange = e => { if (e.target.files[0]) { S.objectFile = e.target.files[0]; doUpload(); } };
+  ofile.onchange = e => { if (e.target.files[0]) pickObject(e.target.files[0]); };
   ["dragover","dragleave","drop"].forEach(ev => objdrop.addEventListener(ev, e => {
     e.preventDefault(); objdrop.classList.toggle("drag", ev === "dragover");
-    if (ev === "drop" && e.dataTransfer.files[0]) { S.objectFile = e.dataTransfer.files[0]; doUpload(); }
+    if (ev === "drop" && e.dataTransfer.files[0]) pickObject(e.dataTransfer.files[0]);
   }));
-  const refdrop = $("#refdrop"), rfile = $("#rfile");
   refdrop.onclick = () => rfile.click();
-  rfile.onchange = e => { if (e.target.files[0]) { S.referenceFile = e.target.files[0]; doUpload(); } };
+  rfile.onchange = e => { if (e.target.files[0]) pickReference(e.target.files[0]); };
   ["dragover","dragleave","drop"].forEach(ev => refdrop.addEventListener(ev, e => {
     e.preventDefault(); refdrop.classList.toggle("drag", ev === "dragover");
-    if (ev === "drop" && e.dataTransfer.files[0]) { S.referenceFile = e.dataTransfer.files[0]; doUpload(); }
+    if (ev === "drop" && e.dataTransfer.files[0]) pickReference(e.dataTransfer.files[0]);
   }));
   $("#pmode").onchange = e => {
     S.mode = e.target.value;
@@ -345,13 +417,39 @@
       : "describe the poster — e.g. a dreamy midnight ad for the Fairy Flame gummies";
   };
 
-  function showPreview(msgEl, path, note) {
-    const name = path.split("/").pop();
-    msgEl.innerHTML = `<span class="pv"><img class="thumb" src="/media/${VS.esc(path)}">` +
-      `<span class="nm">✓ ${VS.esc(name)}` +
-      (note ? `<br><span class="vs-hint">${VS.esc(note)}</span>` : "") +
-      `</span></span>`;
-  }
+  // -- remove buttons ----------------------------------------------------
+  $("#pclear").addEventListener("click", e => {
+    e.preventDefault(); e.stopPropagation();
+    S.productFile = null; S.objectFile = null; S.slug = null; S.plan = null;
+    pfile.value = ""; ofile.value = "";
+    setPreview("product", null); setPreview("object", null);
+    drop.classList.remove("on"); objdrop.classList.remove("on");
+    $("#dropmsg").innerHTML = '⬆ Drop the product photo here<br>' +
+      '<span class="vs-hint">jpg · png · webp — up to 25 MB</span>';
+    $("#objmsg").textContent = "＋ Optional: an additional object / prop image";
+    $("#copyfields").style.display = "none";
+    $("#btn-replan").style.display = "none";
+    $("#plannote").textContent = "";
+    $("#jobnote").textContent = "";
+    renderGallery({raws: [], finals: []});
+  });
+  $("#oclear").addEventListener("click", e => {
+    e.preventDefault(); e.stopPropagation();
+    S.objectFile = null; ofile.value = "";
+    setPreview("object", null);
+    objdrop.classList.remove("on");
+    $("#objmsg").textContent = "＋ Optional: an additional object / prop image";
+    if (S.productFile) doUpload();   // re-upload product alone
+  });
+  $("#rclear").addEventListener("click", e => {
+    e.preventDefault(); e.stopPropagation();
+    S.referenceFile = null; rfile.value = "";
+    setPreview("reference", null);
+    refdrop.classList.remove("on");
+    $("#refmsg").innerHTML = '⬆ Reference poster to replicate<br>' +
+      '<span class="vs-hint">jpg · png · webp · pdf (page 1 used)</span>';
+    if (S.productFile) doUpload();   // re-upload without the reference
+  });
 
   async function doUpload() {
     if (!S.productFile) { VS.toast("drop the product photo first"); return; }
@@ -366,14 +464,24 @@
       const d = await r.json();
       S.slug = d.slug; S.plan = null;
       drop.classList.add("on");
-      showPreview($("#dropmsg"), d.product);
+      $("#dropmsg").textContent = "✓ " + d.product.split("/").pop();
       if (d.object) {
         objdrop.classList.add("on");
-        showPreview($("#objmsg"), d.object);
+        $("#objmsg").textContent = "✓ " + d.object.split("/").pop();
       }
       if (d.reference) {
         refdrop.classList.add("on");
-        showPreview($("#refmsg"), d.reference, d.reference_note);
+        $("#refmsg").textContent = "✓ " + d.reference.split("/").pop();
+        // a PDF can't decode in the local <img> preview — swap in the
+        // server-rasterized page 1 so the reference always shows a thumb
+        const rp = $("#rprev");
+        if (rp.hidden || !rp.classList.contains("ready")) {
+          rp.hidden = false;
+          rp.onload = () => rp.classList.add("ready");
+          rp.src = "/media/" + d.reference;
+          refdrop.classList.add("has-prev");
+        }
+        if (d.reference_note) $("#rmeta").textContent = d.reference_note;
         if (d.reference_ar) $("#aspect").value = d.reference_ar >= 0.7 ? "ig_feed" : "tiktok";
       }
       $("#copyfields").style.display = "none";
@@ -381,7 +489,11 @@
       $("#plannote").textContent = "";
       $("#jobnote").textContent = "Uploaded — write the brief, then Write the plan.";
       renderGallery({raws: [], finals: []});
-    } catch (e) { VS.toast("Upload failed: " + e.message); }
+    } catch (e) {
+      $("#dropmsg").textContent = "⚠ upload failed — click to retry";
+      drop.classList.remove("on");
+      VS.toast("Upload failed: " + e.message);
+    }
   }
 
   // ── plan ────────────────────────────────────────────────────────────
