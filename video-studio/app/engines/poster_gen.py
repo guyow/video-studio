@@ -109,7 +109,13 @@ def stage_gen(args, plan: dict) -> list[str]:
     if not product_image.is_file():
         raise SystemExit(f"product image not found: {product_image}")
 
-    image_urls = [fal_client.upload_file(str(product_image))]
+    image_urls = []
+    if args.reference_image and Path(args.reference_image).is_file():
+        # MODE A: the reference goes first — the plan's [IMAGE SCENE] speaks
+        # of "Image 1 = reference composition, Image 2 = product".
+        image_urls.append(fal_client.upload_file(str(args.reference_image)))
+        log(f"including reference poster: {Path(args.reference_image).name}")
+    image_urls.append(fal_client.upload_file(str(product_image)))
     if args.additional_object and Path(args.additional_object).is_file():
         image_urls.append(fal_client.upload_file(str(args.additional_object)))
 
@@ -240,6 +246,7 @@ def main() -> int:
     ap.add_argument("--workdir", required=True)
     ap.add_argument("--product-image", default="")
     ap.add_argument("--additional-object", default="")
+    ap.add_argument("--reference-image", default="")
     ap.add_argument("--plan", required=True)
     ap.add_argument("--gen-model", default="nano-banana",
                     choices=list(MODELS.keys()))

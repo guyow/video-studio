@@ -113,6 +113,13 @@
 .vs-soon b { color:var(--text); }
 .vs-log { background:#0a0d13; border:1px solid var(--line); border-radius:10px; padding:10px 12px;
           font:12px/1.5 var(--mono); max-height:260px; overflow:auto; white-space:pre-wrap; }
+/* VS.toast (vs-core.js) — lives here so every page that loads vs-core gets the
+   styled pill; without this rule the toast renders as a bare text node. */
+#vs-toast { position:fixed; bottom:24px; left:50%; transform:translateX(-50%) translateY(200%);
+  background:var(--panel); border:1px solid var(--accent); border-radius:12px; color:var(--text);
+  padding:12px 22px; font-size:13.5px; z-index:300; transition:.25s; max-width:82vw;
+  box-shadow:0 12px 40px rgba(0,0,0,.5); }
+#vs-toast.on { transform:translateX(-50%) translateY(0); }
 
 /* ---- stage map (jobs pipeline) — same palette in cards, steppers and feeds:
        pending gray · running blue pulse · done green · failed red ·

@@ -21,10 +21,14 @@
   textarea { resize:vertical; min-height:52px; }
   .drop-img { border:2px dashed var(--line); border-radius:12px; min-height:96px; display:flex;
     align-items:center; justify-content:center; text-align:center; color:var(--dim); cursor:pointer;
-    padding:12px; transition:.15s; }
+    padding:14px; margin-top:10px; transition:.15s; }
   .drop-img:hover,.drop-img.drag { border-color:var(--accent); color:var(--accent2);
     background:rgba(124,92,255,.06); }
   .drop-img.on { border-style:solid; border-color:var(--ok); color:var(--ok); }
+  .drop-img .pv { display:flex; align-items:center; gap:12px; text-align:left; min-width:0; }
+  .drop-img .pv .thumb { width:64px; height:64px; object-fit:cover; border-radius:9px;
+    border:1px solid var(--line); background:#0a0d14; flex:none; }
+  .drop-img .pv .nm { font-size:12.5px; overflow-wrap:anywhere; }
   .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:9px; }
   .row label.lbl { font-size:12px; color:var(--dim); min-width:64px; }
   .row select, .row input { flex:1; }
@@ -104,11 +108,21 @@
   <div class="cols">
     <div class="vs-panel" style="margin:0">
       <h3>1 · Product</h3>
+      <div class="row"><label class="lbl">Mode</label>
+        <select id="pmode">
+          <option value="new">New design</option>
+          <option value="replace">Replicate a reference poster</option>
+        </select></div>
       <label class="drop-img" id="drop">
         <input type="file" id="pfile" accept="image/png,image/jpeg,image/webp" style="display:none">
         <span id="dropmsg">⬆ Drop the product photo here<br>
           <span class="vs-hint">jpg · png · webp — up to 25 MB</span></span>
       </label>
+      <div class="drop-img" id="refdrop" style="min-height:70px; display:none">
+        <input type="file" id="rfile" accept="image/png,image/jpeg,image/webp,application/pdf" style="display:none">
+        <span id="refmsg">⬆ Reference poster to replicate<br>
+          <span class="vs-hint">jpg · png · webp · pdf (page 1 used)</span></span>
+      </div>
       <div class="drop-img" id="objdrop" style="min-height:70px">
         <input type="file" id="ofile" accept="image/png,image/jpeg,image/webp" style="display:none">
         <span id="objmsg">＋ Optional: an additional object / prop image</span>
@@ -250,7 +264,7 @@
 <script>
 (async () => {
   const $ = s => document.querySelector(s);
-  const S = { slug:null, cfg:null, plan:null, provider:"claude", busy:false };
+  const S = { slug:null, cfg:null, plan:null, provider:"claude", busy:false, mode:"new" };
 
   // ── config ──────────────────────────────────────────────────────────
   try { S.cfg = await VS.api("/api/poster/config"); }
@@ -316,12 +330,35 @@
     e.preventDefault(); objdrop.classList.toggle("drag", ev === "dragover");
     if (ev === "drop" && e.dataTransfer.files[0]) { S.objectFile = e.dataTransfer.files[0]; doUpload(); }
   }));
+  const refdrop = $("#refdrop"), rfile = $("#rfile");
+  refdrop.onclick = () => rfile.click();
+  rfile.onchange = e => { if (e.target.files[0]) { S.referenceFile = e.target.files[0]; doUpload(); } };
+  ["dragover","dragleave","drop"].forEach(ev => refdrop.addEventListener(ev, e => {
+    e.preventDefault(); refdrop.classList.toggle("drag", ev === "dragover");
+    if (ev === "drop" && e.dataTransfer.files[0]) { S.referenceFile = e.dataTransfer.files[0]; doUpload(); }
+  }));
+  $("#pmode").onchange = e => {
+    S.mode = e.target.value;
+    refdrop.style.display = S.mode === "replace" ? "" : "none";
+    $("#brief").placeholder = S.mode === "replace"
+      ? "optional — extra art direction, or [BLOCK]: overrides for specific text"
+      : "describe the poster — e.g. a dreamy midnight ad for the Fairy Flame gummies";
+  };
+
+  function showPreview(msgEl, path, note) {
+    const name = path.split("/").pop();
+    msgEl.innerHTML = `<span class="pv"><img class="thumb" src="/media/${VS.esc(path)}">` +
+      `<span class="nm">✓ ${VS.esc(name)}` +
+      (note ? `<br><span class="vs-hint">${VS.esc(note)}</span>` : "") +
+      `</span></span>`;
+  }
 
   async function doUpload() {
     if (!S.productFile) { VS.toast("drop the product photo first"); return; }
     const fd = new FormData();
     fd.append("product", S.productFile);
     if (S.objectFile) fd.append("object", S.objectFile);
+    if (S.referenceFile) fd.append("reference", S.referenceFile);
     $("#dropmsg").textContent = "uploading…";
     try {
       const r = await fetch("/api/poster/upload", {method:"POST", body: fd});
@@ -329,10 +366,15 @@
       const d = await r.json();
       S.slug = d.slug; S.plan = null;
       drop.classList.add("on");
-      $("#dropmsg").textContent = "✓ " + d.product.split("/").pop();
+      showPreview($("#dropmsg"), d.product);
       if (d.object) {
         objdrop.classList.add("on");
-        $("#objmsg").textContent = "✓ " + d.object.split("/").pop();
+        showPreview($("#objmsg"), d.object);
+      }
+      if (d.reference) {
+        refdrop.classList.add("on");
+        showPreview($("#refmsg"), d.reference, d.reference_note);
+        if (d.reference_ar) $("#aspect").value = d.reference_ar >= 0.7 ? "ig_feed" : "tiktok";
       }
       $("#copyfields").style.display = "none";
       $("#btn-replan").style.display = "none";
@@ -360,8 +402,12 @@
 
   async function runPlan() {
     if (!S.slug) { VS.toast("upload a product photo first"); return; }
+    if (S.mode === "replace" && !S.referenceFile) {
+      VS.toast("drop a reference poster first (Replicate mode)"); return;
+    }
     const brief = $("#brief").value.trim();
-    const body = {slug: S.slug, provider: S.provider, model: $("#pmodel").value, brief};
+    const body = {slug: S.slug, provider: S.provider, model: $("#pmodel").value, brief,
+                  mode: S.mode, aspect: $("#aspect").value};
     if (S.provider === "gemini" &&
         !confirm("⚠ Gemini planner costs ~$0.03 on fal.ai.\n\nApprove? (Cancel = nothing charged)")) {
       VS.toast("Cancelled — nothing charged"); return;
@@ -378,7 +424,10 @@
       $("#copyfields").style.display = "block";
       $("#btn-replan").style.display = "";
       const cost = d.planner_cost ? ` · planner $${d.planner_cost.toFixed(2)}` : "";
-      $("#plannote").textContent = "✓ plan ready" + cost;
+      const notes = (d.layout_notes || []).length ? " · " + d.layout_notes.join("; ") : "";
+      $("#plannote").textContent = (d.mode === "replace"
+        ? "✓ replica plan ready — layout copied from the reference; fine-tune in the layout editor"
+        : "✓ plan ready") + cost + notes;
       VS.toast("✓ plan written");
     } catch (e) {
       $("#plannote").textContent = "";

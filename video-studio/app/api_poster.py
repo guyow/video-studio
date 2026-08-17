@@ -62,6 +62,7 @@ _record_spend = None
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,60}$")
 RAW_RE = re.compile(r"^raw-\d+\.png$")
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp"}
+PDF_EXTS = {".pdf"}          # reference role only
 MAX_UPLOAD = 25 * 1024 * 1024
 
 CLAUDE_MODELS = ["sonnet", "opus", "haiku"]
@@ -123,6 +124,44 @@ def _plan_provider(workdir: Path) -> str:
         return "claude"
 
 
+def _plan_mode(workdir: Path) -> str:
+    p = workdir / "plan.json"
+    if not p.is_file():
+        return "new"
+    try:
+        return (json.loads(p.read_text(encoding="utf-8")) or {}).get("mode") or "new"
+    except Exception:
+        return "new"
+
+
+def _rasterize_pdf(pdf_path: Path, dest_png: Path) -> int:
+    """Render page 1 of a reference PDF to dest_png. Returns the page count."""
+    try:
+        import pymupdf as fitz
+    except ImportError:
+        try:
+            import fitz  # older pymupdf releases
+        except ImportError:
+            abort(503, "pymupdf is not installed in the server venv — "
+                       "pip install pymupdf into autoVSL/.venv")
+    from werkzeug.exceptions import HTTPException
+    try:
+        doc = fitz.open(str(pdf_path))
+        if doc.page_count < 1:
+            abort(400, "the reference PDF has no pages")
+        page = doc.load_page(0)
+        zoom = 2000.0 / max(page.rect.width or 1.0, page.rect.height or 1.0)
+        pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom))
+        pix.save(str(dest_png))
+        count = doc.page_count
+        doc.close()
+        return count
+    except HTTPException:
+        raise
+    except Exception as e:
+        abort(400, f"could not read the reference PDF: {e}")
+
+
 def _gen_models() -> list[dict]:
     out = []
     for key, m in image_edit.MODELS.items():
@@ -161,6 +200,7 @@ def config():
 def upload():
     product = request.files.get("product")
     obj = request.files.get("object")
+    ref = request.files.get("reference")
     if not product or not product.filename:
         abort(400, "drop a product photo")
 
@@ -182,11 +222,103 @@ def upload():
     pname = save(product, "product")
     oname = save(obj, "object") if (obj and obj.filename) else ""
 
+    rname, ref_ar, ref_note = "", 0.0, ""
+    if ref and ref.filename:
+        if Path(ref.filename).suffix.lower() in PDF_EXTS:
+            pdf_dest = workdir / "reference.pdf"
+            ref.save(str(pdf_dest))
+            if pdf_dest.stat().st_size > MAX_UPLOAD:
+                pdf_dest.unlink(missing_ok=True)
+                abort(413, "reference PDF too large (25 MB max)")
+            pages = _rasterize_pdf(pdf_dest, workdir / "reference.png")
+            rname = "reference.png"
+            if pages > 1:
+                ref_note = f"multi-page PDF — page 1 of {pages} used"
+        else:
+            rname = save(ref, "reference")
+        try:
+            from PIL import Image
+            with Image.open(workdir / rname) as im:
+                ref_ar = round(im.width / im.height, 4)
+        except Exception:
+            ref_ar = 0.0
+
     return jsonify({
         "slug": slug,
         "product": f"output/generated-brand-poster/{slug}/{pname}",
         "object": f"output/generated-brand-poster/{slug}/{oname}" if oname else "",
+        "reference": f"output/generated-brand-poster/{slug}/{rname}" if rname else "",
+        "reference_ar": ref_ar,
+        "reference_note": ref_note,
     })
+
+
+# MODE A: text colors are locked to brand tokens by role; any other hex the
+# planner emits (e.g. sampled off the reference) is discarded. The allowed set
+# is the liitt palette — mood-spectrum accents are legitimate subtitle colors.
+BRAND_ROLE_COLORS = {"headline": "#C9C3DA", "subheadline": "#FFC233", "body": "#8E899F"}
+BRAND_PALETTE = {
+    "#C9C3DA", "#FAFAF7", "#FF5A1F", "#FFC233", "#8E899F", "#14122B",
+    "#4B40C9", "#0389F3", "#BE4EF3", "#9BCB31", "#A23A6D", "#F8A30A",
+    "#C34605", "#C9C3DC",
+    # dark base hexes — legit text colors when MODE A replicates a LIGHT
+    # reference background (dark-on-light contrast)
+    "#141428", "#0A0A0A",
+}
+ZONE_BY_COPY_TYPE = {"HEADLINE": "headline", "SUBTITLE": "subheadline",
+                     "BODY": "body", "WORDMARK": "logo"}
+
+
+def _overrides_from_plan(plan_data: dict, aspect: str) -> tuple[dict | None, list[str]]:
+    """MODE A: derive layout-overrides.json from the planner's enriched
+    copy_elements boxes. Returns (overrides_or_None, notes)."""
+    notes: list[str] = []
+    canvas_h = next((a["h"] for a in ASPECTS if a["key"] == aspect), 1350)
+    zones: dict = {}
+    for line in (plan_data.get("copy_elements") or "").splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            el = json.loads(line)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        zone = ZONE_BY_COPY_TYPE.get(el.get("type")) if isinstance(el, dict) else None
+        if not zone or zone in zones:
+            continue
+        zd: dict = {}
+        box = el.get("box")
+        if isinstance(box, list) and len(box) == 4:
+            try:
+                c = [min(1.0, max(0.0, float(v))) for v in box]
+            except (TypeError, ValueError):
+                c = None
+            if c:
+                x0, x1 = sorted((c[0], c[2]))
+                y0, y1 = sorted((c[1], c[3]))
+                if (x1 - x0) >= 0.02 and (y1 - y0) >= 0.02:
+                    zd["box"] = [round(x0, 4), round(y0, 4), round(x1, 4), round(y1, 4)]
+                else:
+                    notes.append(f"{zone}: unusable box from planner — using template position")
+        if zone == "logo":
+            if "box" in zd:
+                zd["height_px"] = max(40, min(400, int((zd["box"][3] - zd["box"][1]) * canvas_h)))
+        else:
+            if el.get("align") in LAYOUT_ALIGN_VALUES:
+                zd["align"] = el["align"]
+            if el.get("font_weight") in LAYOUT_WEIGHT_VALUES:
+                zd["font_weight"] = el["font_weight"]
+            color = str(el.get("color") or "").upper()
+            zd["color"] = color if color in BRAND_PALETTE else BRAND_ROLE_COLORS[zone]
+        if zd:
+            zones[zone] = zd
+    if not zones:
+        return None, ["planner emitted no usable geometry — using template layout"]
+    overrides = {"_version": 1, "collision_avoid": False, "zones": zones}
+    err = _validate_overrides(overrides, [])
+    if err:
+        return None, [f"derived layout failed validation ({err}) — using template layout"]
+    return overrides, notes
 
 
 @bp.post("/api/poster/plan")
@@ -211,6 +343,18 @@ def plan():
         if model not in GEMINI_MODELS:
             model = GEMINI_MODELS[0]
 
+    mode = (b.get("mode") or "new").strip()
+    if mode not in ("new", "replace"):
+        abort(400, f"unknown mode {mode!r}")
+    aspect = b.get("aspect") or "ig_feed"
+    if aspect not in ("ig_feed", "tiktok"):
+        aspect = "ig_feed"
+    reference_path = None
+    if mode == "replace":
+        reference_path = _find(workdir, "reference")
+        if not reference_path:
+            abort(400, "upload a reference poster first")
+
     brief = (b.get("brief") or "").strip()
     (workdir / "brief.txt").write_text(brief, encoding="utf-8")
     object_path = _find(workdir, "object")
@@ -221,7 +365,10 @@ def plan():
            "--brief-file", str(workdir / "brief.txt"),
            "--layout-json", str(LAYOUT_JSON),
            "--prompt-file", str(PROMPT_FILE),
+           "--mode", mode,
            "--out-dir", str(workdir)]
+    if reference_path:
+        cmd += ["--reference-image", str(reference_path), "--aspect", aspect]
     if object_path:
         cmd += ["--additional-object", str(object_path)]
     if provider == "claude":
@@ -260,6 +407,16 @@ def plan():
         abort(502, "the planner produced no plan.json")
     plan_data = json.loads(plan_path.read_text(encoding="utf-8"))
 
+    layout_notes: list[str] = []
+    if mode == "replace":
+        overrides, layout_notes = _overrides_from_plan(plan_data, aspect)
+        ov_path = workdir / "layout-overrides.json"
+        if overrides:
+            _atomic_write_json(ov_path, overrides)
+        else:
+            # never leave a previous plan's geometry under a fresh replica plan
+            ov_path.unlink(missing_ok=True)
+
     if planner_cost > 0 and _record_spend:
         try:
             _record_spend(slug, {"this_run": planner_cost,
@@ -268,7 +425,8 @@ def plan():
         except Exception:
             pass
 
-    return jsonify({"plan": plan_data, "planner_cost": planner_cost})
+    return jsonify({"plan": plan_data, "planner_cost": planner_cost,
+                    "mode": mode, "layout_notes": layout_notes})
 
 
 @bp.post("/api/poster/estimate")
@@ -343,6 +501,10 @@ def generate():
            "--env-file", str(FAL_ENV)]
     if object_path:
         cmd += ["--additional-object", str(object_path)]
+    if _plan_mode(workdir) == "replace":
+        reference_path = _find(workdir, "reference")
+        if reference_path:
+            cmd += ["--reference-image", str(reference_path)]
     if scrim:
         cmd += ["--scrim"]
 
