@@ -281,12 +281,15 @@ Output only the script.`;
       '<div class="vs-chathead"><span>💬 ' + VS.esc(opts.title || "Chat with Hermes") + "</span>" +
       '<span class="vs-tgpill off">connecting…</span></div>' +
       '<div class="vs-chatbox"><div class="vs-hint">no messages yet — say hi 👋</div></div>' +
-      '<div class="vs-chatin"><input placeholder="' +
+      '<div class="vs-chatin"><select class="vs-backend" title="delivery: Telegram group or direct Hermes API">' +
+      '<option value="telegram">Telegram</option><option value="hermes">Hermes ✦</option></select>' +
+      '<input placeholder="' +
       VS.esc(opts.placeholder || "message Hermes — lands in the sg-hermes Telegram group") +
       '" autocomplete="off"><button class="vs-btn">Send</button></div>' +
       '<div class="vs-hint vs-tghint"></div>';
     const box = root.querySelector(".vs-chatbox"), pill = root.querySelector(".vs-tgpill"),
           hint = root.querySelector(".vs-tghint"), inp = root.querySelector("input"),
+          sel = root.querySelector(".vs-backend"),
           btn = root.querySelector(".vs-chatin .vs-btn");
     let lastId = 0, rows = [];
     const bubble = m => {
@@ -327,10 +330,15 @@ Output only the script.`;
     async function send() {
       const text = inp.value.trim();
       if (!text) return;
+      const backend = sel ? sel.value : "telegram";
       inp.value = ""; inp.focus();
       try {
-        const d = await VS.post("/api/chat", {text});
+        const d = await VS.post("/api/chat", {text, backend});
         if (d.telegram === false) VS.toast("sent to the studio feed — Telegram bridge not connected");
+        else if (backend === "hermes") {
+          if (d.error) VS.toast("Hermes direct failed: " + d.error);
+          else VS.toast("⚡ Hermes direct — replied in " + (d.elapsed_s ? d.elapsed_s + "s" : "panel"));
+        }
         load();
       } catch (e) { VS.toast("send failed: " + e.message); inp.value = text; }
     }

@@ -496,9 +496,22 @@ def api_chat_read():
 
 @app.post("/api/chat")
 def api_chat_send():
-    text = ((request.get_json(force=True) or {}).get("text") or "").strip()
+    body = request.get_json(force=True) or {}
+    text = (body.get("text") or "").strip()
     if not text:
         abort(400, "empty message")
+    backend = (body.get("backend") or "telegram").strip().lower()
+    if backend == "hermes":
+        # direct Hermes bridge call (bypasses Telegram) — reply lands here
+        import time as _t
+        _t0 = _t.time()
+        try:
+            reply = hermes_bridge_chat(text)
+        except Exception as e:
+            return jsonify({"ok": False, "error": str(e)[:300]}), 502
+        msg = chat_append("hermes", reply, source="hermes-bridge", name="Hermes")
+        return jsonify({"ok": True, "msg": msg, "backend": "hermes",
+                        "elapsed_s": round(_t.time() - _t0, 1)})
     if getattr(g, "agent", False):
         # Hermes replying through the API (fallback path when Telegram is down)
         msg = chat_append("hermes", text, source="agent-api", name="Hermes")
@@ -506,6 +519,21 @@ def api_chat_send():
     msg = chat_append("founder", text, source="studio", name="you")
     delivered = telegram_bridge.send(text)
     return jsonify({"ok": True, "msg": msg, "telegram": delivered})
+
+
+def hermes_bridge_chat(text, timeout=300):
+    """Call the Hermes chat bridge on the VPS (tailnet) and return the reply."""
+    import base64 as _b64
+    import urllib.request
+    url = CONFIG.get("hermes_bridge_url", "http://100.112.51.100:9120/chat")
+    user = CONFIG.get("hermes_bridge_user", "sergei")
+    pw = CONFIG.get("hermes_bridge_password", "")
+    req = urllib.request.Request(url, data=json.dumps({"text": text}).encode(),
+                                 headers={"Content-Type": "application/json"})
+    req.add_header("Authorization", "Basic " + _b64.b64encode(
+        f"{user}:{pw}".encode()).decode())
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return (json.loads(r.read().decode("utf-8")) or {}).get("reply") or "(no reply)"
 
 
 @app.get("/api/chat/status")
