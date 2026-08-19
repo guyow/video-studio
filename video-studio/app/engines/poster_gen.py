@@ -286,6 +286,10 @@ def main() -> int:
     raws = manifest.get("raws") or []
     finals = manifest.get("finals") or []
 
+    # snapshot raws SEBELUM generate — dipakai memetakan hasil ke run ini
+    before_raws = {p.name for p in workdir.glob("raw-*.png")
+                   if p.stat().st_size > 0}
+
     if args.stage in ("gen", "all"):
         raws = stage_gen(args, plan)
         # ACCUMULATE: re-glob after generate so manifest["raws"] is the
@@ -295,6 +299,21 @@ def main() -> int:
             if p.stat().st_size > 0
         )
 
+        # PROVENANCE: satu entri per panggilan generate, append-only.
+        # manifest["seed"]/["gen_cost"] hanya mencerminkan run TERAKHIR —
+        # "runs" menyimpan semuanya supaya tiap raw bisa ditelusuri ke
+        # seed / model / resolusi yang membuatnya.
+        manifest.setdefault("runs", []).append({
+            "at": time.time(),
+            "seed": int(args.seed or 0),
+            "gen_model": args.gen_model,
+            "resolution": args.resolution,
+            "num": manifest["num"],
+            "aspect": args.aspect,
+            "cost": gen_cost,
+            "raws": sorted(set(manifest["raws"]) - before_raws),
+        })
+
     if args.stage in ("composite", "all"):
         finals = stage_composite(args, plan, raws if args.stage == "all" else [])
 
@@ -302,7 +321,11 @@ def main() -> int:
         p.name for p in workdir.glob("raw-*.png") if p.stat().st_size > 0
     )
     manifest["finals"] = finals
-    manifest["total_cost"] = manifest.get("gen_cost", gen_cost)
+    # total = jumlah SEMUA generate di workdir ini, bukan yang terakhir saja
+    manifest["total_cost"] = (
+        round(sum(r.get("cost", 0) for r in manifest["runs"]), 4)
+        if manifest.get("runs") else manifest.get("gen_cost", gen_cost)
+    )
     manifest_path = write_manifest(workdir, manifest)
 
     log(f"gen_cost ~${manifest['gen_cost']:.3f} · raws={len(raws)} · finals={len(finals)}")
