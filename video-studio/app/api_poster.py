@@ -643,10 +643,149 @@ def item(slug):
             out.append({"name": f.name, "url": f"/media/{base}/{f.name}"})
         return out
 
+    product = _find(workdir, "product")
+
     return jsonify({"slug": slug, "plan": plan,
                     "raws": listing("raw-*.png"),
                     "finals": listing("final-*.jpg"),
+                    "product": f"/media/{base}/{product.name}" if product else "",
                     "manifest": manifest})
+
+
+# ---------------------------------------------------------------- library
+
+def _read_json(path: Path) -> dict:
+    """Best-effort dict read — a half-written or hand-edited json in one
+    workdir must never 500 the whole listing."""
+    if not path.is_file():
+        return {}
+    try:
+        d = json.loads(path.read_text(encoding="utf-8"))
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+
+def _headline_of(workdir: Path, plan: dict) -> str:
+    """The HEADLINE line of the saved copy — used as the library card title.
+
+    copy-elements.jsonl is rewritten by /api/poster/copy on every edit, so it
+    is fresher than plan.json's embedded copy_elements; the plan is only the
+    fallback for posters that never had their copy edited.
+    """
+    raw = ""
+    ce = workdir / "copy-elements.jsonl"
+    if ce.is_file():
+        try:
+            raw = ce.read_text(encoding="utf-8")
+        except OSError:
+            raw = ""
+    if not raw:
+        raw = plan.get("copy_elements") or ""
+    first = ""
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            obj = json.loads(line)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if not isinstance(obj, dict):
+            continue
+        text = (obj.get("text") or "").strip()
+        if not text:
+            continue
+        if obj.get("type") == "HEADLINE":
+            return text[:120]
+        if not first:
+            first = text[:120]
+    return first
+
+
+def _poster_summary(workdir: Path) -> dict:
+    """One card's worth of data. Cheap on purpose: two small json reads plus
+    two globs per folder, no image decoding — the listing has to stay fast
+    with hundreds of workdirs."""
+    slug = workdir.name
+    plan = _read_json(workdir / "plan.json")
+    manifest = _read_json(workdir / "manifest.json")
+
+    def names(pattern: str) -> list[str]:
+        out = []
+        for f in sorted(workdir.glob(pattern)):
+            try:
+                if f.stat().st_size > 0:      # 0-byte files are failed takes
+                    out.append(f.name)
+            except OSError:
+                pass
+        return out
+
+    finals = names("final-*.jpg")
+    raws = names("raw-*.png")
+    base = f"/media/output/generated-brand-poster/{slug}"
+    if finals:
+        thumb, kind = f"{base}/{finals[-1]}", "final"
+    elif raws:
+        thumb, kind = f"{base}/{raws[-1]}", "raw"
+    else:
+        prod = _find(workdir, "product")
+        thumb, kind = (f"{base}/{prod.name}", "product") if prod else ("", "none")
+
+    try:
+        created = float(manifest.get("created") or plan.get("created") or 0)
+    except (TypeError, ValueError):
+        created = 0.0
+    if not created:
+        try:
+            created = workdir.stat().st_mtime
+        except OSError:
+            created = 0.0
+
+    if finals:
+        status = "final"
+    elif raws:
+        status = "raw"
+    elif plan:
+        status = "planned"
+    else:
+        status = "draft"
+
+    try:
+        cost = float(manifest.get("total_cost") or 0)
+    except (TypeError, ValueError):
+        cost = 0.0
+
+    return {"slug": slug, "created": created, "status": status,
+            "headline": _headline_of(workdir, plan),
+            "thumb": thumb, "thumb_kind": kind,
+            "finals": len(finals), "raws": len(raws),
+            "aspect": manifest.get("aspect") or "",
+            "gen_model": manifest.get("gen_model") or "",
+            "provider": plan.get("provider") or "",
+            "mode": plan.get("mode") or "new",
+            "cost": cost}
+
+
+@bp.get("/api/poster/list")
+def list_posters():
+    """Every poster workdir ever created, newest first — powers the
+    "Your Posters" strip at the bottom of the studio. A workdir that fails to
+    summarize is skipped, never fatal."""
+    limit = request.args.get("limit", type=int) or 200
+    limit = max(1, min(1000, limit))
+    root = ROOT / "output" / "generated-brand-poster"
+    out = []
+    if root.is_dir():
+        for sub in root.iterdir():
+            if not sub.is_dir() or not SLUG_RE.match(sub.name):
+                continue
+            try:
+                out.append(_poster_summary(sub))
+            except Exception:
+                continue
+    out.sort(key=lambda x: x["created"], reverse=True)
+    return jsonify({"posters": out[:limit], "total": len(out)})
 
 
 # ---------------------------------------------------------------- layout editor
