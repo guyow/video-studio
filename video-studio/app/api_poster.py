@@ -65,6 +65,17 @@ IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp"}
 PDF_EXTS = {".pdf"}          # reference role only
 MAX_UPLOAD = 25 * 1024 * 1024
 
+# Live preview: ONE file per poster, overwritten in place (a hashed file per
+# edit used to pile up — 83 stale previews / 20 MB before this). JPEG at 900px
+# because `optimize=True` PNG costs ~300 ms to encode vs ~2 ms for JPEG, and
+# the encode was dominating the ~185 ms compositor render.
+PREVIEW_NAME = "preview-live.jpg"
+PREVIEW_EDGE = 900
+PREVIEW_QUALITY = 92
+# Renders are CPU-bound Pillow work; serialize them so a fast drag can't
+# stack N interpreters' worth of compositing on the box at once.
+_preview_lock = threading.Lock()
+
 CLAUDE_MODELS = ["sonnet", "opus", "haiku"]
 GEMINI_MODELS = ["google/gemini-2.5-flash", "google/gemini-2.5-pro"]
 GEMINI_COST = 0.03
@@ -112,6 +123,18 @@ def _find(workdir: Path, stem: str) -> Path | None:
         if p.is_file() and p.stat().st_size > 0:
             return p
     return None
+
+
+def _prune_previews(workdir: Path) -> None:
+    """Drop every preview image except the live one. Before this, each edit
+    wrote preview-<hash>.png and nothing ever cleaned them up (83 files /
+    20 MB of stale previews had accumulated)."""
+    for stale in list(workdir.glob("preview-*.png")) + list(workdir.glob("preview-*.jpg")):
+        if stale.name != PREVIEW_NAME:
+            try:
+                stale.unlink()
+            except OSError:
+                pass
 
 
 def _plan_provider(workdir: Path) -> str:
@@ -578,6 +601,8 @@ def composite():
            "--brand-dir", str(BRAND_DIR)]
     if scrim:
         cmd += ["--scrim"]
+
+    _prune_previews(workdir)   # finalizing — stale editor previews are dead weight
 
     job_id = _jobs_create("poster-composite", slug, f"🧩 Composite — {slug}", gpu=False)
     threading.Thread(target=_run_job, args=(job_id, cmd), daemon=True).start()
@@ -1116,33 +1141,47 @@ def preview():
     from PIL import Image
 
     bg = Image.open(raw_path).convert("RGB")
-    out = lc.render_layout(
-        bg_image=bg,
-        chosen_layout=chosen_layout,
-        copy_elements=plan.get("copy_elements") or "",
-        layout_json_path=str(LAYOUT_JSON),
-        canvas_preset=canvas_preset,
-        brand_dir=str(BRAND_DIR),
-        scrim=False,                 # editor draws its own outlines
-        overrides=overrides,
-    )
+    with _preview_lock:
+        out = lc.render_layout(
+            bg_image=bg,
+            chosen_layout=chosen_layout,
+            copy_elements=plan.get("copy_elements") or "",
+            layout_json_path=str(LAYOUT_JSON),
+            canvas_preset=canvas_preset,
+            brand_dir=str(BRAND_DIR),
+            scrim=False,                 # editor draws its own outlines
+            overrides=overrides,
+        )
 
-    # Downscale to ≤540px on the long edge for fast reload.
+    # Downscale to PREVIEW_EDGE on the long edge — sharp enough for the
+    # editor stage and the lightbox, small enough to fly over localhost.
     W, H = out.size
     long_edge = max(W, H)
-    if long_edge > 540:
-        scale = 540 / long_edge
+    if long_edge > PREVIEW_EDGE:
+        scale = PREVIEW_EDGE / long_edge
         out = out.resize((max(1, int(W * scale)), max(1, int(H * scale))),
                          Image.LANCZOS)
 
     import hashlib
+    # The copy text is part of the identity of the render: with live preview
+    # the operator edits headline/subtitle/body without touching the layout,
+    # and a hash that ignored the text would hand the browser back the same
+    # ?v= token for a genuinely different image.
     h = hashlib.sha1(
         f"{slug}|{raw}|{aspect}|{int(bool(scrim))}|"
+        f"{plan.get('copy_elements') or ''}|"
         f"{json.dumps(overrides or {}, sort_keys=True, ensure_ascii=False)}"
         .encode("utf-8")
     ).hexdigest()[:12]
-    dest = workdir / f"preview-{h}.png"
-    out.save(dest, "PNG", optimize=True)
+    # Always the same filename: the hash rides in the query string so the
+    # browser refetches, while the disk keeps exactly one preview per poster.
+    # Written via temp + os.replace so a concurrent request can never serve a
+    # half-written frame.
+    dest = workdir / PREVIEW_NAME
+    tmp = dest.with_suffix(dest.suffix + ".tmp")
+    out.save(tmp, "JPEG", quality=PREVIEW_QUALITY, subsampling=0, optimize=False)
+    os.replace(tmp, dest)
+    _prune_previews(workdir)
 
     return jsonify({
         "url": f"/media/output/generated-brand-poster/{slug}/{dest.name}",

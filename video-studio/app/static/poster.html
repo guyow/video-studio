@@ -261,6 +261,11 @@
   <div class="box">
     <div class="header">
       <span class="nm">Layout editor — <span id="pedit-slug"></span></span>
+      <label class="chk" style="margin:0" id="pedit-live-row"
+             title="Re-render with the real compositor after every change (local, free, ~0.3 s)">
+        <input type="checkbox" id="pedit-live" checked> live preview
+      </label>
+      <span class="vs-hint" id="pedit-livestat"></span>
       <button class="vs-btn ghost" id="pedit-reset" title="Reset to template defaults">↻ Reset</button>
       <button class="vs-btn ghost" id="pedit-preview">👁 Preview</button>
       <button class="vs-btn primary" id="pedit-finalize">🧩 Finalize</button>
@@ -280,6 +285,10 @@
         <h3 id="panel-title">Select a zone</h3>
         <div class="row" id="panel-hide-row" style="display:none">
           <button class="vs-btn" id="panel-hide" style="width:100%">✕ Hide zone</button>
+        </div>
+        <div class="row" id="panel-text-row" style="display:none; flex-direction:column; align-items:stretch">
+          <label class="lbl" style="min-width:0; margin-bottom:4px">Text</label>
+          <textarea id="panel-text" rows="3" placeholder="text for this zone"></textarea>
         </div>
         <div class="row" id="panel-color-row" style="display:none">
           <label class="lbl">Color</label>
@@ -843,6 +852,11 @@
     $("#panel-weight-row").style.display = showText ? "" : "none";
     $("#panel-size-row").style.display = showText ? "" : "none";
     $("#panel-height-row").style.display = (name === "logo") ? "" : "none";
+    $("#panel-text-row").style.display = showText ? "" : "none";
+    if (showText) {
+      const src = $(ZONE_COPY[name]);
+      $("#panel-text").value = src ? src.value : "";
+    }
     const hideBtn = $("#panel-hide");
     if (z.hidden) {
       hideBtn.textContent = "↺ Show zone";
@@ -885,9 +899,12 @@
 
   function makeDirty() { EDIT.dirty = true; scheduleSave(); }
 
+  // 300 ms, not 600: the live re-render is chained off a *successful* save
+  // (the preview endpoint reads layout-overrides.json off disk), so this delay
+  // is the front half of the perceived lag.
   function scheduleSave() {
     if (EDIT.saveTimer) clearTimeout(EDIT.saveTimer);
-    EDIT.saveTimer = setTimeout(saveLayout, 600);
+    EDIT.saveTimer = setTimeout(saveLayout, 300);
   }
 
   async function saveLayout() {
@@ -921,10 +938,96 @@
       $("#pedit-status").textContent =
         "✓ saved · " + new Date().toLocaleTimeString();
       EDIT.dirty = false;
+      scheduleLive(60);            // overrides are on disk now — safe to render
     } catch (e) {
       $("#pedit-status").textContent = "save failed: " + e.message;
     }
   }
+
+  // ── live preview ────────────────────────────────────────────────────
+  // The stage is re-rendered by the REAL compositor (/api/poster/preview →
+  // Pillow, ~185 ms) after every change, so what you drag against is exactly
+  // what Finalize produces: auto-fit sizes, line wrapping, shadows, scrim-less
+  // colour picking and logo collision-avoidance included. Drawing the text in
+  // the browser instead would be instant but only approximate — Pillow's
+  // metrics and the fit/wrap search are what decide the final layout.
+  const ZONE_COPY = { headline: "#c-headline", subheadline: "#c-subtitle", body: "#c-body" };
+  const LIVE = { on: true, busy: false, again: false, timer: null, seq: 0,
+                 rawUrl: null, copyTimer: null };
+
+  function liveStat(msg) { $("#pedit-livestat").textContent = msg || ""; }
+
+  function scheduleLive(delay) {
+    if (!LIVE.on) return;
+    if (LIVE.timer) clearTimeout(LIVE.timer);
+    LIVE.timer = setTimeout(runLive, delay == null ? 80 : delay);
+  }
+
+  function cancelLive() {
+    if (LIVE.timer) { clearTimeout(LIVE.timer); LIVE.timer = null; }
+    if (LIVE.copyTimer) { clearTimeout(LIVE.copyTimer); LIVE.copyTimer = null; }
+    LIVE.seq++;                      // anything already in flight is now stale
+    LIVE.again = false;
+  }
+
+  // Preload, then swap — the stage never flashes empty between frames.
+  function swapStage(url) {
+    return new Promise(resolve => {
+      const im = new Image();
+      im.onload = () => { $("#pedit-img").src = url; resolve(true); };
+      im.onerror = () => resolve(false);
+      im.src = url;
+    });
+  }
+
+  async function runLive() {
+    LIVE.timer = null;
+    if (!LIVE.on || $("#pedit").style.display === "none") return;
+    if (!S.slug || !S.plan || !EDIT.raw) return;
+    if (LIVE.busy) { LIVE.again = true; return; }   // coalesce — latest wins
+    LIVE.busy = true;
+    const seq = ++LIVE.seq;
+    liveStat("rendering…");
+    try {
+      const r = await VS.post("/api/poster/preview", {
+        slug: S.slug, raw: EDIT.raw, aspect: EDIT.aspect, scrim: false,
+      });
+      if (seq !== LIVE.seq) return;                 // a newer render already won
+      await swapStage(r.url + "?v=" + r.hash);
+      liveStat("✓ live");
+    } catch (e) {
+      liveStat("preview failed — " + e.message);
+    } finally {
+      LIVE.busy = false;
+      if (LIVE.again) { LIVE.again = false; scheduleLive(40); }
+    }
+  }
+
+  $("#pedit-live").addEventListener("change", e => {
+    LIVE.on = e.target.checked;
+    if (LIVE.on) { liveStat(""); scheduleLive(40); return; }
+    cancelLive();
+    if (LIVE.rawUrl) $("#pedit-img").src = LIVE.rawUrl;   // back to the bare raw
+    liveStat("off — use 👁 Preview");
+  });
+
+  // Copy for the selected zone, editable without leaving the editor (the
+  // step-3 fields are behind the modal). Those fields stay the single source
+  // of truth — this mirrors into them and then runs the normal saveCopy.
+  $("#panel-text").addEventListener("input", e => {
+    const name = EDIT.selected;
+    if (!name || !ZONE_COPY[name]) return;
+    const target = $(ZONE_COPY[name]);
+    if (target) target.value = e.target.value;
+    if (LIVE.copyTimer) clearTimeout(LIVE.copyTimer);
+    liveStat("typing…");
+    LIVE.copyTimer = setTimeout(async () => {
+      LIVE.copyTimer = null;
+      try { await saveCopy(); }
+      catch (err) { liveStat("copy save failed — " + err.message); return; }
+      scheduleLive(40);
+    }, 600);
+  });
 
   async function openEditor(raw) {
     if (!S.slug) { VS.toast("upload a product photo first"); return; }
@@ -984,6 +1087,9 @@
     $("#panel-height-val").textContent = EDIT.logo_h + " px";
 
     const rawUrl = `/media/output/generated-brand-poster/${S.slug}/${raw}`;
+    LIVE.rawUrl = rawUrl;
+    LIVE.on = $("#pedit-live").checked;
+    liveStat("");
     $("#pedit-img").src = rawUrl;
     $("#pedit-slug").textContent = `${S.slug} · ${raw}`;
     $("#pedit").style.display = "flex";
@@ -995,6 +1101,7 @@
       selectZone(null);
       $("#pedit-status").textContent =
         "Drag any zone to edit. Changes save automatically.";
+      scheduleLive(120);           // show the composited text straight away
     });
   }
 
@@ -1146,7 +1253,10 @@
     } catch (e) { VS.toast("reset failed: " + e.message); }
   }
 
-  function closeEditor() { $("#pedit").style.display = "none"; }
+  function closeEditor() {
+    cancelLive();
+    $("#pedit").style.display = "none";
+  }
 
   attachZoneDrag();
   attachPanelInputs();
