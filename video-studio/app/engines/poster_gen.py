@@ -269,6 +269,7 @@ def main() -> int:
     manifest = load_manifest(workdir)
     manifest.setdefault("created", time.time())
     manifest["provider"] = plan.get("provider")
+    manifest["mode"] = plan.get("mode") or "new"
     manifest["gen_model"] = args.gen_model
     manifest["seed"] = int(args.seed or 0)
     manifest["num"] = max(1, min(4, int(args.num)))

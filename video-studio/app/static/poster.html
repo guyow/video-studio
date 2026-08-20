@@ -151,6 +151,7 @@
         <select id="pmode">
           <option value="new">New design</option>
           <option value="replace">Replicate a reference poster</option>
+          <option value="manual">Manual — my prompt, no AI planner</option>
         </select></div>
       <label class="drop-img" id="drop">
         <input type="file" id="pfile" accept="image/png,image/jpeg,image/webp" style="display:none">
@@ -453,10 +454,19 @@
   }));
   $("#pmode").onchange = e => {
     S.mode = e.target.value;
+    const manual = S.mode === "manual";
     refdrop.style.display = S.mode === "replace" ? "" : "none";
-    $("#brief").placeholder = S.mode === "replace"
+    $("#brief").placeholder = manual
+      ? "the EXACT prompt sent to the image model — no system prompt, no brand guardrails, no layout"
+      : S.mode === "replace"
       ? "optional — extra art direction, or [BLOCK]: overrides for specific text"
       : "describe the poster — e.g. a dreamy midnight ad for the Fairy Flame gummies";
+    // manual mode: no vision planner, no text compositing — hide what doesn't apply
+    $("#provider").parentElement.style.display = manual ? "none" : "";
+    $("#btn-plan").textContent = manual ? "✍ Use my prompt as-is" : "🧠 Write the plan";
+    $("#scrim").parentElement.style.display = manual ? "none" : "";
+    $("#editable").parentElement.style.display = manual ? "none" : "";
+    if (manual) $("#copyfields").style.display = "none";
   };
 
   // -- remove buttons ----------------------------------------------------
@@ -561,9 +571,12 @@
       VS.toast("drop a reference poster first (Replicate mode)"); return;
     }
     const brief = $("#brief").value.trim();
+    if (S.mode === "manual" && !brief) {
+      VS.toast("type the prompt — in manual mode it goes to the image model as-is"); return;
+    }
     const body = {slug: S.slug, provider: S.provider, model: $("#pmodel").value, brief,
                   mode: S.mode, aspect: $("#aspect").value};
-    if (S.provider === "gemini" &&
+    if (S.mode !== "manual" && S.provider === "gemini" &&
         !confirm("⚠ Gemini planner costs ~$0.03 on fal.ai.\n\nApprove? (Cancel = nothing charged)")) {
       VS.toast("Cancelled — nothing charged"); return;
     }
@@ -576,14 +589,16 @@
       $("#c-headline").value = ce.headline;
       $("#c-subtitle").value = ce.subtitle;
       $("#c-body").value = ce.body;
-      $("#copyfields").style.display = "block";
+      $("#copyfields").style.display = d.mode === "manual" ? "none" : "block";
       $("#btn-replan").style.display = "";
       const cost = d.planner_cost ? ` · planner $${d.planner_cost.toFixed(2)}` : "";
       const notes = (d.layout_notes || []).length ? " · " + d.layout_notes.join("; ") : "";
-      $("#plannote").textContent = (d.mode === "replace"
+      $("#plannote").textContent = (d.mode === "manual"
+        ? "✓ manual — your prompt goes to the image model verbatim (no planner, no text overlay)"
+        : d.mode === "replace"
         ? "✓ replica plan ready — layout copied from the reference; fine-tune in the layout editor"
         : "✓ plan ready") + cost + notes;
-      VS.toast("✓ plan written");
+      VS.toast(d.mode === "manual" ? "✓ prompt locked in" : "✓ plan written");
     } catch (e) {
       $("#plannote").textContent = "";
       VS.toast("Planning failed: " + e.message);
