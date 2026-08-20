@@ -127,8 +127,27 @@ def _flusher() -> None:
         time.sleep(FLUSH_EVERY)
 
 
+def _job_process_alive(e: dict) -> bool:
+    """True if this persisted `running` job's runner process is still alive.
+    Guards against PID reuse by requiring the command line to reference the
+    job's own jobs/<id>.out file (only job_runner.py invocations do)."""
+    pid = e.get("pid")
+    if not pid:
+        return False
+    try:
+        r = subprocess.run(
+            ["powershell", "-NoProfile", "-Command",
+             f"(Get-CimInstance Win32_Process -Filter 'ProcessId = {int(pid)}').CommandLine"],
+            capture_output=True, text=True, timeout=30)
+        return f"{e['id']}.out" in (r.stdout or "")
+    except Exception:
+        return False
+
+
 def load_persisted() -> None:
-    """Bring back every stored job; dead `running` jobs become `interrupted`."""
+    """Bring back every stored job; dead `running` jobs become `interrupted`,
+    but a job whose detached runner survived the restart is re-attached
+    (marked with `_reattach` — the server tails it back to completion)."""
     try:
         entries = json.loads(INDEX_FILE.read_text(encoding="utf-8"))
     except Exception:
@@ -145,16 +164,19 @@ def load_persisted() -> None:
         e["lines"] = lines
         _meta[jid] = {"flushed": len(lines), "sig": None}
         if e.get("status") == "running":
-            e["status"] = "interrupted"
-            e["ended"] = e.get("ended") or time.time()
-            note = "⏸ server restarted while this job was running"
-            note += " — press Resume to re-run (engines with caches pick up where they left off)" \
-                if e.get("cmd") else ""
-            e["lines"].append(note)
+            if _job_process_alive(e):
+                e["_reattach"] = True   # server picks this up and tails the .out file
+            else:
+                e["status"] = "interrupted"
+                e["ended"] = e.get("ended") or time.time()
+                note = "⏸ server restarted while this job was running"
+                note += " — press Resume to re-run (engines with caches pick up where they left off)" \
+                    if e.get("cmd") else ""
+                e["lines"].append(note)
         jobs[jid] = e
     # prune orphaned logs beyond retention
     keep = {j["id"] for j in jobs.values()}
-    for log in JOBS_DIR.glob("*.log"):
+    for log in list(JOBS_DIR.glob("*.log")) + list(JOBS_DIR.glob("*.out")):
         if log.stem not in keep:
             try:
                 log.unlink()
@@ -223,17 +245,28 @@ def acquire_gpu(job: dict) -> None:
 
 
 def _awake_keeper() -> None:
-    """Stop Windows from sleeping mid-job. Resets the idle timer every 50 s while
-    any job runs; must stay on one thread — SetThreadExecutionState is per-thread."""
+    """Hold the system awake while any job runs; must stay on one thread —
+    SetThreadExecutionState is per-thread. ES_CONTINUOUS keeps the requirement
+    held BETWEEN checks (a one-shot pulse can be missed by timer coalescing),
+    and makes the hold visible in `powercfg /requests` for diagnosis.
+    Note: Windows cannot veto an EXPLICIT sleep (Start menu / an app calling
+    SetSuspendState) — only idle sleep is prevented. Don't sleep the box while
+    the jobs badge shows something running."""
     import ctypes
+    ES_CONTINUOUS, ES_SYSTEM_REQUIRED = 0x80000000, 0x00000001
+    holding = False
     while True:
         with jobs_lock:
             busy = any(j.get("status") == "running" for j in jobs.values())
-        if busy:
-            try:
-                ctypes.windll.kernel32.SetThreadExecutionState(0x00000001)  # ES_SYSTEM_REQUIRED
-            except Exception:
-                pass
+        try:
+            if busy and not holding:
+                ctypes.windll.kernel32.SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED)
+                holding = True
+            elif not busy and holding:
+                ctypes.windll.kernel32.SetThreadExecutionState(ES_CONTINUOUS)  # release
+                holding = False
+        except Exception:
+            pass
         time.sleep(50)
 
 
@@ -278,6 +311,7 @@ def cleanup(statuses: list[str] | None = None, keep: int = 30) -> dict:
     for jid in removed:
         try:
             (JOBS_DIR / f"{jid}.log").unlink(missing_ok=True)
+            (JOBS_DIR / f"{jid}.out").unlink(missing_ok=True)
         except Exception:
             pass
     return {"removed": len(removed), "ids": removed[:50],

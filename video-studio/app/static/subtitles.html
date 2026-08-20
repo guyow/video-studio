@@ -173,9 +173,14 @@ function burn(action){
     .then(()=>{toast(action==='caption'?'Burning word-timed captions from the dub…':'Transcribing + burning fresh subtitles…');load();})
     .catch(e=>toast('Error: '+e.message));
 }
-async function stopJob(id){
-  if(!confirm('Stop this job? Files are not harmed.'))return;
-  try{ await post('/api/job/'+id+'/stop',{}); toast('⏹ Stopped'); load(); }catch(e){ toast('Error: '+e.message); }
+async function stopJob(id,force){
+  if(!force&&!confirm('Stop this job? Files are not harmed.'))return;
+  try{ await post('/api/job/'+id+'/stop',force?{force:true}:{}); toast('⏹ Stopped'); load(); }
+  catch(e){
+    const i=e.message.indexOf('CONFIRM_STOP:');
+    if(i>=0){ if(confirm(e.message.slice(i+13).trim())) stopJob(id,true); return; }
+    toast('Error: '+e.message);
+  }
 }
 setInterval(load,4000);
 (async()=>{ await load();

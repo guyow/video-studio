@@ -369,10 +369,14 @@ function approveStep(k){
 function playClean(){ const v=$('#d-vid'); v.currentTime=0; v.play(); toast('Playing the cleaned source'); }
 function setNoSubs(val){ post('/api/creator/meta',{name:cur.name,no_subs:val}).then(load).catch(e=>toast('Error: '+e.message)); }
 function busyBtn(b){ b.disabled=true; b.dataset.t=b.textContent; b.textContent='⏳ starting…'; setTimeout(()=>{b.disabled=false;b.textContent=b.dataset.t;},6000); }
-async function stopJob(id,label){
-  if(!confirm('Stop "'+label+'"?\nThe job is cancelled; your source video is not harmed.'))return;
-  try{ await post('/api/job/'+id+'/stop',{}); toast('⏹ Stopped'); await pollJobs(); await load(); }
-  catch(e){ toast('Error: '+e.message); }
+async function stopJob(id,label,force){
+  if(!force&&!confirm('Stop "'+label+'"?\nThe job is cancelled; your source video is not harmed.'))return;
+  try{ await post('/api/job/'+id+'/stop',force?{force:true}:{}); toast('⏹ Stopped'); await pollJobs(); await load(); }
+  catch(e){
+    const i=e.message.indexOf('CONFIRM_STOP:');
+    if(i>=0){ if(confirm(e.message.slice(i+13).trim())) stopJob(id,label,true); return; }
+    toast('Error: '+e.message);
+  }
 }
 
 async function saveMeta(){

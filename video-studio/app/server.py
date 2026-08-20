@@ -599,7 +599,7 @@ def api_ping():
 
 from jobs import (jobs, jobs_lock, GPU_LOCK, needs_gpu, wait_for_gpu,
                   acquire_gpu, init as jobs_init, create as jobs_create,
-                  cleanup as jobs_cleanup, set_event_hook)
+                  cleanup as jobs_cleanup, set_event_hook, JOBS_DIR)
 
 jobs_init()  # restore persisted jobs; start the flusher + keep-awake threads
 
@@ -1109,6 +1109,71 @@ def api_job_stage_note(job_id, key):
     return jsonify({"ok": True})
 
 
+# Engines run via job_runner.py, detached from this process, with output
+# appended to jobs/<id>.out — so a server restart (code deploy, stale-UI
+# restart) no longer kills a running generation. The server merely TAILS the
+# file; after a restart it re-attaches (see reattach_jobs).
+JOB_RUNNER = APP_DIR / "job_runner.py"
+EXIT_SENTINEL_RE = re.compile(r"^__VS_EXIT__ (-?\d+)\s*$")
+
+
+def _pid_alive(pid) -> bool:
+    import ctypes
+    if not pid:
+        return False
+    k32 = ctypes.windll.kernel32
+    h = k32.OpenProcess(0x1000, False, int(pid))  # PROCESS_QUERY_LIMITED_INFORMATION
+    if not h:
+        return False
+    code = ctypes.c_ulong(0)
+    ok = k32.GetExitCodeProcess(h, ctypes.byref(code))
+    k32.CloseHandle(h)
+    return bool(ok) and code.value == 259  # STILL_ACTIVE
+
+
+def _tail_out(job: dict, out_file: Path, proc=None) -> int | None:
+    """Follow the job's .out file, feeding lines into job["lines"] until the
+    runner's exit sentinel appears. Returns the engine's exit code, or None if
+    the runner died without one (killed via Stop/timeout, or machine reboot).
+    `job["out_pos"]` (persisted) lets a restarted server resume the tail."""
+    pos = int(job.get("out_pos") or 0)
+    buf = ""
+    drain = 0
+    while True:
+        chunk = ""
+        try:
+            with open(out_file, "r", encoding="utf-8", errors="replace") as f:
+                f.seek(pos)
+                chunk = f.read()
+                pos = f.tell()
+        except OSError:
+            pass  # runner may not have created the file yet
+        if chunk:
+            drain = 0
+            buf += chunk
+            *complete, buf = buf.split("\n")
+            for line in complete:
+                line = line.rstrip("\r")
+                m = EXIT_SENTINEL_RE.match(line)
+                if m:
+                    job["out_pos"] = pos
+                    return int(m.group(1))
+                with jobs_lock:
+                    job["lines"].append(line)
+                sm = STAGE_MARK_RE.search(line)
+                if sm:
+                    _note_stage(job, sm.group(1))
+            job["out_pos"] = pos
+            continue
+        alive = (proc.poll() is None) if proc is not None else _pid_alive(job.get("pid"))
+        if not alive:
+            drain += 1
+            if drain >= 4:      # ~2 s grace to catch the final flush
+                job["out_pos"] = pos
+                return None
+        time.sleep(0.5)
+
+
 def run_job(job_id: str, cmd: list[str], timeout_s: float | None = None) -> None:
     job = jobs[job_id]
     job["cmd"] = [str(c) for c in cmd]   # recorded so the job can be resumed
@@ -1120,12 +1185,14 @@ def run_job(job_id: str, cmd: list[str], timeout_s: float | None = None) -> None
             wait_for_gpu(job)    # yield to subtitle-studio / the old dashboard
             acquire_gpu(job)     # one Video Studio GPU job at a time (4 GB card)
             got_gpu = True
+        out_file = JOBS_DIR / f"{job_id}.out"
         proc = subprocess.Popen(
-            cmd, cwd=str(ROOT), env=job_env(),
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            text=True, encoding="utf-8", errors="replace", bufsize=1,
+            [sys.executable, str(JOB_RUNNER), str(out_file), "--", *job["cmd"]],
+            cwd=str(ROOT), env=job_env(),
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW,
         )
-        job["pid"] = proc.pid
+        job["pid"] = proc.pid   # runner pid — taskkill /T reaches the engine too
         if timeout_s:
             # a hung engine (usually a dead fal queue item) used to stall the
             # chain forever — kill the whole tree at the deadline instead
@@ -1138,26 +1205,21 @@ def run_job(job_id: str, cmd: list[str], timeout_s: float | None = None) -> None
             watchdog = threading.Timer(timeout_s, _kill_on_deadline)
             watchdog.daemon = True
             watchdog.start()
-        for line in proc.stdout:
-            with jobs_lock:
-                job["lines"].append(line.rstrip("\n"))
-            m = STAGE_MARK_RE.search(line)
-            if m:
-                _note_stage(job, m.group(1))
+        rc = _tail_out(job, out_file, proc=proc)
         proc.wait()
         if watchdog:
             watchdog.cancel()
-        job["returncode"] = proc.returncode
+        job["returncode"] = rc if rc is not None else proc.returncode
         if job["status"] == "stopped":
             pass                       # user pressed Stop — keep that status, skip the failure paths
-        elif proc.returncode == 0:
+        elif job["returncode"] == 0:
             job["status"] = "done"
         elif job["action"] == "check-media":
             job["status"] = "issues"  # check-media exits 1 when files are missing — a report, not a crash
         else:
             job["status"] = "failed"
             tail = "\n".join(job["lines"][-60:])
-            err = classify_failure(tail, proc.returncode)
+            err = classify_failure(tail, job["returncode"])
             if err:
                 job["error"] = err
                 with jobs_lock:
@@ -1186,14 +1248,78 @@ def run_job(job_id: str, cmd: list[str], timeout_s: float | None = None) -> None
                                "cost": (job.get("cost") or {}).get("this_run")})
 
 
+def _finish_reattached(job: dict) -> None:
+    """Tail a job that survived a server restart through to completion."""
+    out_file = JOBS_DIR / f"{job['id']}.out"
+    gpu = bool(job.get("gpu")) or needs_gpu(job.get("cmd") or [])
+    got_gpu = gpu and GPU_LOCK.acquire(blocking=False)  # keep new GPU jobs queued behind it
+    try:
+        rc = _tail_out(job, out_file)
+        if job["status"] == "stopped":
+            return
+        job["returncode"] = rc if rc is not None else -1
+        if rc == 0:
+            job["status"] = "done"
+            with jobs_lock:
+                job["lines"].append("✅ finished after a server restart — any follow-up chain "
+                                    "steps (e.g. captions) were skipped; run them from their tab if needed")
+        elif rc is None:
+            job["status"] = "interrupted"
+            with jobs_lock:
+                job["lines"].append("⏸ the job's process died without reporting a result")
+        else:
+            job["status"] = "failed"
+            tail = "\n".join(job["lines"][-60:])
+            err = classify_failure(tail, rc)
+            if err:
+                job["error"] = err
+                with jobs_lock:
+                    job["lines"].append("")
+                    job["lines"].append(f">>> {err['title']} <<<")
+                    job["lines"].append(f">>> Fix: {err['fix']} <<<")
+    finally:
+        if got_gpu:
+            GPU_LOCK.release()
+        job["ended"] = time.time()
+        emit_event("job", {"id": job["id"], "action": job.get("action"),
+                           "slug": job.get("slug"), "status": job["status"],
+                           "error": (job.get("error") or {}).get("title"),
+                           "cost": (job.get("cost") or {}).get("this_run")})
+
+
+def reattach_jobs() -> None:
+    """Adopt jobs whose detached runner survived the last server restart
+    (flagged `_reattach` by jobs.load_persisted)."""
+    with jobs_lock:
+        adopted = [j for j in jobs.values() if j.pop("_reattach", None)]
+    for job in adopted:
+        with jobs_lock:
+            job["lines"].append("🔗 server restarted — re-attached to the still-running job")
+        threading.Thread(target=_finish_reattached, args=(job,), daemon=True).start()
+
+
 @app.post("/api/job/<job_id>/stop")
 def api_job_stop(job_id):
-    """User-controlled cancel: kill the job's whole process tree and mark it stopped."""
+    """User-controlled cancel: kill the job's whole process tree and mark it stopped.
+
+    Long-running or paid jobs are guarded: the first request gets a 409 whose
+    message starts with CONFIRM_STOP: and states runtime + spend; the UI shows
+    it and retries with {"force": true}. A casual click while switching jobs
+    can no longer kill a 15-hour generation."""
     job = jobs.get(job_id)
     if not job:
         abort(404)
     if job["status"] != "running":
         abort(400, "job is not running")
+    force = bool((request.get_json(silent=True) or {}).get("force"))
+    elapsed = time.time() - (job.get("started") or time.time())
+    spent = float((job.get("cost") or {}).get("this_run") or 0)
+    if not force and (elapsed > 600 or spent > 0):
+        h, m = int(elapsed // 3600), int(elapsed % 3600 // 60)
+        ran = (f"{h}h {m}m" if h else f"{m} min")
+        money = f" and spent ~${spent:.2f} on fal.ai" if spent else ""
+        abort(409, f"CONFIRM_STOP:This job has been running {ran}{money} — "
+                   f"stopping loses that progress. Really stop it?")
     with jobs_lock:
         job["status"] = "stopped"
         job["lines"].append("⏹ stopped by user")
@@ -8435,6 +8561,7 @@ if __name__ == "__main__":
     # bind to all interfaces (phone access) only when lan_access is on AND a PIN is set
     lan = bool(CONFIG.get("lan_access")) and bool(REMOTE_PIN)
     host = "0.0.0.0" if lan else "127.0.0.1"
+    reattach_jobs()   # adopt generations that survived the last restart
     print(f"Video Studio -> http://localhost:{port}  (data root: {ROOT})")
     if lan:
         print(f"  phone/LAN access ON -> http://<this-PC-IP>:{port}  (PIN required)")

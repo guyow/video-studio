@@ -1477,10 +1477,17 @@ async function runEdit(path) {
   } catch (e) { toast('Error: ' + e.message.slice(0, 150)); }
 }
 
-async function stopJob(id) {
-  if (!confirm('Stop this job? Source files are not harmed.')) return;
-  try { await api('/api/job/' + id + '/stop', {method: 'POST'}); toast('⏹ Stopped'); loadJobs(); refresh(); }
-  catch (e) { toast('Error: ' + e.message.slice(0, 150)); }
+async function stopJob(id, force) {
+  if (!force && !confirm('Stop this job? Source files are not harmed.')) return;
+  const opts = {method: 'POST', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(force ? {force: true} : {})};
+  try { await api('/api/job/' + id + '/stop', opts); toast('⏹ Stopped'); loadJobs(); refresh(); }
+  catch (e) {
+    const msg = e.message.replace(/<[^>]+>/g, ' ').trim();
+    const i = msg.indexOf('CONFIRM_STOP:');
+    if (i >= 0) { if (confirm(msg.slice(i + 13).trim())) stopJob(id, true); return; }
+    toast('Error: ' + msg.slice(0, 150));
+  }
 }
 
 // ------------------------------------------------------------- modals

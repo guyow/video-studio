@@ -129,8 +129,17 @@
         e.stopPropagation();
         if (!focused) return;
         if (!confirm("Stop this job?")) return;
-        try { await VS.post(`/api/job/${focused}/stop`); VS.toast("Job stopped"); }
-        catch (err) { VS.toast("Stop failed: " + err.message); }
+        const doStop = async body => { await VS.post(`/api/job/${focused}/stop`, body); VS.toast("Job stopped"); };
+        try { await doStop({}); }
+        catch (err) {
+          const i = err.message.indexOf("CONFIRM_STOP:");
+          if (i >= 0) {
+            if (!confirm(err.message.slice(i + 13).trim())) return;
+            try { await doStop({force: true}); } catch (e2) { VS.toast("Stop failed: " + e2.message); }
+            return;
+          }
+          VS.toast("Stop failed: " + err.message);
+        }
       };
       // auto-attach: when a modal opens and a job is already running for it
       VS.on("modal-open", video => {
