@@ -330,6 +330,26 @@ def plan():
     if not product_path:
         abort(400, "upload a product photo first")
 
+    mode = (b.get("mode") or "new").strip()
+    if mode not in ("new", "replace", "manual"):
+        abort(400, f"unknown mode {mode!r}")
+
+    # MANUAL: no planner, no system prompt, no layout reference — the user's
+    # brief IS the prompt, sent to the image model verbatim. plan.json is
+    # written directly so the generate/estimate/gallery flow stays identical.
+    if mode == "manual":
+        brief = (b.get("brief") or "").strip()
+        if not brief:
+            abort(400, "manual mode: type the prompt — it goes to the image model as-is")
+        (workdir / "brief.txt").write_text(brief, encoding="utf-8")
+        plan_data = {"mode": "manual", "provider": "manual", "prompt": brief,
+                     "copy_elements": "", "chosen_layout": ""}
+        _atomic_write_json(workdir / "plan.json", plan_data)
+        # never leave a previous plan's geometry under a manual plan
+        (workdir / "layout-overrides.json").unlink(missing_ok=True)
+        return jsonify({"plan": plan_data, "planner_cost": 0.0,
+                        "mode": "manual", "layout_notes": []})
+
     provider = b.get("provider") or "claude"
     if provider not in ("claude", "gemini"):
         abort(400, f"unknown provider {provider!r}")
@@ -342,10 +362,6 @@ def plan():
     else:
         if model not in GEMINI_MODELS:
             model = GEMINI_MODELS[0]
-
-    mode = (b.get("mode") or "new").strip()
-    if mode not in ("new", "replace"):
-        abort(400, f"unknown mode {mode!r}")
     aspect = b.get("aspect") or "ig_feed"
     if aspect not in ("ig_feed", "tiktok"):
         aspect = "ig_feed"
@@ -485,7 +501,9 @@ def generate():
         return jsonify({"needs_confirm": True, "estimate": est}), 402
 
     object_path = _find(workdir, "object")
-    stage = "gen" if editable else "all"
+    plan_mode = _plan_mode(workdir)
+    # manual mode has no copy elements / layout — the raws ARE the output
+    stage = "gen" if (editable or plan_mode == "manual") else "all"
     cmd = [CV_PY or sys.executable, "-u", str(GEN_PY),
            "--stage", stage,
            "--workdir", str(workdir),
@@ -501,7 +519,7 @@ def generate():
            "--env-file", str(FAL_ENV)]
     if object_path:
         cmd += ["--additional-object", str(object_path)]
-    if _plan_mode(workdir) == "replace":
+    if plan_mode == "replace":
         reference_path = _find(workdir, "reference")
         if reference_path:
             cmd += ["--reference-image", str(reference_path)]
